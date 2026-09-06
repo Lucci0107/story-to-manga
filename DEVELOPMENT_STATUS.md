@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続と最小E2Eスモークを確認できるMVPです。ローカルGitは`main`で初期化済みですが、外部remoteは未接続です。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続と最小E2Eスモークを確認できるMVPです。ローカルGitは`main`で初期化済みですが、外部remoteは未接続です。本番デプロイは認証待ちです。
 
 ```text
 本文入力 / ファイル抽出
@@ -47,6 +47,7 @@
 - アカウント、接続状態、表示テーマを確認する設定画面
 - RTL/LTR、ライト/ダークテーマ、モバイル/デスクトップ対応
 - Render用`render.yaml`、Dockerfile、環境変数サンプル
+- `.env` / `.env.*` のGit除外ルール（`.env.example`は例外）
 
 ## 検証済み
 
@@ -79,6 +80,7 @@
 
 - GitHub repository作成/remote接続、Renderログイン/OAuth、実AI用secret入力は本人操作が必要です。
 - `gh auth status`ではGitHubアカウントの保存済みTokenが無効と報告されています。再認証後にremote作成またはRender連携へ進めます。
+- Renderダッシュボードはログイン画面で、Render CLI/専用Connectorも利用できません。in-app Browserでの自動公開はここで停止しています。
 - ローカル`.env`のOpenAIキーは設定済みで、実AIスモークは成功しました。本番ではRender側のSecretへ同じ用途のキーを登録する必要があります。
 
 ## 外部接続待ち
@@ -92,6 +94,8 @@
 - Render native Python build（`pip install -r requirements.txt` → `uvicorn`）を優先する構成です。
 - SQLite保存先は`render.yaml`の永続ディスクへ設定済みです。
 - ローカル初回コミット: `213096b Build Story to Manga MVP with Knowledge Library`
+- AI接続コミット: `9e522f1 Connect OpenAI Responses and image providers`
+- 状態・Git安全設定コミット: `8f52105`、`16f135b`
 - Production URLは未取得です。
 - Renderのnative build設定へResponses API / Images APIのURL、モデル、タイムアウト、再試行、最大出力トークンを追加済みです。APIキーは設定していません。
 - ローカル実AIスモークは成功済みですが、Renderの認証・Secret設定・本番URL取得・Production QAは未実施です。
