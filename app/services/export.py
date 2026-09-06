@@ -1,0 +1,195 @@
+"""PDFとページ画像ZIPの書き出し。"""
+
+from __future__ import annotations
+
+import json
+import zipfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from PIL import Image
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+
+from ..config import get_settings
+from .artwork import render_panel_image
+
+
+PDF_FONT = "Helvetica"
+try:
+    pdfmetrics.registerFont(UnicodeCIDFont("HeiseiMin-W3"))
+    PDF_FONT = "HeiseiMin-W3"
+except Exception:  # noqa: BLE001
+    # 実行環境にCIDフォントがない場合は英字フォントへフォールバックする。
+    PDF_FONT = "Helvetica"
+
+
+def _page_panel_boxes(page: Dict[str, Any], width: float, height: float) -> List[tuple[float, float, float, float]]:
+    panels = page.get("panels", [])
+    count = max(1, len(panels))
+    margin = 42
+    gap = 12
+    available_width = width - margin * 2
+    available_height = height - 132
+    boxes: List[tuple[float, float, float, float]] = []
+    if count == 1:
+        return [(margin, 72, available_width, available_height)]
+    if count == 2:
+        panel_height = (available_height - gap) / 2
+        return [(margin, 72 + panel_height + gap, available_width, panel_height), (margin, 72, available_width, panel_height)]
+    columns = 2
+    rows = (count + columns - 1) // columns
+    box_width = (available_width - gap) / columns
+    box_height = (available_height - gap * (rows - 1)) / rows
+    for index in range(count):
+        row = index // columns
+        col = index % columns
+        x = margin + col * (box_width + gap)
+        y = 72 + (rows - 1 - row) * (box_height + gap)
+        boxes.append((x, y, box_width, box_height))
+    return boxes
+
+
+def _draw_wrapped(c: canvas.Canvas, value: str, x: float, y: float, max_width: float, font_size: int = 10, line_gap: int = 14, max_lines: int = 4) -> float:
+    words = list(value or "")
+    lines: List[str] = []
+    current = ""
+    for char in words:
+        candidate = current + char
+        if stringWidth(candidate, PDF_FONT, font_size) > max_width and current:
+            lines.append(current)
+            current = char
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    c.setFont(PDF_FONT, font_size)
+    for line in lines[:max_lines]:
+        c.drawString(x, y, line)
+        y -= line_gap
+    return y
+
+
+def _crop_image_to_box(image: Image.Image, width: float, height: float, crop_mode: str) -> Image.Image:
+    """PDFのコマ枠に合わせ、fill指定時だけ中央で画像をトリミングする。"""
+
+    if crop_mode != "fill" or image.width <= 0 or image.height <= 0:
+        return image.copy()
+    target_ratio = width / max(height, 1)
+    source_ratio = image.width / image.height
+    if source_ratio > target_ratio:
+        crop_width = max(1, int(image.height * target_ratio))
+        left = (image.width - crop_width) // 2
+        box = (left, 0, left + crop_width, image.height)
+    else:
+        crop_height = max(1, int(image.width / target_ratio))
+        top = (image.height - crop_height) // 2
+        box = (0, top, image.width, top + crop_height)
+    return image.crop(box)
+
+
+def _panel_asset(
+    project: Dict[str, Any], panel: Dict[str, Any], width: float, height: float
+) -> Optional[ImageReader]:
+    """生成済みのローカル画像をPDFへ渡し、表示方法も反映する。"""
+
+    image_url = str(panel.get("image_url") or "")
+    filename = Path(image_url).name
+    if not filename:
+        return None
+    source = get_settings().asset_dir / str(project.get("id")) / filename
+    if source.suffix.lower() == ".svg":
+        image = render_panel_image(panel, project.get("settings") or {})
+        return ImageReader(_crop_image_to_box(image, width, height, panel.get("crop_mode", "fit")))
+    if not source.exists() or not source.is_file():
+        return None
+    try:
+        with Image.open(source) as image:
+            prepared = _crop_image_to_box(
+                image.convert("RGB"), width, height, panel.get("crop_mode", "fit")
+            )
+        return ImageReader(prepared)
+    except (OSError, ValueError):
+        return None
+
+
+def export_pdf(project: Dict[str, Any], path: Path) -> None:
+    """生成済みパネル画像へアプリ側の文字要素を重ねたPDFを作る。"""
+
+    width, height = A4
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setTitle(project.get("title", "Story to Manga"))
+    for page in project.get("storyboard", []):
+        c.setFillColorRGB(0.96, 0.95, 0.91)
+        c.rect(0, 0, width, height, stroke=0, fill=1)
+        c.setFillColorRGB(0.12, 0.12, 0.11)
+        c.setFont(PDF_FONT, 18)
+        c.drawString(42, height - 58, str(project.get("title", "Story to Manga")))
+        c.setFont(PDF_FONT, 9)
+        c.drawRightString(width - 42, height - 56, f"PAGE {page.get('page_number', '')}")
+        for panel, box in zip(page.get("panels", []), _page_panel_boxes(page, width, height)):
+            x, y, box_width, box_height = box
+            asset = _panel_asset(project, panel, box_width, box_height)
+            c.saveState()
+            c.setFillColorRGB(0.88, 0.88, 0.85)
+            c.roundRect(x, y, box_width, box_height, 8, stroke=0, fill=1)
+            if asset:
+                c.drawImage(asset, x, y, box_width, box_height, preserveAspectRatio=True, anchor="c", mask="auto")
+            else:
+                c.setFillColorRGB(0.35, 0.36, 0.34)
+                c.setFont(PDF_FONT, 11)
+                c.drawCentredString(x + box_width / 2, y + box_height / 2, "画像未生成")
+            c.restoreState()
+            c.setStrokeColorRGB(0.18, 0.19, 0.18)
+            c.setLineWidth(1.5)
+            c.roundRect(x, y, box_width, box_height, 8, stroke=1, fill=0)
+            dialogue = "\n".join(str(item) for item in panel.get("dialogue", []) if str(item).strip())
+            narration = " / ".join(str(item) for item in panel.get("narration", []) if str(item).strip())
+            sfx = " ".join(str(item) for item in panel.get("sfx", []) if str(item).strip())
+            if dialogue:
+                bubble_width = min(box_width * 0.78, 210)
+                bubble_height = 46
+                c.setFillColorRGB(0.98, 0.97, 0.94)
+                c.roundRect(x + 16, y + box_height - bubble_height - 16, bubble_width, bubble_height, 12, stroke=0, fill=1)
+                c.setFillColorRGB(0.12, 0.12, 0.11)
+                _draw_wrapped(c, dialogue, x + 26, y + box_height - 34, bubble_width - 20, 9, 12, 3)
+            if narration:
+                c.setFillColorRGB(0.98, 0.97, 0.94)
+                c.rect(x + 16, y + 16, min(box_width * 0.82, 240), 24, stroke=0, fill=1)
+                c.setFillColorRGB(0.12, 0.12, 0.11)
+                _draw_wrapped(c, narration, x + 24, y + 29, box_width - 48, 7, 9, 2)
+            if sfx:
+                c.setFillColorRGB(0.90, 0.43, 0.27)
+                _draw_wrapped(c, sfx, x + box_width - min(110, box_width * 0.28), y + box_height - 30, min(94, box_width * 0.24), 11, 12, 2)
+        c.showPage()
+    if not project.get("storyboard"):
+        c.setFillColorRGB(0.12, 0.12, 0.11)
+        c.drawString(42, height - 58, "まだネームが生成されていません")
+        c.showPage()
+    c.save()
+
+
+def export_zip(project: Dict[str, Any], path: Path) -> None:
+    """ページ構成、生成画像、編集可能なJSONをまとめる。"""
+
+    settings = get_settings()
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        manifest = {
+            "title": project.get("title"),
+            "settings": project.get("settings"),
+            "storyboard": project.get("storyboard"),
+        }
+        archive.writestr("project.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for page in project.get("storyboard", []):
+            for panel in page.get("panels", []):
+                image_url = panel.get("image_url") or ""
+                filename = Path(image_url).name
+                if not filename:
+                    continue
+                source = settings.asset_dir / project["id"] / filename
+                if source.exists():
+                    archive.write(source, f"pages/page-{page.get('page_number')}/{filename}")

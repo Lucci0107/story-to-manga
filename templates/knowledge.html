@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Knowledge Library | Story to Manga{% endblock %}
+{% block body_class %}product-page knowledge-page{% endblock %}
+{% block content %}
+<div class="product-shell">
+  <aside class="global-sidebar">
+    <a class="brand-lockup compact" href="/dashboard" aria-label="ダッシュボードへ戻る"><span class="brand-mark">ふ</span><span><strong>Story to Manga</strong><small>制作室</small></span></a>
+    <nav class="global-nav" aria-label="メインナビゲーション">
+      <a class="nav-item" href="/dashboard"><span class="nav-glyph">▦</span>プロジェクト</a>
+      <a class="nav-item" href="/projects/new"><span class="nav-glyph">＋</span>新しい作品</a>
+      <a class="nav-item active" href="/knowledge"><span class="nav-glyph">◇</span>Knowledge</a>
+      <a class="nav-item" href="/settings"><span class="nav-glyph">⚙</span>設定</a>
+    </nav>
+    <div class="sidebar-bottom"><button class="nav-item theme-nav" type="button" data-theme-toggle><span class="nav-glyph">◐</span>表示テーマ</button><div class="user-chip"><span class="avatar">{{ user.email[0]|upper }}</span><span>{{ user.email }}</span></div><form method="post" action="/logout"><button class="logout-link" type="submit">ログアウト</button></form></div>
+  </aside>
+  <main class="dashboard-main knowledge-main">
+    <header class="page-header">
+      <div><p class="eyebrow">KNOWLEDGE LIBRARY</p><h1>制作Knowledge</h1><p class="page-subtitle">複数の制作ルールをVersion管理し、Projectごとに必要な範囲だけ参照します。</p></div>
+      <a class="secondary-button" href="/dashboard">プロジェクトへ戻る</a>
+    </header>
+    <div class="knowledge-layout">
+      <section class="surface-panel panel-padding" aria-labelledby="knowledge-upload-heading">
+        <h2 id="knowledge-upload-heading">Knowledgeを追加</h2>
+        <p class="panel-lead">Markdownの見出し構造を保ったまま、Version 1として索引化します。</p>
+        <form id="knowledge-upload-form" class="knowledge-upload-form" method="post" action="/api/knowledge" enctype="multipart/form-data">
+          <label class="editor-label">タイトル<input name="title" maxlength="120" placeholder="例：会話シーンのルール" required></label>
+          <label class="editor-label">カテゴリ<select name="category"><option value="style">Style</option><option value="layout">Layout</option><option value="character">Character</option><option value="genre">Genre</option><option value="dialogue">Dialogue</option><option value="world">World</option><option value="brand">Brand</option><option value="other" selected>Other</option></select></label>
+          <label class="editor-label">説明<textarea name="description" rows="3" maxlength="2000" placeholder="このKnowledgeを使う場面"></textarea></label>
+          <div class="knowledge-source-tabs"><span class="source-tab-label">本文またはファイル</span><span>md / txt / PDF / docx、最大5MB</span></div>
+          <label class="editor-label">本文<textarea name="source_text" rows="8" placeholder="# 見出し\n\n制作ルールを入力するか、下のファイルを選択してください。"></textarea></label>
+          <label class="file-drop knowledge-file-drop" for="knowledge-file"><strong>Knowledgeファイルを選択</strong><span>md / txt / PDF / docx</span><input id="knowledge-file" name="knowledge_file" type="file" accept=".md,.txt,.pdf,.docx,text/markdown,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><span id="knowledge-selected-file" class="selected-file"></span></label>
+          <div id="knowledge-upload-error" class="inline-form-error" role="alert" hidden></div>
+          <button class="primary-button" type="submit">Knowledgeを索引化する <span aria-hidden="true">→</span></button>
+        </form>
+      </section>
+      <section aria-labelledby="knowledge-list-heading">
+        <div class="knowledge-list-heading"><div><p class="eyebrow">YOUR SOURCES</p><h2 id="knowledge-list-heading">登録済み</h2></div><span class="knowledge-count">{{ knowledge_documents|length }}件</span></div>
+        {% if knowledge_documents %}
+        <div class="knowledge-grid" aria-label="Knowledge一覧">
+          {% for knowledge in knowledge_documents %}
+          <article class="knowledge-card surface-panel">
+            <div class="knowledge-card-top"><span class="knowledge-category">{{ knowledge.category }}</span><span class="knowledge-active-label {{ 'archived' if knowledge.archived else ('inactive' if not knowledge.active else '') }}">{{ 'アーカイブ済み' if knowledge.archived else ('有効' if knowledge.active else '無効') }}</span></div>
+            <h3><a href="/knowledge/{{ knowledge.id }}">{{ knowledge.title }}</a></h3>
+            <p>{{ knowledge.description or '説明はまだありません。' }}</p>
+            <div class="knowledge-card-meta"><span>v{{ knowledge.active_version_number or 0 }}</span><span>{{ knowledge.version_count }} Version</span><span>{{ knowledge.active_version_status or '未処理' }}</span></div>
+            <a class="text-button" href="/knowledge/{{ knowledge.id }}">Version履歴を見る →</a>
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state knowledge-empty-state"><div class="empty-illustration"><span></span><span></span><span></span></div><h3>Knowledgeはまだありません</h3><p>漫画制作ルール、世界観、キャラクター規約などを登録できます。</p></div>
+        {% endif %}
+      </section>
+    </div>
+  </main>
+</div>
+{% endblock %}

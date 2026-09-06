@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ project.title }} | Story to Manga{% endblock %}
+{% block body_class %}product-page workspace-page{% endblock %}
+{% block content %}
+<div class="workspace-shell">
+  <aside class="project-sidebar">
+    <div class="project-sidebar-top"><a class="brand-lockup compact" href="/dashboard" aria-label="プロジェクト一覧へ"><span class="brand-mark">ふ</span><span><strong>Story to Manga</strong><small>制作室</small></span></a><a class="sidebar-back" href="/dashboard">プロジェクト一覧</a></div>
+    <div class="workspace-project-name"><span class="project-kicker">PROJECT</span><h1 data-project-title>{{ project.title }}</h1><span class="workspace-status" data-project-status>{{ project.status_label }}</span></div>
+    <nav class="progress-nav" aria-label="制作工程">
+      <button class="progress-item" type="button" data-step-nav="story"><span class="progress-index">01</span><span>物語</span></button>
+      <button class="progress-item" type="button" data-step-nav="knowledge"><span class="progress-index">02</span><span>Knowledge</span></button>
+      <button class="progress-item" type="button" data-step-nav="analysis"><span class="progress-index">03</span><span>解析</span></button>
+      <button class="progress-item" type="button" data-step-nav="settings"><span class="progress-index">04</span><span>漫画化設定</span></button>
+      <button class="progress-item" type="button" data-step-nav="characters"><span class="progress-index">05</span><span>キャラクター</span></button>
+      <button class="progress-item" type="button" data-step-nav="storyboard"><span class="progress-index">06</span><span>ネーム</span></button>
+      <button class="progress-item" type="button" data-step-nav="generate"><span class="progress-index">07</span><span>コマ生成</span></button>
+      <button class="progress-item" type="button" data-step-nav="edit"><span class="progress-index">08</span><span>編集</span></button>
+      <button class="progress-item" type="button" data-step-nav="qa"><span class="progress-index">09</span><span>QA</span></button>
+      <button class="progress-item" type="button" data-step-nav="preview"><span class="progress-index">10</span><span>プレビュー</span></button>
+      <button class="progress-item" type="button" data-step-nav="export"><span class="progress-index">11</span><span>書き出し</span></button>
+    </nav>
+    <div class="project-sidebar-bottom"><a class="nav-item theme-nav" href="/knowledge"><span class="nav-glyph">◇</span>Knowledge</a><a class="nav-item theme-nav" href="/settings"><span class="nav-glyph">⚙</span>設定</a><button class="nav-item theme-nav" type="button" data-theme-toggle><span class="nav-glyph">◐</span>表示テーマ</button><form method="post" action="/logout"><button class="logout-link" type="submit">ログアウト</button></form></div>
+  </aside>
+  <main class="workspace-main">
+    <header class="workspace-topbar"><div class="mobile-project-title"><button class="mobile-menu-button" type="button" data-mobile-menu aria-label="制作工程を開く">☰</button><span data-project-title>{{ project.title }}</span></div><div class="workspace-topbar-actions"><span class="save-state" data-save-state>保存済み</span><button class="text-button rename-button" type="button" data-rename-project>名前変更</button><button class="secondary-button compact-button" type="button" data-step-action="preview">プレビュー</button><button class="primary-button compact-button" type="button" data-step-action="export">書き出し</button><button class="icon-button" type="button" data-theme-toggle aria-label="テーマを切り替える">◐</button></div></header>
+    <div class="workspace-content" id="workspace-content"><div class="loading-state"><div class="loading-bar"></div><p>制作データを読み込んでいます</p></div></div>
+  </main>
+</div>
+<script id="project-data" type="application/json">{{ project|tojson }}</script>
+{% endblock %}

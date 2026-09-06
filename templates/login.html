@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}ログイン | Story to Manga{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block content %}
+<main class="auth-shell">
+  <section class="auth-intro" aria-labelledby="auth-title">
+    <a class="brand-lockup" href="/login" aria-label="Story to Manga ホーム">
+      <span class="brand-mark">ふ</span>
+      <span><strong>Story to Manga</strong><small>物語を、読める漫画へ。</small></span>
+    </a>
+    <div class="auth-message">
+      <p class="eyebrow">MANGA WORKSPACE</p>
+      <h1 id="auth-title">物語の続きを、<br><em>ページ</em>で考える。</h1>
+      <p>解析、キャラクター、ネーム、コマ生成をひとつの制作画面でつなぎます。</p>
+    </div>
+    <div class="auth-visual" aria-label="漫画ページのプレビュー">
+      <div class="mini-page mini-page-back"><span></span><span></span><span></span></div>
+      <div class="mini-page">
+        <div class="mini-panel mini-panel-wide"><i></i><b></b></div>
+        <div class="mini-panel-row"><div class="mini-panel"><i></i></div><div class="mini-panel mini-panel-dark"><i></i></div></div>
+        <div class="mini-caption">YOUR STORY / EDITABLE</div>
+      </div>
+    </div>
+    <p class="auth-note">入力した物語は制作データとして保存されます。権利を持つ作品のみ利用してください。</p>
+  </section>
+
+  <section class="auth-card" aria-label="ログインフォーム">
+    <div class="theme-control-row">
+      <span>制作室へ入る</span>
+      <button class="icon-button" type="button" data-theme-toggle aria-label="テーマを切り替える">◐</button>
+    </div>
+    {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+    <form class="auth-form" method="post" action="/login">
+      <div class="form-field">
+        <label for="email">メールアドレス</label>
+        <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+      </div>
+      <div class="form-field">
+        <label for="password">パスワード</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="8文字以上" required>
+      </div>
+      <button class="primary-button button-wide" type="submit">ログイン</button>
+    </form>
+    <div class="auth-divider"><span>または</span></div>
+    <a class="secondary-button button-wide button-center" href="/demo">デモデータで試す</a>
+    <p class="auth-switch">アカウントをお持ちでない方は、<button type="button" data-auth-register>新規登録</button></p>
+    <form class="auth-form register-form" method="post" action="/register" hidden>
+      <div class="form-field">
+        <label for="register-email">メールアドレス</label>
+        <input id="register-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+      </div>
+      <div class="form-field">
+        <label for="register-password">パスワード</label>
+        <input id="register-password" name="password" type="password" autocomplete="new-password" placeholder="8文字以上" minlength="8" required>
+      </div>
+      <button class="primary-button button-wide" type="submit">アカウントを作る</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

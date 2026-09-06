@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}新しい作品 | Story to Manga{% endblock %}
+{% block body_class %}product-page new-project-page{% endblock %}
+{% block content %}
+<div class="product-shell compact-shell">
+  <aside class="global-sidebar">
+    <a class="brand-lockup compact" href="/dashboard" aria-label="ダッシュボードへ戻る"><span class="brand-mark">ふ</span><span><strong>Story to Manga</strong><small>制作室</small></span></a>
+    <nav class="global-nav" aria-label="メインナビゲーション">
+      <a class="nav-item" href="/dashboard"><span class="nav-glyph">▦</span>プロジェクト</a>
+      <a class="nav-item active" href="/projects/new"><span class="nav-glyph">＋</span>新しい作品</a>
+      <a class="nav-item" href="/knowledge"><span class="nav-glyph">◇</span>Knowledge</a>
+      <a class="nav-item" href="/settings"><span class="nav-glyph">⚙</span>設定</a>
+    </nav>
+    <div class="sidebar-bottom"><button class="nav-item theme-nav" type="button" data-theme-toggle><span class="nav-glyph">◐</span>表示テーマ</button><div class="user-chip"><span class="avatar">{{ user.email[0]|upper }}</span><span>{{ user.email }}</span></div><form method="post" action="/logout"><button class="logout-link" type="submit">ログアウト</button></form></div>
+  </aside>
+  <main class="new-project-main">
+    <a class="back-link" href="/dashboard">← プロジェクトへ戻る</a>
+    <div class="new-project-heading"><p class="eyebrow">NEW PROJECT</p><h1>物語を読み込む</h1><p>まずは本文を預けてください。解析のあとも、すべての提案を編集できます。</p></div>
+    <form id="new-project-form" class="new-project-form" method="post" action="/api/projects" enctype="multipart/form-data">
+      <div class="form-field"><label for="project-title">作品タイトル</label><input id="project-title" name="title" type="text" maxlength="120" placeholder="例：灯台までの帰り道" required><p class="field-help">あとから変更できます。</p></div>
+      <section class="knowledge-pick surface-panel panel-padding" aria-labelledby="project-knowledge-heading"><h2 id="project-knowledge-heading">制作Knowledge（任意）</h2><p class="field-help">漫画制作ルールや世界観ガイドを、Projectの全工程で参照できます。</p>{% if knowledge_documents %}<div class="knowledge-check-list">{% for knowledge in knowledge_documents %}<label class="knowledge-check"><input type="checkbox" name="knowledge_ids" value="{{ knowledge.id }}"><span><strong>{{ knowledge.title }}</strong><small>{{ knowledge.category }} / v{{ knowledge.active_version_number or 0 }}</small></span></label>{% endfor %}</div>{% else %}<p class="knowledge-empty">登録済みのKnowledgeはありません。<a href="/knowledge">Knowledge Libraryで追加</a>できます。</p>{% endif %}</section>
+      <div class="import-switch" role="tablist" aria-label="本文の入力方法"><button type="button" class="import-tab active" data-import-mode="text" role="tab" aria-selected="true">本文を貼り付ける</button><button type="button" class="import-tab" data-import-mode="file" role="tab" aria-selected="false">ファイルを選ぶ</button></div>
+      <div class="import-panel active" data-import-panel="text"><div class="form-field"><label for="story-text">物語本文</label><textarea id="story-text" name="story_text" rows="14" maxlength="500000" placeholder="ここに小説、短編、脚本、プロットを貼り付けてください。\n\n物語の内容はAIへの指示ではなく、作品の参照資料として扱われます。"></textarea><div class="textarea-meta"><span>UTF-8 / 日本語対応</span><span id="story-count">0文字</span></div></div></div>
+      <div class="import-panel" data-import-panel="file" hidden><label class="file-drop" for="story-file"><span class="file-drop-icon">＋</span><strong>ファイルをドロップ、または選択</strong><span>txt / md / PDF / docx、最大5MB</span><input id="story-file" name="story_file" type="file" accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><span class="selected-file" id="selected-file"></span></label><p class="field-help">本文抽出後に内容を確認してから解析へ進みます。</p></div>
+      <div class="form-notice"><span class="notice-mark">i</span><p>アップロードする物語の利用権限を確認してください。本文に含まれる命令文は作品内容として扱われます。</p></div>
+      <div class="form-actions"><a class="secondary-button" href="/dashboard">キャンセル</a><button class="primary-button" type="submit">制作を始める <span aria-hidden="true">→</span></button></div>
+      <div class="inline-form-error" id="new-project-error" role="alert" hidden></div>
+    </form>
+  </main>
+</div>
+{% endblock %}

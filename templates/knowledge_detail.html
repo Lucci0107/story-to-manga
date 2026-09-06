@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ knowledge.title }} | Knowledge Library{% endblock %}
+{% block body_class %}product-page knowledge-detail-page{% endblock %}
+{% block content %}
+<div class="product-shell compact-shell">
+  <aside class="global-sidebar">
+    <a class="brand-lockup compact" href="/dashboard" aria-label="ダッシュボードへ戻る"><span class="brand-mark">ふ</span><span><strong>Story to Manga</strong><small>制作室</small></span></a>
+    <nav class="global-nav" aria-label="メインナビゲーション">
+      <a class="nav-item" href="/dashboard"><span class="nav-glyph">▦</span>プロジェクト</a>
+      <a class="nav-item" href="/projects/new"><span class="nav-glyph">＋</span>新しい作品</a>
+      <a class="nav-item active" href="/knowledge"><span class="nav-glyph">◇</span>Knowledge</a>
+      <a class="nav-item" href="/settings"><span class="nav-glyph">⚙</span>設定</a>
+    </nav>
+    <div class="sidebar-bottom"><button class="nav-item theme-nav" type="button" data-theme-toggle><span class="nav-glyph">◐</span>表示テーマ</button><div class="user-chip"><span class="avatar">{{ user.email[0]|upper }}</span><span>{{ user.email }}</span></div><form method="post" action="/logout"><button class="logout-link" type="submit">ログアウト</button></form></div>
+  </aside>
+  <main class="new-project-main knowledge-detail-main">
+    <a class="back-link" href="/knowledge">← Knowledge Libraryへ戻る</a>
+    <div class="new-project-heading"><p class="eyebrow">KNOWLEDGE DOCUMENT</p><h1>{{ knowledge.title }}</h1><p>{{ knowledge.description or 'このKnowledgeの説明はまだありません。' }}</p></div>
+    <div class="knowledge-detail-layout">
+      <section class="surface-panel panel-padding" aria-labelledby="knowledge-meta-heading">
+        <div class="knowledge-detail-header"><div><h2 id="knowledge-meta-heading">Document設定</h2><p class="field-help">Projectごとの利用設定は各ProjectのKnowledge工程で行います。</p></div><span class="knowledge-active-label {{ 'archived' if knowledge.archived else ('inactive' if not knowledge.active else '') }}">{{ 'アーカイブ済み' if knowledge.archived else ('有効' if knowledge.active else '無効') }}</span></div>
+        <form id="knowledge-metadata-form" class="knowledge-upload-form" data-knowledge-id="{{ knowledge.id }}">
+          <label class="editor-label">タイトル<input name="title" maxlength="120" value="{{ knowledge.title }}" required></label>
+          <label class="editor-label">カテゴリ<select name="category"><option value="style" {% if knowledge.category == 'style' %}selected{% endif %}>Style</option><option value="layout" {% if knowledge.category == 'layout' %}selected{% endif %}>Layout</option><option value="character" {% if knowledge.category == 'character' %}selected{% endif %}>Character</option><option value="genre" {% if knowledge.category == 'genre' %}selected{% endif %}>Genre</option><option value="dialogue" {% if knowledge.category == 'dialogue' %}selected{% endif %}>Dialogue</option><option value="world" {% if knowledge.category == 'world' %}selected{% endif %}>World</option><option value="brand" {% if knowledge.category == 'brand' %}selected{% endif %}>Brand</option><option value="other" {% if knowledge.category == 'other' %}selected{% endif %}>Other</option></select></label>
+          <label class="editor-label">説明<textarea name="description" rows="4" maxlength="2000">{{ knowledge.description }}</textarea></label>
+          <div class="save-row"><button class="secondary-button compact-button" type="submit">設定を保存</button><button class="text-button danger-button" type="button" data-toggle-knowledge data-knowledge-id="{{ knowledge.id }}" data-active="{{ 'true' if knowledge.active else 'false' }}">{{ '無効にする' if knowledge.active else '有効にする' }}</button><button class="text-button" type="button" data-archive-knowledge data-knowledge-id="{{ knowledge.id }}" data-archived="{{ 'true' if knowledge.archived else 'false' }}">{{ 'アーカイブを解除' if knowledge.archived else 'アーカイブ' }}</button></div>
+          <div id="knowledge-metadata-error" class="inline-form-error" role="alert" hidden></div>
+        </form>
+        <button class="text-button danger-button knowledge-delete-button" type="button" data-delete-knowledge="{{ knowledge.id }}">このKnowledgeを削除</button>
+      </section>
+      <section class="surface-panel panel-padding" aria-labelledby="knowledge-version-upload-heading">
+        <h2 id="knowledge-version-upload-heading">新しいVersionを登録</h2>
+        <p class="panel-lead">既存Versionは削除せず、同じ内容なら重複Versionを作りません。</p>
+        <form id="knowledge-version-form" class="knowledge-upload-form" method="post" action="/api/knowledge/{{ knowledge.id }}/versions" enctype="multipart/form-data">
+          <label class="editor-label">本文<textarea name="source_text" rows="7" placeholder="更新したKnowledge本文"></textarea></label>
+          <label class="file-drop knowledge-file-drop" for="knowledge-version-file"><strong>更新ファイルを選択</strong><span>md / txt / PDF / docx</span><input id="knowledge-version-file" name="knowledge_file" type="file" accept=".md,.txt,.pdf,.docx,text/markdown,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><span id="knowledge-version-selected-file" class="selected-file"></span></label>
+          <div id="knowledge-version-error" class="inline-form-error" role="alert" hidden></div>
+          <button class="primary-button" type="submit">Versionを索引化する <span aria-hidden="true">→</span></button>
+        </form>
+      </section>
+    </div>
+    <section class="knowledge-history" aria-labelledby="knowledge-history-heading"><div class="knowledge-list-heading"><div><p class="eyebrow">VERSION HISTORY</p><h2 id="knowledge-history-heading">Version履歴</h2></div><span class="knowledge-count">{{ knowledge.versions|length }}件</span></div><div class="version-list">{% for version in knowledge.versions %}<article class="version-card surface-panel"><div class="version-card-header"><div><strong>Version {{ version.version_number }}</strong><span>{{ version.status }} / {{ version.chunk_count }} Chunk</span></div>{% if version.is_active %}<span class="knowledge-active-label">現在有効</span>{% else %}<button class="secondary-button compact-button" type="button" data-activate-version data-knowledge-id="{{ knowledge.id }}" data-version-id="{{ version.id }}">このVersionを有効化</button>{% endif %}</div><p class="version-source">{{ version.source_filename or 'direct-input.txt' }} / {{ version.created_at[:10] }}</p><pre>{{ version.content_preview }}</pre></article>{% endfor %}</div></section>
+  </main>
+</div>
+{% endblock %}

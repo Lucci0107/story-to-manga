@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}プロジェクト | Story to Manga{% endblock %}
+{% block body_class %}product-page dashboard-page{% endblock %}
+{% block content %}
+<div class="product-shell">
+  <aside class="global-sidebar">
+    <a class="brand-lockup compact" href="/dashboard" aria-label="ダッシュボードへ戻る">
+      <span class="brand-mark">ふ</span><span><strong>Story to Manga</strong><small>制作室</small></span>
+    </a>
+    <nav class="global-nav" aria-label="メインナビゲーション">
+      <a class="nav-item active" href="/dashboard"><span class="nav-glyph">▦</span>プロジェクト</a>
+      <a class="nav-item" href="/projects/new"><span class="nav-glyph">＋</span>新しい作品</a>
+      <a class="nav-item" href="/knowledge"><span class="nav-glyph">◇</span>Knowledge</a>
+      <a class="nav-item" href="/settings"><span class="nav-glyph">⚙</span>設定</a>
+    </nav>
+    <div class="sidebar-bottom">
+      <button class="nav-item theme-nav" type="button" data-theme-toggle><span class="nav-glyph">◐</span>表示テーマ</button>
+      <div class="user-chip"><span class="avatar">{{ user.email[0]|upper }}</span><span>{{ user.email }}</span></div>
+      <form method="post" action="/logout"><button class="logout-link" type="submit">ログアウト</button></form>
+    </div>
+  </aside>
+  <main class="dashboard-main">
+    <header class="page-header">
+      <div><p class="eyebrow">PROJECTS</p><h1>プロジェクト</h1><p class="page-subtitle">物語の続きを、いつでも制作室から。</p></div>
+      <a class="primary-button" href="/projects/new">新しい作品 <span aria-hidden="true">＋</span></a>
+    </header>
+    {% if projects %}
+    <section class="project-grid" aria-label="プロジェクト一覧">
+      {% for project in projects %}
+      <article class="project-card">
+        <a class="project-thumb" href="/projects/{{ project.id }}" aria-label="{{ project.title }}を開く">
+          <div class="thumb-page"><div class="thumb-ink thumb-ink-{{ loop.index % 3 }}"></div><div class="thumb-lines"></div><span>{{ "%02d"|format(project.page_count) }}P</span></div>
+        </a>
+        <div class="project-card-body">
+          <div class="project-card-meta"><span class="status-label status-{{ project.status }}">{{ project.status_label }}</span><span>{{ project.updated_at[:10] }}</span></div>
+          <h2><a href="/projects/{{ project.id }}">{{ project.title }}</a></h2>
+          <p>{{ project.page_count }}ページ <span class="meta-separator">/</span> {{ project.panel_count }}コマ <span class="meta-separator">/</span> {{ project.generated_panel_count }}生成済み</p>
+          <div class="project-card-actions"><a class="text-button" href="/projects/{{ project.id }}">開く</a><button type="button" class="text-button danger-button" data-delete-project="{{ project.id }}">削除</button></div>
+        </div>
+      </article>
+      {% endfor %}
+      <a class="project-card new-project-card" href="/projects/new"><span class="new-project-mark">＋</span><strong>新しい作品を作る</strong><span>本文を入力して始める</span></a>
+    </section>
+    {% else %}
+    <section class="empty-state" aria-label="プロジェクトがありません">
+      <div class="empty-illustration"><span></span><span></span><span></span></div>
+      <h2>最初の物語を開く</h2>
+      <p>小説、短編、脚本を読み込むと、制作工程を組み立てます。</p>
+      <a class="primary-button" href="/projects/new">作品を作る</a>
+    </section>
+    {% endif %}
+    <section class="dashboard-footer-note"><span class="note-rule"></span><p>AIの提案はいつでも編集できます。原作の意図を確認しながら進めてください。</p></section>
+  </main>
+</div>
+{% endblock %}

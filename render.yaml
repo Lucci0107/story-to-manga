@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: story-to-manga
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: AI_PROVIDER
+        value: demo
+      - key: STORY_MANGA_DATA_DIR
+        value: /var/data/story-manga
+    disk:
+      name: story-manga-data
+      mountPath: /var/data
+      sizeGB: 1

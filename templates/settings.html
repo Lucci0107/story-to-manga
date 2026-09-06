@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}設定 | Story to Manga{% endblock %}
+{% block body_class %}product-page settings-page{% endblock %}
+{% block content %}
+<div class="product-shell compact-shell">
+  <aside class="global-sidebar">
+    <a class="brand-lockup compact" href="/dashboard" aria-label="ダッシュボードへ戻る"><span class="brand-mark">ふ</span><span><strong>Story to Manga</strong><small>制作室</small></span></a>
+    <nav class="global-nav" aria-label="メインナビゲーション">
+      <a class="nav-item" href="/dashboard"><span class="nav-glyph">▦</span>プロジェクト</a>
+      <a class="nav-item" href="/projects/new"><span class="nav-glyph">＋</span>新しい作品</a>
+      <a class="nav-item" href="/knowledge"><span class="nav-glyph">◇</span>Knowledge</a>
+      <a class="nav-item active" href="/settings"><span class="nav-glyph">⚙</span>設定</a>
+    </nav>
+    <div class="sidebar-bottom"><button class="nav-item theme-nav" type="button" data-theme-toggle><span class="nav-glyph">◐</span>表示テーマ</button><div class="user-chip"><span class="avatar">{{ user.email[0]|upper }}</span><span>{{ user.email }}</span></div><form method="post" action="/logout"><button class="logout-link" type="submit">ログアウト</button></form></div>
+  </aside>
+  <main class="new-project-main settings-main">
+    <a class="back-link" href="/dashboard">← プロジェクトへ戻る</a>
+    <div class="new-project-heading"><p class="eyebrow">SETTINGS</p><h1>制作環境の設定</h1><p>アカウントと現在のAI接続状態を確認できます。秘密鍵はこの画面へ表示しません。</p></div>
+    <div class="settings-stack">
+      <section class="surface-panel panel-padding" aria-labelledby="account-heading">
+        <h2 id="account-heading">アカウント</h2>
+        <div class="settings-row"><span>メールアドレス</span><strong>{{ user.email }}</strong></div>
+        <p class="field-help">ログインセッションはHttpOnly Cookieで管理されます。</p>
+      </section>
+      <section class="surface-panel panel-padding" aria-labelledby="runtime-heading">
+        <h2 id="runtime-heading">制作サービス</h2>
+        <div class="settings-row"><span>文章解析プロバイダ</span><strong>{{ runtime.ai_provider }}</strong></div>
+        <div class="settings-row"><span>画像生成プロバイダ</span><strong>{{ runtime.image_provider }}</strong></div>
+        <div class="settings-row"><span>本文アップロード上限</span><strong>{{ runtime.max_upload_mb }}MB</strong></div>
+        <p class="field-help">プロバイダの切り替えはサーバー環境変数で行います。開発時はdemoモードで全工程を確認できます。</p>
+      </section>
+      <section class="surface-panel panel-padding" aria-labelledby="appearance-heading">
+        <h2 id="appearance-heading">表示</h2>
+        <div class="settings-row"><span>テーマ</span><button class="secondary-button compact-button" type="button" data-theme-toggle aria-label="テーマを切り替える">◐ 表示テーマ</button></div>
+        <p class="field-help">テーマはこのブラウザに保存され、次回の制作でも引き継がれます。</p>
+      </section>
+    </div>
+  </main>
+</div>
+{% endblock %}
