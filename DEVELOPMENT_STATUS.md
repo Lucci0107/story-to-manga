@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続コードを確認できるMVPです。ローカルGitは`main`で初期化済みですが、外部remoteは未接続です。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続と最小E2Eスモークを確認できるMVPです。ローカルGitは`main`で初期化済みですが、外部remoteは未接続です。
 
 ```text
 本文入力 / ファイル抽出
@@ -60,26 +60,26 @@
 - PNG画像表示、吹き出し/ナレーション/SFX、モバイル390px・デスクトップ1440pxレイアウト、ライト/ダークテーマを確認
 - ブラウザconsoleのerror/warningなし
 - 実ブラウザでデモモードのコマ生成、個別再生成、リロード後の画像保持を再確認
+- 隔離SQLite環境で実AIスモークを確認：`/api/health`のOpenAI切替、Knowledge 1件の参照、Analysis、Character Bible、Storyboard、Knowledge-aware QA、1ページ5コマの生成、1コマのOpenAI画像生成、画像GET、Project再読込後の`completed`/`revision 1`/画像保持
 
 ## In Progress
 
-- OpenAI APIキーをローカル`.env`へ保存できる状態の最終確認、および実AIの最小E2Eスモーク待ち
+- GitHub/Renderの所有者認証を待つ本番デプロイ準備
 
 ## Remaining
 
-- OpenAI APIキー設定後の実AIスモーク（Analysis / Storyboard / Panel画像 / 保存復元）
 - GitHub remote接続、Render認証、Production QA
+- Render Secret環境変数への`OPENAI_API_KEY`設定と本番AI疎通確認
 
 ## Failed
 
-- OpenAI Platformのキー作成処理自体は完了したが、Codexの安全なローカル保存フローへ暗号化ペイロードが返らず、`.env`は未作成。追加キー作成は停止している。
-- Docker buildはDocker daemon停止により実行できませんでしたが、Render native buildにはDockerは必須ではありません。
+- なし。Docker buildはDocker daemon停止により実行できませんでしたが、Render native buildにはDockerは必須ではありません。
 
 ## Blocked
 
 - GitHub repository作成/remote接続、Renderログイン/OAuth、実AI用secret入力は本人操作が必要です。
 - `gh auth status`ではGitHubアカウントの保存済みTokenが無効と報告されています。再認証後にremote作成またはRender連携へ進めます。
-- 現在プロジェクト直下に`.env`はなく、実AI呼び出しと実画像生成は未実施です。キーを設定すれば`AI_PROVIDER=openai` / `IMAGE_PROVIDER=openai`が有効になります。
+- ローカル`.env`のOpenAIキーは設定済みで、実AIスモークは成功しました。本番ではRender側のSecretへ同じ用途のキーを登録する必要があります。
 
 ## 外部接続待ち
 
@@ -94,11 +94,12 @@
 - ローカル初回コミット: `213096b Build Story to Manga MVP with Knowledge Library`
 - Production URLは未取得です。
 - Renderのnative build設定へResponses API / Images APIのURL、モデル、タイムアウト、再試行、最大出力トークンを追加済みです。APIキーは設定していません。
+- ローカル実AIスモークは成功済みですが、Renderの認証・Secret設定・本番URL取得・Production QAは未実施です。
 
 ## 再開時の確認
 
 1. `README.md`とこのファイルを読む
 2. `STORY_MANGA_DATA_DIR=/tmp/story-manga-check .venv/bin/pytest -q`を実行する
 3. `STORY_MANGA_DATA_DIR=/tmp/story-manga-local AI_PROVIDER=demo IMAGE_PROVIDER=demo .venv/bin/uvicorn app.main:app --reload`でブラウザQAを再実行する
-4. `.env`へ`OPENAI_API_KEY`を設定できたら、実AIの最小E2Eスモークを実行する
-5. GitHubリポジトリとRenderの所有者認証が利用可能になった場合のみ、本番公開とProduction QAへ進む
+4. GitHubリポジトリとRenderの所有者認証が利用可能になったら、Render Secretへキーを設定して本番公開へ進む
+5. Production URLでhealth、AI、画像保存、Reload、Preview、Exportを確認する
