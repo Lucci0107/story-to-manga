@@ -69,6 +69,7 @@
 ## Blocked
 
 - GitHub repository作成/remote接続、Renderログイン/OAuth、実AI用secret入力は本人操作が必要です。
+- `gh auth status`ではGitHubアカウントの保存済みTokenが無効と報告されています。再認証後にremote作成またはRender連携へ進めます。
 
 ## 外部接続待ち
 
@@ -80,6 +81,7 @@
 
 - Render native Python build（`pip install -r requirements.txt` → `uvicorn`）を優先する構成です。
 - SQLite保存先は`render.yaml`の永続ディスクへ設定済みです。
+- ローカル初回コミット: `213096b Build Story to Manga MVP with Knowledge Library`
 - Production URLは未取得です。
 
 ## 再開時の確認
