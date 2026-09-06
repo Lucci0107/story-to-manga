@@ -39,8 +39,8 @@ from .schemas import (
     validate_settings,
     validate_storyboard,
 )
-from .services.ai_pipeline import AIProviderError, get_ai_provider
-from .services.artwork import asset_url, save_panel_artwork
+from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider
+from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artwork
 from .services.extraction import StoryExtractionError, extract_uploaded_file
 from .services.export import export_pdf, export_zip
 from .services.knowledge import (
@@ -225,9 +225,38 @@ def find_panel(project: Dict[str, Any], panel_id: str) -> Tuple[Dict[str, Any], 
 def safe_job_error(exc: Exception) -> str:
     """ログやAPIに本文を含めず、ユーザーが再試行できるエラーへ変換する。"""
 
-    if isinstance(exc, (AIProviderError, StoryExtractionError)):
+    if isinstance(exc, (AIProviderError, ArtworkGenerationError, StoryExtractionError)):
         return str(exc)
     return "生成処理でエラーが発生しました。もう一度試してください"
+
+
+def merge_ai_quality_review(
+    baseline: Dict[str, Any], review: Dict[str, Any], context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """決定論的チェックへ、実AIレビューを安全に追加する。"""
+
+    issues = list(baseline.get("issues", [])) + list(review.get("issues", []))
+    warnings = list(baseline.get("warnings", [])) + list(review.get("warnings", []))
+    checks = list(baseline.get("checks", []))
+    checks.append(
+        {
+            "key": "ai_review",
+            "label": "AI品質レビュー",
+            "status": "pass" if review.get("status") == "pass" else "warning",
+            "detail": str(review.get("summary", "AIレビューを完了しました"))[:500],
+        }
+    )
+    return {
+        **baseline,
+        "status": "attention" if issues or warnings or review.get("status") != "pass" else "pass",
+        "issues": issues[:32],
+        "warnings": warnings[:32],
+        "checks": checks[:32],
+        "suggestions": list(review.get("suggestions", []))[:16],
+        "ai_review": review,
+        "mode": "openai",
+        "knowledge_refs": context.get("references", []),
+    }
 
 
 def queue_panels(
@@ -317,9 +346,25 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     for key in ("description", "action", "expression", "background")
                 ),
             )
-            latest_panel["generation_prompt"] = append_knowledge_prompt(
-                str(latest_panel.get("generation_prompt", "")), knowledge_context
-            )
+            provider = get_ai_provider()
+            prompt_source = latest_panel.get("prompt_source", "generated")
+            if getattr(provider, "uses_external_api", False) and prompt_source != "user":
+                base_prompt = provider.panel_prompt(
+                    latest_panel,
+                    latest.get("characters") or [],
+                    latest.get("settings") or {},
+                    knowledge_context,
+                )
+            else:
+                base_prompt = str(latest_panel.get("generation_prompt", ""))
+                if not base_prompt.strip():
+                    base_prompt = provider.panel_prompt(
+                        latest_panel,
+                        latest.get("characters") or [],
+                        latest.get("settings") or {},
+                        knowledge_context,
+                    )
+            latest_panel["generation_prompt"] = append_knowledge_prompt(base_prompt, knowledge_context)
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
             file_path = save_panel_artwork(latest["id"], latest_panel, latest["settings"])
             latest_panel["image_url"] = asset_url(latest["id"], file_path)
@@ -362,7 +407,8 @@ def get_or_create_demo_project(user_id: str) -> Dict[str, Any]:
     if projects:
         return projects[0]
     project = db.create_project(user_id, "灯台までの帰り道", demo_story(), "text")
-    provider = get_ai_provider()
+    # /demoは動作確認用の入口なので、APIキーがあっても課金リクエストを発生させない。
+    provider = DemoAIProvider()
     analysis = provider.analyze(project["original_text"], project["title"])
     characters = provider.characters(project["original_text"], analysis)
     storyboard = provider.storyboard(project["original_text"], analysis, project["settings"], characters)
@@ -553,7 +599,16 @@ async def project_media(project_id: str, filename: str, user=Depends(current_use
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "story-to-manga", "ai_provider": get_settings().ai_provider, "image_provider": get_settings().image_provider}
+    settings = get_settings()
+    active_image_provider = (
+        "openai" if settings.image_provider == "openai" and settings.openai_api_key else "demo"
+    )
+    return {
+        "status": "ok",
+        "service": "story-to-manga",
+        "ai_provider": get_ai_provider().provider_name,
+        "image_provider": active_image_provider,
+    }
 
 
 @app.get("/api/knowledge")
@@ -782,6 +837,13 @@ async def api_quality_check(project_id: str, user=Depends(current_user)):
         project_id, user["id"], "quality_check", project.get("original_text", "")
     )
     result = knowledge_quality_check(project, context)
+    provider = get_ai_provider()
+    if getattr(provider, "uses_external_api", False):
+        try:
+            review = provider.quality_check(project, context)
+        except AIProviderError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        result = merge_ai_quality_review(result, review, context)
     saved = db.save_quality_check(project_id, user["id"], result)
     return {
         "project": project_view(saved or project),
@@ -859,7 +921,7 @@ async def api_generate_analysis(project_id: str, user=Depends(current_user)):
     )
     return {
         "project": project_view(updated or project),
-        "mode": get_settings().ai_provider,
+        "mode": provider.provider_name,
         "knowledge": knowledge_context,
     }
 
@@ -895,7 +957,7 @@ async def api_generate_characters(project_id: str, user=Depends(current_user)):
     )
     return {
         "project": project_view(updated or project),
-        "mode": get_settings().ai_provider,
+        "mode": provider.provider_name,
         "knowledge": knowledge_context,
     }
 
@@ -940,7 +1002,7 @@ async def api_generate_storyboard(project_id: str, user=Depends(current_user)):
     )
     return {
         "project": project_view(updated or project),
-        "mode": get_settings().ai_provider,
+        "mode": provider.provider_name,
         "knowledge": knowledge_context,
     }
 
@@ -959,9 +1021,12 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
             visual_changed = True
         if key in structure_keys and panel.get(key) != value:
             structure_changed = True
+        if key == "generation_prompt" and panel.get(key) != value:
+            panel["prompt_source"] = "user"
         panel[key] = value
     if structure_changed:
         panel["generation_prompt"] = ""
+        panel["prompt_source"] = "generated"
         panel["generation_status"] = "not_started"
         panel["generation_error"] = None
     elif visual_changed:

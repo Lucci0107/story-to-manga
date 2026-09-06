@@ -9,7 +9,23 @@ services:
       - key: APP_ENV
         value: production
       - key: AI_PROVIDER
-        value: demo
+        value: openai
+      - key: IMAGE_PROVIDER
+        value: openai
+      - key: OPENAI_RESPONSES_URL
+        value: https://api.openai.com/v1/responses
+      - key: OPENAI_IMAGE_URL
+        value: https://api.openai.com/v1/images/generations
+      - key: OPENAI_TEXT_MODEL
+        value: gpt-5.6-luna
+      - key: OPENAI_IMAGE_MODEL
+        value: gpt-image-2
+      - key: OPENAI_TIMEOUT_SECONDS
+        value: "90"
+      - key: OPENAI_MAX_RETRIES
+        value: "1"
+      - key: OPENAI_MAX_OUTPUT_TOKENS
+        value: "12000"
       - key: STORY_MANGA_DATA_DIR
         value: /var/data/story-manga
     disk:

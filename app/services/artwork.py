@@ -8,16 +8,20 @@ from __future__ import annotations
 
 import base64
 import binascii
-import json
+from io import BytesIO
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 from PIL import Image, ImageColor, ImageDraw
 
 from ..config import get_settings
+from .openai_client import OpenAIRequestError, request_bytes, request_json
+
+
+class ArtworkGenerationError(RuntimeError):
+    """画像生成または画像保存に失敗した。"""
 
 
 def _slug(value: str) -> str:
@@ -145,31 +149,51 @@ def save_openai_image(panel: Dict[str, Any], runtime: Any, path: Path) -> None:
         "size": "1024x1024",
         "quality": "low",
     }
-    request = urllib.request.Request(
-        runtime.openai_image_url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {runtime.openai_api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        body = request_json(
+            runtime.openai_image_url,
+            api_key=runtime.openai_api_key,
+            payload=payload,
+            timeout=getattr(runtime, "openai_timeout_seconds", 120.0),
+            max_retries=getattr(runtime, "openai_max_retries", 1),
+        )
         image_data = body["data"][0]
         encoded = image_data.get("b64_json")
         if encoded:
-            path.write_bytes(base64.b64decode(encoded, validate=True))
+            image_bytes = base64.b64decode(encoded, validate=True)
+            path.write_bytes(_validate_image_bytes(image_bytes))
             return
         image_url = image_data.get("url")
         if image_url:
-            with urllib.request.urlopen(image_url, timeout=120) as image_response:
-                path.write_bytes(image_response.read())
+            parsed = urlparse(str(image_url))
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise ValueError("安全でない画像URLです")
+            image_bytes = request_bytes(
+                str(image_url),
+                api_key="",
+                timeout=getattr(runtime, "openai_timeout_seconds", 120.0),
+                max_retries=getattr(runtime, "openai_max_retries", 1),
+            )
+            path.write_bytes(_validate_image_bytes(image_bytes))
             return
         raise ValueError("画像データがありません")
-    except (urllib.error.URLError, TimeoutError, ValueError, KeyError, IndexError, TypeError, binascii.Error, json.JSONDecodeError) as exc:
-        raise RuntimeError("画像生成サービスから画像を取得できませんでした") from exc
+    except OpenAIRequestError as exc:
+        raise ArtworkGenerationError(str(exc)) from exc
+    except (AttributeError, OSError, ValueError, KeyError, IndexError, TypeError, binascii.Error) as exc:
+        raise ArtworkGenerationError("画像生成サービスから有効な画像を取得できませんでした") from exc
+
+
+def _validate_image_bytes(image_bytes: bytes) -> bytes:
+    """保存前に画像形式とサイズを検証し、壊れた応答をProjectへ紐付けない。"""
+
+    if not image_bytes or len(image_bytes) > 20 * 1024 * 1024:
+        raise ValueError("画像サイズが不正です")
+    try:
+        with Image.open(BytesIO(image_bytes)) as image:
+            image.verify()
+    except (OSError, ValueError) as exc:
+        raise ValueError("画像形式が不正です") from exc
+    return image_bytes
 
 
 def asset_url(project_id: str, path: str) -> str:

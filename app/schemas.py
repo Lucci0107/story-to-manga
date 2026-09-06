@@ -400,6 +400,7 @@ def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
                 "expression": str(raw_panel.get("expression", ""))[:240],
                 "background": str(raw_panel.get("background", ""))[:500],
                 "generation_prompt": str(raw_panel.get("generation_prompt", ""))[:4_000],
+                "prompt_source": raw_panel.get("prompt_source") if raw_panel.get("prompt_source") in {"generated", "user"} else "generated",
                 "image_url": raw_panel.get("image_url") if isinstance(raw_panel.get("image_url"), str) else None,
                 "generation_status": raw_panel.get("generation_status") if raw_panel.get("generation_status") in {"not_started", "queued", "processing", "completed", "failed"} else "not_started",
                 "generation_error": raw_panel.get("generation_error") if isinstance(raw_panel.get("generation_error"), str) else None,

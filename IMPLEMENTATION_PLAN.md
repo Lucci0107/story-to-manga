@@ -17,8 +17,8 @@ Browser
        ├─ SQLite: users / sessions / projects / generation_jobs / exports
        ├─ Knowledge: documents / versions / chunks / project selections / processing jobs
        ├─ Story extraction: txt / md / PDF / docx
-       ├─ AI provider boundary: demo or OpenAI-compatible JSON API
-       ├─ Artwork provider boundary: demo PNG now, image API later
+       ├─ AI provider boundary: demo or OpenAI Responses API Structured Outputs
+       ├─ Artwork provider boundary: demo PNG or OpenAI Images API
        ├─ Knowledge retrieval: scope + priority + follow_latest/pinned + bounded context
        └─ Knowledge-aware QA: persistent quality report and traceable references
   └─ Export: PDF / generated-image ZIP
@@ -51,17 +51,20 @@ Project内の解析、人物、ネーム、設定、Knowledge選択、QA結果�
 
 ## 5. 本番接続時の切り替え
 
-- `AI_PROVIDER=openai` と `OPENAI_API_KEY` をサーバー環境変数に設定すると、解析、人物、ネームの外部LLM接続境界を利用できる。
-- 画像APIは `app/services/artwork.py` の `save_panel_artwork` 境界へ接続済み。`IMAGE_PROVIDER=openai` のときだけサーバー側でbase64画像を受け取り、返却された画像パスとrevisionを保存する。デモプロバイダでもPNGを保存し、PDFは保存済み画像へ吹き出し等を合成する。
+- `AI_PROVIDER=openai` と `OPENAI_API_KEY` をサーバー環境変数に設定すると、Responses APIのStructured Outputsを使った解析、人物、ネーム、QA、パネルPrompt生成を利用できる。専用JSON Schemaを要求し、サーバー側で正規化・検証し、不正形式だけを1回限定で修復要求する。
+- `app/services/openai_client.py` にHTTP、認証エラー、タイムアウト、限定再試行、JSONレスポンス抽出を集約した。Python SDKを必須化せず、公式REST APIの境界を維持する。
+- 画像APIは `app/services/artwork.py` の `save_panel_artwork` 境界へ接続済み。`IMAGE_PROVIDER=openai` のときは `gpt-image-2` のbase64または署名URLをサーバー側で取得し、画像形式を検証して既存asset/storage層へ保存する。デモプロバイダでもPNGを保存し、PDFは保存済み画像へ吹き出し等を合成する。
+- `OPENAI_RESPONSES_URL`、`OPENAI_IMAGE_URL`、`OPENAI_TEXT_MODEL`、`OPENAI_IMAGE_MODEL`、タイムアウト、再試行回数、最大出力トークンを中央設定で変更できる。キーなしのローカル環境はデモProviderへ戻り、デモ入口から課金APIを呼ばない。
+- パネルPromptはCharacter Bible、漫画設定、シーン、構図、連続性制約、選択済みKnowledgeの限定コンテキストから組み立てる。ユーザーが編集したPromptは保持し、個別パネルの失敗だけを再試行する。
 - 本番で複数インスタンスを動かす場合は、BackgroundTasksをキュー基盤へ移し、SQLiteをPostgres等へ移行する。
 - 大きな作品を扱う場合は、物語本文にもKnowledgeと同様の段階的なChunk/階層要約を適用する。
 - 本番のAI/画像秘密鍵はRenderのSecret環境変数へ設定し、クライアントへ公開しない。
 
 ## 6. 品質ゲート
 
-- `pytest -q`
+- `pytest -q`（既存20 + OpenAI境界6 = 26 passed）
 - `node --check static/js/app.js`
 - `python -m compileall app`
 - `uvicorn app.main:app` 起動後、ブラウザでデモログイン、解析、編集、生成、プレビュー、PDF/ZIPを確認
 - KnowledgeのVersion/Scope/参照トレース、QA、アーカイブ、失敗時retryもAPIテストと実ブラウザで確認済み。
-- Render用 `render.yaml` と `Dockerfile` を確認済み。外部アカウント認証なしでは本番公開操作は行わない。
+- Render用 `render.yaml` と `Dockerfile` を確認済み。外部アカウント認証とOpenAI secretなしでは本番公開・実AIスモークは行わない。

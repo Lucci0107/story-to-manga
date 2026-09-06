@@ -1,0 +1,308 @@
+"""OpenAI境界の決定論的なモック統合テスト。"""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from PIL import Image
+
+from app.services.ai_pipeline import OpenAIProvider
+from app.services.artwork import ArtworkGenerationError, save_openai_image
+
+
+class FakeHTTPResponse:
+    """urllibレスポンスの最小モック。"""
+
+    def __init__(self, body: dict) -> None:
+        self.body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+    def __enter__(self) -> "FakeHTTPResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
+def runtime_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        openai_api_key="test-key",
+        openai_responses_url="https://api.openai.com/v1/responses",
+        openai_image_url="https://api.openai.com/v1/images/generations",
+        openai_text_model="gpt-5.6-luna",
+        openai_image_model="gpt-image-2",
+        openai_timeout_seconds=5.0,
+        openai_max_retries=0,
+        openai_max_output_tokens=2_000,
+    )
+
+
+def response_with_json(value: dict) -> dict:
+    return {
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {"type": "output_text", "text": json.dumps(value, ensure_ascii=False)}
+                ],
+            }
+        ]
+    }
+
+
+def valid_analysis() -> dict:
+    return {
+        "title": "灯台の帰り道",
+        "synopsis": "蒼が過去と向き合い、凛へ決断を伝える。",
+        "genre": "ヒューマンドラマ",
+        "tone": "静かで余韻がある",
+        "world_setting": "霧の町",
+        "main_characters": ["蒼"],
+        "supporting_characters": ["凛"],
+        "locations": ["灯台"],
+        "major_events": ["再会", "決断"],
+        "story_beats": ["導入", "対話", "結末"],
+        "conflicts": ["過去への恐れ"],
+        "climax": "蒼が決断を伝える",
+        "ending": "ふたりが歩き出す",
+        "important_objects": ["キーホルダー"],
+    }
+
+
+def valid_character() -> dict:
+    return {
+        "name": "蒼",
+        "role": "主人公",
+        "age_range": "20代",
+        "personality": "慎重だが決断できる",
+        "appearance": "短めの黒髪と静かな目",
+        "hairstyle": "耳にかかる短髪",
+        "hair_color": "黒",
+        "eye_characteristics": "強い視線",
+        "body_type": "細身",
+        "clothing": "濃色のジャケット",
+        "accessories": "古いキーホルダー",
+        "distinguishing_features": "左手で握る癖",
+        "expressions": "迷いと決意",
+        "relationship_notes": "凛と過去を共有する",
+        "visual_prompt": "短髪とジャケットを全コマで固定",
+        "negative_constraints": "眼鏡を追加しない",
+    }
+
+
+def test_responses_structured_output_and_knowledge_are_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Responses API形式とKnowledge参照境界が実リクエストへ反映される。"""
+
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(response_with_json(valid_analysis()))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+
+    result = OpenAIProvider().analyze(
+        "蒼は霧の町の灯台へ向かった。",
+        "灯台",
+        {"prompt_text": "霧の町では余白を広くする。"},
+    )
+
+    assert result["title"] == "灯台の帰り道"
+    assert len(requests) == 1
+    assert requests[0]["model"] == "gpt-5.6-luna"
+    assert requests[0]["text"]["format"]["type"] == "json_schema"
+    assert requests[0]["text"]["format"]["strict"] is True
+    assert "<knowledge_reference>" in requests[0]["input"]
+    assert "霧の町では余白を広くする" in requests[0]["input"]
+
+
+def test_invalid_structured_output_is_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """不正な構造化出力を無限再試行せず、1回だけ修復要求する。"""
+
+    responses = iter(
+        [
+            {"output_text": "これはJSONではありません"},
+            response_with_json(valid_analysis()),
+        ]
+    )
+    calls: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(next(responses))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+
+    result = OpenAIProvider().analyze("本文", "作品")
+
+    assert result["synopsis"]
+    assert len(calls) == 2
+    assert "JSON Schema" in calls[1]["input"]
+
+
+def test_panel_prompt_contains_continuity_anchor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """パネルPromptがCharacter Bible由来の固定情報を保持する。"""
+
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(response_with_json({"prompt": "cinematic foggy lighthouse scene"}))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    panel = {
+        "description": "蒼が灯台の扉へ手を伸ばす",
+        "shot_type": "手元の寄り",
+        "characters": ["蒼"],
+        "action": "キーホルダーを握る",
+        "expression": "静かな決意",
+        "background": "霧の灯台",
+    }
+    character = {
+        "name": "蒼",
+        "appearance": "短めの黒髪",
+        "hairstyle": "耳にかかる短髪",
+        "hair_color": "黒",
+        "eye_characteristics": "強い視線",
+        "body_type": "細身",
+        "clothing": "濃色のジャケット",
+        "accessories": "古いキーホルダー",
+        "distinguishing_features": "左手で握る癖",
+        "negative_constraints": "眼鏡を追加しない",
+    }
+
+    prompt = OpenAIProvider().panel_prompt(
+        panel,
+        [character],
+        {"color_mode": "bw", "visual_style": "cinematic"},
+        {"prompt_text": "灯台は霧に包まれる。"},
+    )
+
+    assert "Continuity anchor" in prompt
+    assert "短めの黒髪" in prompt
+    assert "<knowledge_reference>" in requests[0]["input"]
+
+
+def test_characters_storyboard_and_quality_use_structured_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """主要な実AI工程がそれぞれ専用Schemaで検証される。"""
+
+    requests: list[dict] = []
+    values = iter(
+        [
+            response_with_json({"characters": [valid_character()]}),
+            response_with_json(
+                {
+                    "pages": [
+                        {
+                            "page_number": 1,
+                            "title": "霧の入口",
+                            "layout": "classic",
+                            "panels": [
+                                {
+                                    "description": "蒼が灯台を見る",
+                                    "shot_type": "遠景",
+                                    "characters": ["蒼"],
+                                    "action": "立ち止まる",
+                                    "expression": "迷い",
+                                    "background": "霧の町",
+                                    "dialogue": [],
+                                    "narration": ["霧が町を包む。"],
+                                    "sfx": [],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+            response_with_json(
+                {
+                    "status": "pass",
+                    "summary": "人物とネームの流れを確認しました。",
+                    "issues": [],
+                    "warnings": [],
+                    "suggestions": ["ページめくりを確認してください。"],
+                }
+            ),
+        ]
+    )
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(next(values))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIProvider()
+    analysis = valid_analysis()
+    characters = provider.characters("蒼は灯台へ向かった。", analysis)
+    storyboard = provider.storyboard(
+        "蒼は灯台へ向かった。",
+        analysis,
+        {"target_page_count": 1, "color_mode": "bw", "visual_style": "cinematic"},
+        characters,
+    )
+    review = provider.quality_check(
+        {
+            "title": "灯台",
+            "original_text": "蒼は灯台へ向かった。",
+            "analysis": analysis,
+            "characters": characters,
+            "storyboard": storyboard,
+        },
+        {"prompt_text": "霧の町では余白を広くする。"},
+    )
+
+    assert characters[0]["name"] == "蒼"
+    assert storyboard[0]["panels"][0]["generation_prompt"]
+    assert review["suggestions"]
+    assert [request["text"]["format"]["name"] for request in requests] == [
+        "character_bible",
+        "manga_storyboard",
+        "quality_review",
+    ]
+
+
+def test_openai_image_base64_is_validated_and_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Images APIのbase64画像をサーバー側で検証して保存する。"""
+
+    stream = io.BytesIO()
+    Image.new("RGB", (8, 8), "white").save(stream, format="PNG")
+    encoded = base64.b64encode(stream.getvalue()).decode("ascii")
+
+    def fake_urlopen(request, timeout):
+        return FakeHTTPResponse({"data": [{"b64_json": encoded}]})
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    target = tmp_path / "panel.png"
+    save_openai_image(
+        {"generation_prompt": "白黒の灯台のコマ"},
+        runtime_settings(),
+        target,
+    )
+
+    assert target.exists()
+    with Image.open(target) as image:
+        assert image.size == (8, 8)
+
+
+def test_invalid_openai_image_is_user_visible(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """壊れた画像応答を成功扱いにしない。"""
+
+    def fake_urlopen(request, timeout):
+        return FakeHTTPResponse({"data": [{"b64_json": base64.b64encode(b"bad").decode("ascii")}]})
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(ArtworkGenerationError):
+        save_openai_image({"generation_prompt": "画像"}, runtime_settings(), tmp_path / "bad.png")

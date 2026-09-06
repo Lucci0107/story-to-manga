@@ -14,7 +14,9 @@ python3 -m venv .venv
 
 ## 環境変数
 
-`.env.example` を参照してください。未設定時はデモAIとデモアートが動作します。外部LLM/画像生成を利用する場合は、サーバー側の環境変数だけに `OPENAI_API_KEY` を設定し、`AI_PROVIDER=openai` または `IMAGE_PROVIDER=openai` を指定してください。キーはクライアントへ渡しません。
+`.env.example` を参照してください。`OPENAI_API_KEY` が未設定の場合はデモAIとデモアートが動作します。実AIを利用する場合は、サーバー側の環境変数またはプロジェクト直下の`.env`だけにキーを設定し、`AI_PROVIDER=openai` と `IMAGE_PROVIDER=openai` を指定してください。キーはクライアントへ渡しません。
+
+テキスト処理はOpenAI Responses APIのStructured Outputs（JSON Schema）を使い、`OPENAI_TEXT_MODEL`でモデルを変更できます。パネル画像はOpenAI Images APIを使い、`OPENAI_IMAGE_MODEL`で変更できます。既定値はそれぞれ`gpt-5.6-luna`と`gpt-image-2`です。タイムアウト、再試行回数、最大出力トークンも環境変数で制限しています。
 
 ## 対応形式
 
