@@ -28,6 +28,73 @@
     window.setTimeout(function () { toast.remove(); }, 4200);
   }
 
+  const processingDialogElements = {
+    root: document.getElementById("processing-dialog-root"),
+    dialog: document.getElementById("processing-dialog"),
+    title: document.getElementById("processing-dialog-title"),
+    message: document.getElementById("processing-dialog-message"),
+    progress: document.getElementById("processing-dialog-progress"),
+    submessage: document.getElementById("processing-dialog-submessage")
+  };
+  let processingDialogOpen = false;
+  let processingDialogPreviousFocus = null;
+
+  function updateProcessingDialog(options) {
+    const values = options || {};
+    if (!processingDialogElements.root) return;
+    if (values.title != null && processingDialogElements.title) processingDialogElements.title.textContent = values.title;
+    if (values.message != null && processingDialogElements.message) processingDialogElements.message.textContent = values.message;
+    if (Object.prototype.hasOwnProperty.call(values, "progress") && processingDialogElements.progress) {
+      const progress = String(values.progress == null ? "" : values.progress).trim();
+      processingDialogElements.progress.textContent = progress;
+      processingDialogElements.progress.hidden = !progress;
+    }
+    if (values.submessage != null && processingDialogElements.submessage) processingDialogElements.submessage.textContent = values.submessage;
+  }
+
+  function showProcessingDialog(options) {
+    if (!processingDialogElements.root) return;
+    if (!processingDialogOpen) {
+      processingDialogPreviousFocus = document.activeElement;
+      processingDialogOpen = true;
+      processingDialogElements.root.hidden = false;
+      processingDialogElements.root.setAttribute("aria-hidden", "false");
+      processingDialogElements.root.setAttribute("aria-busy", "true");
+      document.body.classList.add("processing-dialog-open");
+    }
+    updateProcessingDialog({
+      title: "処理中です",
+      message: "処理を開始しています…",
+      progress: "",
+      submessage: "完了するまでお待ちください",
+      ...(options || {})
+    });
+    const focusDialog = function () {
+      if (processingDialogOpen) processingDialogElements.dialog?.focus();
+    };
+    if (window.requestAnimationFrame) window.requestAnimationFrame(focusDialog); else focusDialog();
+  }
+
+  function hideProcessingDialog() {
+    if (!processingDialogElements.root || !processingDialogOpen) return;
+    processingDialogOpen = false;
+    processingDialogElements.root.hidden = true;
+    processingDialogElements.root.setAttribute("aria-hidden", "true");
+    processingDialogElements.root.setAttribute("aria-busy", "false");
+    document.body.classList.remove("processing-dialog-open");
+    const previous = processingDialogPreviousFocus;
+    processingDialogPreviousFocus = null;
+    if (previous && previous.isConnected && typeof previous.focus === "function") previous.focus();
+  }
+
+  document.addEventListener("keydown", function (event) {
+    if (!processingDialogOpen) return;
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault();
+      processingDialogElements.dialog?.focus();
+    }
+  });
+
   function applyTheme(theme) {
     root.dataset.theme = theme;
     window.localStorage.setItem("story-manga-theme", theme);
@@ -132,6 +199,11 @@
       submit.disabled = true;
       submit.dataset.originalText = submit.textContent;
       submit.textContent = "本文を保存中…";
+      showProcessingDialog({
+        message: "物語を取り込んでいます…",
+        progress: "本文を抽出しています",
+        submessage: "入力内容をProjectへ保存しています。"
+      });
       try {
         const response = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { Accept: "application/json" } });
         const data = await response.json();
@@ -142,6 +214,7 @@
         errorBox.hidden = false;
         showToast(errorBox.textContent, "error");
       } finally {
+        hideProcessingDialog();
         submit.disabled = false;
         submit.textContent = submit.dataset.originalText;
       }
@@ -176,6 +249,11 @@
         const original = submit.textContent;
         submit.textContent = "抽出・索引化中…";
         if (errorBox) errorBox.hidden = true;
+        showProcessingDialog({
+          message: "ナレッジを処理しています…",
+          progress: "本文を抽出して索引化しています",
+          submessage: "内容を分割し、あとから参照できる形で保存しています。"
+        });
         try {
           const data = await jsonApi(form.action, { method: "POST", body: new FormData(form) });
           showToast(data.duplicate ? "同じ内容のVersionがあるため、追加しませんでした" : "KnowledgeをReadyにしました");
@@ -185,6 +263,8 @@
           showToast(error.message, "error");
           submit.disabled = false;
           submit.textContent = original;
+        } finally {
+          hideProcessingDialog();
         }
       });
     });
@@ -517,6 +597,11 @@
       const button = content.querySelector("[data-generate-analysis]");
       if (button) { button.disabled = true; button.textContent = "物語を解析中…"; }
       setSaveState("解析中", true);
+      showProcessingDialog({
+        message: "物語を解析しています…",
+        progress: "物語の構造と重要な出来事を整理しています",
+        submessage: "原作と選択したKnowledgeを参照しています。"
+      });
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/analysis", { method: "POST", body: "{}" });
         state = data.project;
@@ -526,7 +611,10 @@
       } catch (error) {
         showToast(error.message, "error");
         if (button) { button.disabled = false; button.textContent = "解析を始める →"; }
-      } finally { setSaveState("保存済み", false); }
+      } finally {
+        hideProcessingDialog();
+        setSaveState("保存済み", false);
+      }
     }
 
     function renderAnalysis() {
@@ -681,12 +769,18 @@
       if (!state.analysis) { showToast("先に物語解析を生成してください", "error"); return; }
       const button = content.querySelector("[data-generate-characters], [data-regenerate-characters]");
       if (button) { button.disabled = true; button.textContent = "人物設定を作成中…"; }
+      showProcessingDialog({
+        message: "キャラクター設定を生成しています…",
+        progress: "人物の外見と関係性を整理しています",
+        submessage: "後続のコマでも同じ人物として描ける設定を作成しています。"
+      });
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/characters", { method: "POST", body: "{}" });
         state = data.project;
         showToast("キャラクターバイブルを作成しました");
         render();
       } catch (error) { showToast(error.message, "error"); if (button) button.disabled = false; }
+      finally { hideProcessingDialog(); }
     }
 
     function panelTemplate(pageId, panel, index) {
@@ -750,12 +844,18 @@
       if (!state.analysis) { showToast("先に物語解析を生成してください", "error"); return; }
       const button = content.querySelector("[data-generate-storyboard]");
       if (button) { button.disabled = true; button.textContent = "ネームを作成中…"; }
+      showProcessingDialog({
+        message: "ストーリーボードを生成しています…",
+        progress: "ページとコマの流れを設計しています",
+        submessage: "場面転換、視線の流れ、ページめくりを整理しています。"
+      });
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/storyboard", { method: "POST", body: "{}" });
         state = data.project;
         showToast("ページとコマの構成を作成しました");
         render();
       } catch (error) { showToast(error.message, "error"); if (button) button.disabled = false; }
+      finally { hideProcessingDialog(); }
     }
 
     function renderGenerationRows() {
@@ -787,18 +887,37 @@
     async function queueGeneration(panelIds, retryFailed, force) {
       const buttons = content.querySelectorAll("[data-generate-all], [data-retry-failed], [data-retry-panel], [data-regenerate-panel]");
       buttons.forEach(function (button) { button.disabled = true; });
+      const operationMessage = force && panelIds.length === 1 ? "漫画画像を再生成しています…" : "漫画画像を生成しています…";
+      showProcessingDialog({
+        message: operationMessage,
+        progress: "生成対象を確認しています",
+        submessage: "選択したコマだけを処理し、完了した画像から保存します。"
+      });
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generate", { method: "POST", body: JSON.stringify({ panel_ids: panelIds, retry_failed: retryFailed, force: force }) });
-        if (!data.queued_panel_ids?.length) showToast("生成対象はありません。完了済みのコマは再利用されます");
-        else showToast(data.queued_panel_ids.length + "コマを生成キューに追加しました");
+        const queuedPanelIds = Array.isArray(data.queued_panel_ids) ? data.queued_panel_ids.filter(Boolean) : [];
+        if (!queuedPanelIds.length) {
+          hideProcessingDialog();
+          showToast("生成対象はありません。完了済みのコマは再利用されます");
+          await fetchProject(true);
+          return;
+        }
+        showToast(queuedPanelIds.length + "コマを生成キューに追加しました");
+        updateProcessingDialog({ progress: queuedPanelIds.length + "コマを順番に生成します" });
         await fetchProject(true);
-        pollGeneration();
-      } catch (error) { showToast(error.message, "error"); render(); }
+        await pollGeneration(queuedPanelIds, operationMessage);
+      } catch (error) {
+        hideProcessingDialog();
+        showToast(error.message, "error");
+        render();
+      }
     }
 
-    async function pollGeneration() {
+    async function pollGeneration(targetPanelIds, operationMessage) {
       if (polling) return;
       polling = true;
+      const targetIds = new Set(targetPanelIds || []);
+      let finished = false;
       try {
         for (let attempt = 0; attempt < 40; attempt += 1) {
           await new Promise(function (resolve) { window.setTimeout(resolve, 500); });
@@ -806,11 +925,38 @@
           const byId = Object.fromEntries(data.panels.map(function (panel) { return [panel.id, panel]; }));
           (state.storyboard || []).forEach(function (page) { (page.panels || []).forEach(function (panel) { const update = byId[panel.id]; if (update) { panel.generation_status = update.status; panel.generation_error = update.error; panel.image_url = update.image_url; panel.revision = update.revision; panel.generation_metadata = update.generation_metadata; } }); });
           const active = data.panels.some(function (panel) { return panel.status === "queued" || panel.status === "processing"; });
-          if (!active) { await fetchProject(false); render(); break; }
+          const tracked = targetIds.size ? data.panels.filter(function (panel) { return targetIds.has(panel.id); }) : data.panels;
+          const completed = tracked.filter(function (panel) { return panel.status === "completed"; }).length;
+          const failed = tracked.filter(function (panel) { return panel.status === "failed"; }).length;
+          const currentPanel = tracked.find(function (panel) { return panel.status === "queued" || panel.status === "processing"; });
+          if (!active || !currentPanel) {
+            finished = true;
+            await fetchProject(false);
+            render();
+            if (failed) {
+              updateProcessingDialog({ message: "一部の漫画画像を生成できませんでした", progress: completed + "コマ完了 / " + failed + "コマ失敗", submessage: "失敗したコマは生成画面から再試行できます。" });
+              showToast(failed + "コマの生成に失敗しました。再試行できます", "error");
+            } else {
+              updateProcessingDialog({ message: "漫画画像の生成が完了しました", progress: completed + "コマを保存しました", submessage: "生成結果を確認できます。" });
+            }
+            break;
+          }
+          const total = targetIds.size || tracked.length;
+          const current = Math.min(completed + 1, Math.max(1, total));
+          updateProcessingDialog({
+            message: operationMessage || "漫画画像を生成しています…",
+            progress: total + "コマ中 " + current + "コマ目を生成しています",
+            submessage: currentPanel.status === "queued" ? "生成キューで順番を待っています。" : "画像を生成し、保存しています。"
+          });
           if (activeStep === "generate") render();
         }
-      } catch (error) { showToast(error.message, "error"); }
-      finally { polling = false; }
+        if (!finished) showToast("生成状況の確認がタイムアウトしました。しばらくしてから再読み込みしてください", "error");
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        polling = false;
+        hideProcessingDialog();
+      }
     }
 
     function pageStage(page) {
@@ -884,6 +1030,11 @@
       button.disabled = true;
       const original = button.textContent;
       button.textContent = "確認中…";
+      showProcessingDialog({
+        message: "QAを実行しています…",
+        progress: "原作・ネーム・画像状態を確認しています",
+        submessage: "選択したKnowledgeとの整合性も確認しています。"
+      });
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/quality-check", { method: "POST", body: "{}" });
         state = data.project;
@@ -893,7 +1044,7 @@
         showToast(error.message, "error");
         button.disabled = false;
         button.textContent = original;
-      }
+      } finally { hideProcessingDialog(); }
     }
 
     function renderPreview() {
@@ -918,13 +1069,22 @@
       button.disabled = true;
       const original = button.textContent;
       button.textContent = "作成中…";
+      showProcessingDialog({
+        message: format === "pdf" ? "PDFを書き出しています…" : "ZIPを書き出しています…",
+        progress: "ページ画像と編集データをまとめています",
+        submessage: "書き出しが完了するまでお待ちください。"
+      });
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/export", { method: "POST", body: JSON.stringify({ format: format }) });
         const result = content.querySelector("#export-result");
         if (result) result.innerHTML = (data.warning ? '<div class="export-warning">' + escapeHtml(data.warning) + '</div>' : "") + '<div class="export-success">書き出しが完了しました。<a href="' + escapeAttr(data.download_url) + '">ファイルをダウンロード</a></div>';
         showToast(format.toUpperCase() + "を書き出しました");
       } catch (error) { showToast(error.message, "error"); }
-      finally { button.disabled = false; button.textContent = original; }
+      finally {
+        hideProcessingDialog();
+        button.disabled = false;
+        button.textContent = original;
+      }
     }
 
     function render() {

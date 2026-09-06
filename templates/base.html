@@ -5,11 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f2f2ed">
     <title>{% block title %}Story to Manga{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}?v=5">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}?v=6">
   </head>
   <body class="{% block body_class %}{% endblock %}">
     {% block content %}{% endblock %}
+    <div class="processing-dialog-root" id="processing-dialog-root" hidden aria-hidden="true" aria-busy="false">
+      <div class="processing-dialog-backdrop" aria-hidden="true"></div>
+      <section class="processing-dialog" id="processing-dialog" role="dialog" aria-modal="true" aria-labelledby="processing-dialog-title" aria-describedby="processing-dialog-message processing-dialog-progress processing-dialog-submessage" tabindex="-1">
+        <div class="processing-spinner" aria-hidden="true"><span></span><span></span><span></span></div>
+        <p class="eyebrow">PROCESSING</p>
+        <h2 id="processing-dialog-title">処理中です</h2>
+        <p class="processing-dialog-message" id="processing-dialog-message" aria-live="polite" aria-atomic="true">処理を開始しています…</p>
+        <p class="processing-dialog-progress" id="processing-dialog-progress" aria-live="polite" aria-atomic="true" hidden></p>
+        <p class="processing-dialog-submessage" id="processing-dialog-submessage">完了するまでお待ちください</p>
+      </section>
+    </div>
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
-    <script src="{{ url_for('static', path='js/app.js') }}?v=7" defer></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=8" defer></script>
   </body>
 </html>

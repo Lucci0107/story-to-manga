@@ -43,6 +43,7 @@
 - `.env`自動読込、`OPENAI_TEXT_MODEL` / `OPENAI_IMAGE_MODEL` / タイムアウト / 再試行回数の中央設定
 - デモ入口から実AIを呼ばない課金防止、ユーザー編集Promptの保持、個別パネル再生成
 - アプリ側の吹き出し、ナレーション、効果音
+- 主要な長時間処理を覆う共通Processing Dialog（中央表示、Backdrop、Spinner、進捗文、操作ブロック、focus復元、失敗時cleanup）
 - 画像生成PromptへのKnowledge参照境界、生成結果の参照Version/Chunk記録
 - 本文、ネーム、Character Bible、画像、Knowledge参照解決を確認するKnowledge-aware QA
 - コマの表示方法（全体を表示 / 枠に合わせる）をPreviewとPDFへ反映
@@ -54,7 +55,7 @@
 
 ## 検証済み
 
-- `pytest`: 33 passed（既存26 + AIモデル設定7）
+- `pytest`: 37 passed（既存26 + AIモデル設定7 + Processing Dialog 4）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
 - `pip check`
@@ -66,6 +67,7 @@
 - 実ブラウザでデモモードのコマ生成、個別再生成、リロード後の画像保持を再確認
 - 隔離SQLite環境で実AIスモークを確認：`/api/health`のOpenAI切替、Knowledge 1件の参照、Analysis、Character Bible、Storyboard、Knowledge-aware QA、1ページ5コマの生成、1コマのOpenAI画像生成、画像GET、Project再読込後の`completed`/`revision 1`/画像保持
 - AIモデル設定画面でプリセット変更、詳細設定展開、工程別選択、保存・再読み込み、Astra可用性表示、390px/1440px表示、コンソール警告なしを確認
+- 共通Processing Dialogをデモプロバイダで確認：画像一括生成、個別再生成、物語解析、Character Bible、Storyboard、Knowledge取り込み、Knowledge-aware QA、PDF/ZIP Export、入力エラー。Desktop/Mobile中央配置、進捗文、二重送信抑止、成功/失敗後の自動終了、Reload後の非表示、ライト/ダークテーマ、コンソールエラーなし
 - OpenAIモデル一覧APIを低コストに1回確認し、GPT-6 Astraは対象組織で未提供、GPT-5.6 Sol/Terra/Lunaは利用可能と確認
 - 実AIの最小Story AnalysisをAstra指定で1回実行し、AstraのアクセスエラーからGPT-5.6 Solへフォールバック、解析結果保存、requested/actual/fallback/reasoningメタデータ、リロード後の実行モデル表示を確認（画像生成は追加実行なし）
 
