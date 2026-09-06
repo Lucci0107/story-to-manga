@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from .config import ensure_data_dirs, get_settings
+from .services.model_registry import DEFAULT_AI_MODEL_SETTINGS
 
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
@@ -66,7 +67,8 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                ai_model_settings_json TEXT
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -89,6 +91,8 @@ def init_db() -> None:
                 analysis_json TEXT,
                 characters_json TEXT NOT NULL,
                 storyboard_json TEXT NOT NULL,
+                ai_model_settings_json TEXT,
+                generation_metadata_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -189,6 +193,17 @@ def init_db() -> None:
         }
         if "quality_check_json" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN quality_check_json TEXT")
+        if "ai_model_settings_json" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN ai_model_settings_json TEXT")
+        if "generation_metadata_json" not in project_columns:
+            conn.execute(
+                "ALTER TABLE projects ADD COLUMN generation_metadata_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        user_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "ai_model_settings_json" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN ai_model_settings_json TEXT")
         knowledge_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()
         }
@@ -226,8 +241,14 @@ def create_user(email: str, password: str) -> Dict[str, Any]:
     created_at = utc_now()
     with connection() as conn:
         conn.execute(
-            "INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, email.lower().strip(), hash_password(password), created_at),
+            "INSERT INTO users (id, email, password_hash, created_at, ai_model_settings_json) VALUES (?, ?, ?, ?, ?)",
+            (
+                user_id,
+                email.lower().strip(),
+                hash_password(password),
+                created_at,
+                _json(DEFAULT_AI_MODEL_SETTINGS),
+            ),
         )
     return {"id": user_id, "email": email.lower().strip(), "created_at": created_at}
 
@@ -242,6 +263,31 @@ def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
 def get_user(user_id: str) -> Optional[sqlite3.Row]:
     with connection() as conn:
         return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def get_user_ai_model_settings(user_id: str) -> Optional[Dict[str, Any]]:
+    """ユーザーのグローバルAIモデル設定を返す。旧ユーザーはNoneのまま扱う。"""
+
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT ai_model_settings_json FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    return _loads(row["ai_model_settings_json"], None) if row else None
+
+
+def update_user_ai_model_settings(
+    user_id: str, settings: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """グローバルAIモデル設定を保存する。"""
+
+    with connection() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET ai_model_settings_json = ? WHERE id = ?",
+            (_json(settings), user_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+    return settings
 
 
 def create_session(user_id: str) -> str:
@@ -300,6 +346,8 @@ def _project_from_row(row: sqlite3.Row) -> Dict[str, Any]:
         "characters": _loads(row["characters_json"], []),
         "storyboard": _loads(row["storyboard_json"], []),
         "quality_check": _loads(row["quality_check_json"], None),
+        "ai_model_settings": _loads(row["ai_model_settings_json"], None),
+        "generation_metadata": _loads(row["generation_metadata_json"], []),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -320,8 +368,9 @@ def create_project(
             INSERT INTO projects (
                 id, user_id, title, source_type, source_filename, original_text,
                 status, current_step, settings_json, analysis_json,
-                characters_json, storyboard_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                characters_json, storyboard_json, ai_model_settings_json,
+                generation_metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
@@ -335,6 +384,8 @@ def create_project(
                 _json(DEFAULT_SETTINGS),
                 None,
                 _json([]),
+                _json([]),
+                None,
                 _json([]),
                 now,
                 now,
@@ -421,6 +472,74 @@ def update_project(
             ),
         )
     return get_project(project_id, user_id)
+
+
+def get_project_ai_model_settings(
+    project_id: str, user_id: str
+) -> Optional[Dict[str, Any]]:
+    """Project固有のAIモデル上書きを返す。"""
+
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT ai_model_settings_json FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+    return _loads(row["ai_model_settings_json"], None) if row else None
+
+
+def update_project_ai_model_settings(
+    project_id: str, user_id: str, settings: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Project固有のAIモデル上書きを保存する。"""
+
+    with connection() as conn:
+        cursor = conn.execute(
+            "UPDATE projects SET ai_model_settings_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (_json(settings), utc_now(), project_id, user_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+    return settings
+
+
+def record_generation_metadata(
+    project_id: str, user_id: str, event: Dict[str, Any]
+) -> Optional[List[Dict[str, Any]]]:
+    """生成に使ったモデル情報をProjectへ追記する。秘密はeventへ渡さない。"""
+
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT generation_metadata_json FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not row:
+            return None
+        events = _loads(row["generation_metadata_json"], [])
+        if not isinstance(events, list):
+            events = []
+        clean = {
+            str(key): value
+            for key, value in event.items()
+            if str(key)
+            in {
+                "task",
+                "target_id",
+                "requested_model",
+                "actual_model",
+                "fallback",
+                "reasoning_effort",
+                "provider",
+                "created_at",
+            }
+        }
+        clean["id"] = str(uuid.uuid4())
+        events.append(clean)
+        events = events[-256:]
+        conn.execute(
+            "UPDATE projects SET generation_metadata_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (_json(events), utc_now(), project_id, user_id),
+        )
+    return events
 
 
 def create_generation_job(

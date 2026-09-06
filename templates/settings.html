@@ -29,6 +29,11 @@
         <div class="settings-row"><span>本文アップロード上限</span><strong>{{ runtime.max_upload_mb }}MB</strong></div>
         <p class="field-help">プロバイダの切り替えはサーバー環境変数で行います。開発時はdemoモードで全工程を確認できます。</p>
       </section>
+      <section class="surface-panel panel-padding ai-model-settings-panel" aria-labelledby="ai-model-heading">
+        <div class="settings-section-heading"><div><p class="eyebrow">AI MODELS</p><h2 id="ai-model-heading">AIモデル</h2></div><span class="settings-badge">サーバー側で検証</span></div>
+        <p class="field-help ai-model-intro">工程ごとに品質とコストのバランスを調整できます。APIキーはこの画面にもブラウザにも渡しません。</p>
+        <div id="ai-model-settings-root" aria-live="polite"><p class="field-help">モデル設定を読み込んでいます…</p></div>
+      </section>
       <section class="surface-panel panel-padding" aria-labelledby="appearance-heading">
         <h2 id="appearance-heading">表示</h2>
         <div class="settings-row"><span>テーマ</span><button class="secondary-button compact-button" type="button" data-theme-toggle aria-label="テーマを切り替える">◐ 表示テーマ</button></div>
@@ -37,4 +42,5 @@
     </div>
   </main>
 </div>
+<script id="ai-model-settings-data" type="application/json">{{ ai_model_settings|tojson }}</script>
 {% endblock %}

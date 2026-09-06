@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ALLOWED_STEPS = {"story", "knowledge", "analysis", "settings", "characters", "storyboard", "generate", "edit", "qa", "preview", "export"}
@@ -96,6 +96,22 @@ class SettingsPayload(BaseModel):
         if value not in ALLOWED_DIALOGUE_DENSITY:
             raise ValueError("dialogue_densityが不正です")
         return value
+
+
+class AIModelSettingsPayload(BaseModel):
+    """グローバルまたはProject固有のAIモデル設定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preset: Optional[str] = Field(default=None, max_length=40)
+    story_analysis_model: Optional[str] = Field(default=None, max_length=80)
+    adaptation_model: Optional[str] = Field(default=None, max_length=80)
+    character_model: Optional[str] = Field(default=None, max_length=80)
+    storyboard_model: Optional[str] = Field(default=None, max_length=80)
+    qa_model: Optional[str] = Field(default=None, max_length=80)
+    panel_prompt_model: Optional[str] = Field(default=None, max_length=80)
+    image_model: Optional[str] = Field(default=None, max_length=80)
+    reasoning_effort: Optional[str] = Field(default=None, max_length=20)
 
 
 class ProjectPatch(BaseModel):
@@ -368,6 +384,36 @@ def normalize_knowledge_refs(value: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+def normalize_generation_metadata(value: Any) -> Optional[Dict[str, Any]]:
+    """モデル生成履歴のうち、UIへ返してよい値だけを保持する。"""
+
+    if not isinstance(value, dict):
+        return None
+    allowed = {
+        "task",
+        "target_id",
+        "requested_model",
+        "actual_model",
+        "fallback",
+        "reasoning_effort",
+        "provider",
+        "created_at",
+    }
+    normalized: Dict[str, Any] = {}
+    for key in allowed:
+        if key not in value:
+            continue
+        item = value[key]
+        if isinstance(item, bool):
+            normalized[key] = item
+        elif item is not None:
+            normalized[key] = str(item)[:160]
+    if "requested_model" not in normalized or "actual_model" not in normalized:
+        return None
+    normalized["fallback"] = bool(value.get("fallback", False))
+    return normalized
+
+
 def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
     """外部AIのネームをページ・コマの編集可能な形へ正規化する。"""
 
@@ -407,6 +453,7 @@ def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
                 "revision": max(0, int(raw_panel.get("revision", 0))) if str(raw_panel.get("revision", 0)).isdigit() else 0,
                 "crop_mode": crop_mode,
                 "knowledge_refs": normalize_knowledge_refs(raw_panel.get("knowledge_refs", [])),
+                "generation_metadata": normalize_generation_metadata(raw_panel.get("generation_metadata")),
             }
             for field in list_fields:
                 source = raw_panel.get(field, [])

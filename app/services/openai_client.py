@@ -23,10 +23,14 @@ class OpenAIRequestError(RuntimeError):
         *,
         status_code: Optional[int] = None,
         retryable: bool = False,
+        error_code: Optional[str] = None,
+        error_type: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retryable = retryable
+        self.error_code = error_code
+        self.error_type = error_type
 
 
 def _retryable_status(status_code: int) -> bool:
@@ -43,6 +47,25 @@ def _status_message(status_code: int) -> str:
     if status_code >= 500:
         return "OpenAI APIで一時的な障害が発生しました"
     return "OpenAI APIリクエストに失敗しました"
+
+
+def _safe_error_fields(exc: urllib.error.HTTPError) -> tuple[Optional[str], Optional[str]]:
+    """エラー本文から分類に必要なコードだけを取り出す。本文は保持しない。"""
+
+    try:
+        raw = exc.read(16_384)
+        body = json.loads(raw.decode("utf-8"))
+        error = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(error, dict):
+            return None, None
+        code = error.get("code")
+        error_type = error.get("type")
+        return (
+            str(code)[:120] if isinstance(code, str) else None,
+            str(error_type)[:120] if isinstance(error_type, str) else None,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, AttributeError):
+        return None, None
 
 
 def request_bytes(
@@ -85,10 +108,13 @@ def request_bytes(
             if retryable and attempt < attempts - 1:
                 time.sleep(min(2.0, 0.4 * (2**attempt)))
                 continue
+            error_code, error_type = _safe_error_fields(exc)
             raise OpenAIRequestError(
                 _status_message(exc.code),
                 status_code=exc.code,
                 retryable=retryable,
+                error_code=error_code,
+                error_type=error_type,
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if attempt < attempts - 1:
@@ -106,7 +132,7 @@ def request_json(
     url: str,
     *,
     api_key: str,
-    payload: Mapping[str, Any],
+    payload: Optional[Mapping[str, Any]] = None,
     timeout: float = 90.0,
     max_retries: int = 1,
 ) -> Dict[str, Any]:

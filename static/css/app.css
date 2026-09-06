@@ -214,6 +214,36 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .settings-row:first-of-type { padding-top: 0; }
 .settings-row:last-of-type { border-bottom: 0; }
 .settings-row strong { color: var(--ink); font-family: monospace; font-size: 12px; font-weight: 500; }
+.settings-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.settings-section-heading h2 { margin-bottom: 0; }
+.settings-badge { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.ai-model-intro { margin-bottom: 20px; }
+.ai-model-form { display: grid; gap: 18px; }
+.ai-model-preset-row { display: grid; grid-template-columns: minmax(180px, .45fr) 1fr; align-items: end; gap: 18px; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+.ai-model-preset-help { padding-bottom: 10px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.ai-availability-note { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); padding: 11px 12px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.ai-availability-note strong { flex: 0 0 auto; color: var(--ink); font-weight: 700; }
+.availability-dot { width: 7px; height: 7px; flex: 0 0 7px; margin-top: 5px; border-radius: 50%; background: var(--muted); }
+.availability-available { color: var(--success); }
+.availability-dot.availability-available { background: var(--success); }
+.availability-unavailable { color: #a16b25; }
+.availability-dot.availability-unavailable { background: #c58b31; }
+.availability-temporarily_unavailable { color: var(--muted); }
+.availability-dot.availability-temporarily_unavailable { background: var(--muted); }
+.availability-not_checked { color: var(--muted); }
+.availability-dot.availability-not_checked { background: var(--muted); }
+.ai-advanced { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.ai-advanced summary { cursor: pointer; padding: 14px 0; color: var(--ink); font-size: 12px; font-weight: 700; }
+.ai-advanced summary::marker { color: var(--accent); }
+.ai-model-grid, .ai-model-bottom-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 3px 0 17px; }
+.ai-model-bottom-row { border-top: 1px solid var(--line); padding-top: 17px; }
+.ai-model-field { display: grid; min-width: 0; gap: 7px; }
+.ai-model-field > span { color: var(--ink); font-size: 11px; font-weight: 700; }
+.ai-model-field > span small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 400; line-height: 1.5; }
+.ai-model-field select { width: 100%; }
+.ai-model-field em { min-height: 15px; color: var(--muted); font-size: 9px; font-style: normal; }
+.ai-model-field .availability-state { font-weight: 600; }
+.generation-model-note { display: inline-flex; margin-top: 8px; border-radius: 99px; background: var(--accent-soft); padding: 5px 8px; color: var(--accent-deep); font-size: 9px; }
 .field-help { margin: 0; color: var(--muted); font-size: 11px; }
 .import-switch { display: inline-flex; width: fit-content; gap: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); padding: 3px; }
 .import-tab { min-height: 33px; border-radius: 999px; background: transparent; color: var(--muted); padding: 0 13px; font-size: 11px; }
@@ -525,6 +555,11 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
   .back-link { margin-bottom: 45px; }
   .new-project-heading { margin-bottom: 32px; }
   .settings-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .settings-section-heading { align-items: flex-start; }
+  .ai-model-preset-row, .ai-model-grid, .ai-model-bottom-row { grid-template-columns: 1fr; }
+  .ai-model-preset-help { padding-bottom: 0; }
+  .ai-availability-note { flex-wrap: wrap; }
+  .ai-availability-note span:last-child { flex-basis: calc(100% - 17px); }
   .form-actions { justify-content: stretch; }
   .form-actions > * { flex: 1; }
   .project-sidebar { padding: 13px 15px 12px; }

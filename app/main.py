@@ -28,6 +28,7 @@ from .config import BASE_DIR, ensure_data_dirs, get_settings
 from .schemas import (
     ExportRequest,
     GenerateRequest,
+    AIModelSettingsPayload,
     KnowledgeCreatePayload,
     KnowledgeMetadataPatch,
     ProjectKnowledgePatch,
@@ -50,6 +51,13 @@ from .services.knowledge import (
     quality_check as knowledge_quality_check,
     normalize_knowledge_text,
     retrieve_knowledge_context,
+)
+from .services.model_registry import (
+    DEFAULT_AI_MODEL_SETTINGS,
+    get_model_availability,
+    model_registry_view,
+    resolve_model_settings,
+    validate_model_settings,
 )
 
 
@@ -209,6 +217,36 @@ def require_project(project_id: str, user_id: str) -> Dict[str, Any]:
     return project
 
 
+def project_ai_model_settings(project: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    """既存の環境変数互換を保ちながら、Projectの実効モデルを解決する。"""
+
+    runtime = get_settings()
+    return resolve_model_settings(
+        db.get_user_ai_model_settings(user_id),
+        project.get("ai_model_settings"),
+        legacy_text_model=runtime.openai_text_model,
+        legacy_image_model=runtime.openai_image_model,
+    )
+
+
+def record_provider_generation(
+    project_id: str,
+    user_id: str,
+    provider: Any,
+    *,
+    target_id: Optional[str] = None,
+) -> None:
+    """Providerが残したモデルメタデータをProjectへ追記する。"""
+
+    metadata = getattr(provider, "last_generation_metadata", None)
+    if not isinstance(metadata, dict):
+        return
+    event = dict(metadata)
+    if target_id:
+        event["target_id"] = str(target_id)[:120]
+    db.record_generation_metadata(project_id, user_id, event)
+
+
 def all_panels(project: Dict[str, Any]) -> Iterable[Tuple[Dict[str, Any], Dict[str, Any]]]:
     for page in project.get("storyboard", []) or []:
         for panel in page.get("panels", []) or []:
@@ -346,7 +384,8 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     for key in ("description", "action", "expression", "background")
                 ),
             )
-            provider = get_ai_provider()
+            model_settings = project_ai_model_settings(latest, user_id)
+            provider = get_ai_provider(model_settings)
             prompt_source = latest_panel.get("prompt_source", "generated")
             if getattr(provider, "uses_external_api", False) and prompt_source != "user":
                 base_prompt = provider.panel_prompt(
@@ -355,6 +394,7 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     latest.get("settings") or {},
                     knowledge_context,
                 )
+                record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
             else:
                 base_prompt = str(latest_panel.get("generation_prompt", ""))
                 if not base_prompt.strip():
@@ -364,9 +404,17 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                         latest.get("settings") or {},
                         knowledge_context,
                     )
+                    record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
             latest_panel["generation_prompt"] = append_knowledge_prompt(base_prompt, knowledge_context)
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
-            file_path = save_panel_artwork(latest["id"], latest_panel, latest["settings"])
+            file_path = save_panel_artwork(
+                latest["id"], latest_panel, latest["settings"], model_settings
+            )
+            image_metadata = latest_panel.get("generation_metadata")
+            if isinstance(image_metadata, dict):
+                image_event = dict(image_metadata)
+                image_event["target_id"] = str(latest_panel["id"])
+                db.record_generation_metadata(project_id, user_id, image_event)
             latest_panel["image_url"] = asset_url(latest["id"], file_path)
             latest_panel["generation_status"] = "completed"
             latest_panel["generation_error"] = None
@@ -528,10 +576,25 @@ async def settings_page(request: Request):
         "image_provider": runtime.image_provider,
         "max_upload_mb": runtime.max_upload_bytes // (1024 * 1024),
     }
+    global_model_settings = db.get_user_ai_model_settings(user["id"])
+    effective_model_settings = resolve_model_settings(
+        global_model_settings,
+        legacy_text_model=runtime.openai_text_model,
+        legacy_image_model=runtime.openai_image_model,
+    )
     return templates.TemplateResponse(
         request,
         "settings.html",
-        {"request": request, "user": dict(user), "runtime": safe_runtime},
+        {
+            "request": request,
+            "user": dict(user),
+            "runtime": safe_runtime,
+            "ai_model_settings": {
+                "saved": global_model_settings,
+                "effective": effective_model_settings,
+                "registry": model_registry_view(),
+            },
+        },
     )
 
 
@@ -609,6 +672,82 @@ async def health():
         "ai_provider": get_ai_provider().provider_name,
         "image_provider": active_image_provider,
     }
+
+
+def ai_model_settings_response(user_id: str, project: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """AIモデル設定を秘密情報なしで返す。"""
+
+    runtime = get_settings()
+    global_settings = db.get_user_ai_model_settings(user_id)
+    project_settings = project.get("ai_model_settings") if project else None
+    effective = resolve_model_settings(
+        global_settings,
+        project_settings,
+        legacy_text_model=runtime.openai_text_model,
+        legacy_image_model=runtime.openai_image_model,
+    )
+    return {
+        "settings": {
+            "global": global_settings,
+            "project": project_settings,
+            "effective": effective,
+        },
+        "registry": model_registry_view(),
+        "availability": get_model_availability(),
+    }
+
+
+@app.get("/api/settings/ai-models")
+async def api_get_ai_model_settings(user=Depends(current_user)):
+    return ai_model_settings_response(user["id"])
+
+
+@app.put("/api/settings/ai-models")
+async def api_update_ai_model_settings(
+    payload: AIModelSettingsPayload, user=Depends(current_user)
+):
+    submitted = payload.model_dump(exclude_unset=True)
+    try:
+        updates = validate_model_settings(submitted, partial=True)
+        current = db.get_user_ai_model_settings(user["id"]) or {}
+        try:
+            current = validate_model_settings(current, partial=True)
+        except ValueError:
+            current = {}
+        saved = validate_model_settings({**DEFAULT_AI_MODEL_SETTINGS, **current, **updates})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.update_user_ai_model_settings(user["id"], saved)
+    return {"saved": saved, **ai_model_settings_response(user["id"])}
+
+
+@app.get("/api/projects/{project_id}/ai-model-settings")
+async def api_get_project_ai_model_settings(project_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    return ai_model_settings_response(user["id"], project)
+
+
+@app.put("/api/projects/{project_id}/ai-model-settings")
+async def api_update_project_ai_model_settings(
+    project_id: str,
+    payload: AIModelSettingsPayload,
+    user=Depends(current_user),
+):
+    project = require_project(project_id, user["id"])
+    submitted = payload.model_dump(exclude_unset=True)
+    try:
+        updates = validate_model_settings(submitted, partial=True)
+        current = project.get("ai_model_settings") or {}
+        try:
+            current = validate_model_settings(current, partial=True)
+        except ValueError:
+            current = {}
+        saved = validate_model_settings({**current, **updates}, partial=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.update_project_ai_model_settings(project_id, user["id"], saved)
+    refreshed = require_project(project_id, user["id"])
+    return {"saved": saved, **ai_model_settings_response(user["id"], refreshed)}
 
 
 @app.get("/api/knowledge")
@@ -837,12 +976,13 @@ async def api_quality_check(project_id: str, user=Depends(current_user)):
         project_id, user["id"], "quality_check", project.get("original_text", "")
     )
     result = knowledge_quality_check(project, context)
-    provider = get_ai_provider()
+    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     if getattr(provider, "uses_external_api", False):
         try:
             review = provider.quality_check(project, context)
         except AIProviderError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        record_provider_generation(project_id, user["id"], provider)
         result = merge_ai_quality_review(result, review, context)
     saved = db.save_quality_check(project_id, user["id"], result)
     return {
@@ -901,7 +1041,7 @@ async def api_generate_analysis(project_id: str, user=Depends(current_user)):
     knowledge_context = retrieve_knowledge_context(
         project_id, user["id"], "story_analysis", project["original_text"]
     )
-    provider = get_ai_provider()
+    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     try:
         analysis = provider.analyze(
             project["original_text"], project["title"], knowledge_context
@@ -910,6 +1050,7 @@ async def api_generate_analysis(project_id: str, user=Depends(current_user)):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     analysis = normalize_analysis(analysis)
     analysis["knowledge_refs"] = knowledge_context.get("references", [])
+    record_provider_generation(project_id, user["id"], provider)
     updated = db.update_project(
         project_id,
         user["id"],
@@ -937,7 +1078,7 @@ async def api_generate_characters(project_id: str, user=Depends(current_user)):
         "character",
         str(project["analysis"]),
     )
-    provider = get_ai_provider()
+    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     try:
         characters = provider.characters(
             project["original_text"], project["analysis"], knowledge_context
@@ -945,6 +1086,7 @@ async def api_generate_characters(project_id: str, user=Depends(current_user)):
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     characters = normalize_characters(characters)
+    record_provider_generation(project_id, user["id"], provider)
     for character in characters:
         character["knowledge_refs"] = knowledge_context.get("references", [])
     updated = db.update_project(
@@ -967,7 +1109,7 @@ async def api_generate_storyboard(project_id: str, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
     if not project.get("analysis"):
         raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
-    provider = get_ai_provider()
+    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     knowledge_context = retrieve_knowledge_context(
         project_id,
         user["id"],
@@ -985,9 +1127,12 @@ async def api_generate_storyboard(project_id: str, user=Depends(current_user)):
             characters,
             knowledge_context,
         )
+        if not project.get("characters"):
+            record_provider_generation(project_id, user["id"], provider)
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     storyboard = normalize_storyboard(storyboard)
+    record_provider_generation(project_id, user["id"], provider)
     for page in storyboard:
         for panel in page.get("panels", []):
             panel["knowledge_refs"] = knowledge_context.get("references", [])
@@ -1087,6 +1232,7 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
                 "error": panel.get("generation_error"),
                 "revision": panel.get("revision", 0),
                 "image_url": panel.get("image_url"),
+                "generation_metadata": panel.get("generation_metadata"),
             }
         )
     return {"project_status": project.get("status"), "panels": panels, "jobs": db.list_generation_jobs(project_id)}

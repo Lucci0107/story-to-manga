@@ -58,6 +58,7 @@
   const newProjectForm = document.getElementById("new-project-form");
   if (newProjectForm) initNewProjectForm(newProjectForm);
   initKnowledgeScreens();
+  initAIModelSettings();
 
   document.querySelectorAll("[data-delete-project]").forEach(function (button) {
     button.addEventListener("click", async function () {
@@ -256,6 +257,112 @@
     });
   }
 
+  function initAIModelSettings() {
+    const rootNode = document.getElementById("ai-model-settings-root");
+    const dataNode = document.getElementById("ai-model-settings-data");
+    if (!rootNode || !dataNode) return;
+    let state = parseJson(dataNode.textContent || "{}", {});
+    const taskOrder = ["story_analysis", "adaptation", "character", "storyboard", "qa", "panel_prompt"];
+    const taskKeys = taskOrder.map(function (task) { return task + "_model"; });
+    const defaultValues = {
+      preset: "auto",
+      story_analysis_model: "auto",
+      adaptation_model: "auto",
+      character_model: "auto",
+      storyboard_model: "auto",
+      qa_model: "auto",
+      panel_prompt_model: "auto",
+      image_model: "gpt-image-2",
+      reasoning_effort: "auto"
+    };
+
+    function values() {
+      return { ...defaultValues, ...(state.settings?.global || {}) };
+    }
+
+    function statusInfo(modelId) {
+      const item = state.availability?.[modelId] || { status: "not_checked" };
+      const labels = { available: "利用可能", unavailable: "このアカウントでは未利用", not_checked: "未確認", temporarily_unavailable: "一時的に確認できません" };
+      return { status: item.status || "not_checked", label: labels[item.status] || labels.not_checked };
+    }
+
+    function modelLabel(modelId, fallback) {
+      const models = [...(state.registry?.text_models || []), ...(state.registry?.image_models || [])];
+      const model = models.find(function (item) { return item.id === modelId; });
+      return model?.display_name || fallback || modelId;
+    }
+
+    function render() {
+      const current = values();
+      const registry = state.registry || { text_models: [], image_models: [], tasks: [], presets: [], reasoning_levels: [] };
+      const textModels = registry.text_models || [];
+      const imageModels = registry.image_models || [];
+      const presetOptions = (registry.presets || []).map(function (item) {
+        return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current.preset ? " selected" : "") + '>' + escapeHtml(item.label) + '</option>';
+      }).join("");
+      const modelSelect = function (key, label, help) {
+        const options = '<option value="auto"' + (current[key] === "auto" ? " selected" : "") + '>Auto（プリセット）</option>' + textModels.map(function (item) {
+          return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current[key] ? " selected" : "") + '>' + escapeHtml(item.display_name) + '</option>';
+        }).join("");
+        const selected = current[key] === "auto" ? "Auto（プリセット）" : modelLabel(current[key], current[key]);
+        const availability = current[key] === "gpt-6-astra" || (current[key] === "auto" && ["highest_quality"].includes(current.preset)) ? statusInfo("gpt-6-astra") : null;
+        return '<label class="ai-model-field"><span>' + escapeHtml(label) + '<small>' + escapeHtml(help || "") + '</small></span><select aria-label="' + escapeAttr(label) + 'のモデル" data-ai-model-field="' + key + '">' + options + '</select>' + (availability ? '<em class="availability-state availability-' + escapeAttr(availability.status) + '">Astra: ' + escapeHtml(availability.label) + '</em>' : '<em class="ai-model-effective">実効: ' + escapeHtml(selected) + '</em>') + '</label>';
+      };
+      const imageOptions = imageModels.map(function (item) {
+        return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current.image_model ? " selected" : "") + '>' + escapeHtml(item.display_name) + '</option>';
+      }).join("");
+      const reasoningOptions = (registry.reasoning_levels || []).map(function (item) {
+        return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current.reasoning_effort ? " selected" : "") + '>' + escapeHtml(item.label) + '</option>';
+      }).join("");
+      const astra = statusInfo("gpt-6-astra");
+      rootNode.innerHTML = '<form class="ai-model-form" id="ai-model-form"><div class="ai-model-preset-row"><label class="editor-label"><span>プリセット</span><select aria-label="プリセット" data-ai-preset>' + presetOptions + '</select></label><div class="ai-model-preset-help">' + escapeHtml((registry.presets || []).find(function (item) { return item.id === current.preset; })?.description || "工程ごとにモデルを選択します。") + '</div></div><div class="ai-availability-note"><span class="availability-dot availability-' + escapeAttr(astra.status) + '"></span><strong>GPT-6 Astra</strong><span>' + escapeHtml(astra.label) + '。アカウントの権限により、利用時はGPT-5.6 Solへ自動フォールバックします。</span></div><details class="ai-advanced"><summary>工程ごとの詳細設定</summary><div class="ai-model-grid">' + modelSelect("story_analysis_model", "Story Analysis", "物語の構造化解析") + modelSelect("adaptation_model", "Manga Adaptation", "漫画用脚本への変換") + modelSelect("character_model", "Character Bible", "人物の一貫性設定") + modelSelect("storyboard_model", "Storyboard", "ページ・コマ設計") + modelSelect("qa_model", "Knowledge-aware QA", "原作とKnowledgeの確認") + modelSelect("panel_prompt_model", "Panel Prompt", "コマ画像用Prompt") + '</div><div class="ai-model-bottom-row"><label class="ai-model-field"><span>Image Generation<small>画像生成はテキストモデルと分離</small></span><select aria-label="Image Generationのモデル" data-ai-model-field="image_model">' + imageOptions + '</select><em class="ai-model-effective">実効: GPT-Image-2</em></label><label class="ai-model-field"><span>Reasoning<small>対応モデルでのみ送信</small></span><select aria-label="推論強度" data-ai-model-field="reasoning_effort">' + reasoningOptions + '</select></label></div></details><div class="save-row"><span class="field-help" data-ai-model-status>保存済みの設定は次回の制作にも適用されます。</span><button type="submit" class="primary-button compact-button">AIモデル設定を保存</button></div></form>';
+      const form = rootNode.querySelector("#ai-model-form");
+      form?.addEventListener("change", function (event) {
+        if (event.target.matches("[data-ai-preset]") && event.target.value !== "auto") {
+          form.querySelectorAll("[data-ai-model-field]").forEach(function (field) {
+            if (field.dataset.aiModelField.endsWith("_model") && field.dataset.aiModelField !== "image_model") field.value = "auto";
+          });
+        }
+      });
+      form?.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        const button = form.querySelector("button[type=submit]");
+        const status = form.querySelector("[data-ai-model-status]");
+        if (!button || button.disabled) return;
+        const payload = { preset: form.querySelector("[data-ai-preset]")?.value || "auto" };
+        form.querySelectorAll("[data-ai-model-field]").forEach(function (field) { payload[field.dataset.aiModelField] = field.value; });
+        button.disabled = true;
+        button.textContent = "保存中…";
+        if (status) status.textContent = "保存しています…";
+        try {
+          const response = await fetch("/api/settings/ai-models", { method: "PUT", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+          const data = await response.json().catch(function () { return {}; });
+          if (!response.ok) throw new Error(data.detail || "AIモデル設定を保存できませんでした");
+          state = data;
+          showToast("AIモデル設定を保存しました");
+          render();
+        } catch (error) {
+          if (status) status.textContent = error.message || "保存に失敗しました";
+          showToast(status?.textContent || "保存に失敗しました", "error");
+          button.disabled = false;
+          button.textContent = "AIモデル設定を保存";
+        }
+      });
+    }
+
+    render();
+    fetch("/api/settings/ai-models", { headers: { Accept: "application/json" } }).then(function (response) {
+      if (!response.ok) throw new Error("モデルの利用状況を確認できませんでした");
+      return response.json();
+    }).then(function (data) {
+      state = data;
+      render();
+    }).catch(function () {
+      // 可用性確認に失敗しても、保存済み設定の編集は継続できる。
+      render();
+    });
+  }
+
   function initWorkspace(initial) {
     let state = initial;
     let activeStep = state.current_step || "story";
@@ -382,7 +489,9 @@
     }
 
     function heading(title, description, actions) {
-      return '<div class="workspace-heading"><div><p class="eyebrow">' + escapeHtml(stepLabels[activeStep] || "WORKSPACE") + '</p><h2>' + escapeHtml(title) + '</h2><p>' + escapeHtml(description) + '</p></div>' + (actions ? '<div class="workspace-heading-actions">' + actions + '</div>' : "") + '</div>';
+      const event = [...(state.generation_metadata || [])].reverse().find(function (item) { return item && item.actual_model && ["analysis", "characters", "storyboard", "qa"].some(function (task) { return String(item.task || "").includes(task); }); });
+      const modelNote = event ? '<span class="generation-model-note">実行モデル: ' + escapeHtml(event.actual_model) + (event.fallback ? '（AstraからSolへフォールバック）' : '') + '</span>' : '';
+      return '<div class="workspace-heading"><div><p class="eyebrow">' + escapeHtml(stepLabels[activeStep] || "WORKSPACE") + '</p><h2>' + escapeHtml(title) + '</h2><p>' + escapeHtml(description) + '</p>' + modelNote + '</div>' + (actions ? '<div class="workspace-heading-actions">' + actions + '</div>' : "") + '</div>';
     }
 
     function nextButton(step, label) {
@@ -656,7 +765,8 @@
         const action = status === "failed" ? '<button type="button" class="text-button" data-retry-panel="' + escapeAttr(panel.id) + '">再試行</button>' : status === "completed" ? '<button type="button" class="text-button" data-regenerate-panel="' + escapeAttr(panel.id) + '">再生成</button>' : "";
         const thumb = panel.image_url ? '<img src="' + escapeAttr(panel.image_url) + '" alt="">' : '<span>' + escapeHtml(String((item.page.page_number || 1) + " / " + ((item.page.panels || []).indexOf(panel) + 1))) + '</span>';
         const referenceLabel = (panel.knowledge_refs || []).map(function (ref) { return (ref.title || "Knowledge") + " v" + (ref.version_number || "?"); }).join(", ");
-        const metadata = 'ページ ' + escapeHtml(item.page.page_number) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + ' / Revision ' + escapeHtml(panel.revision || 0) + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "") + (panel.generation_error ? " / " + escapeHtml(panel.generation_error) : "");
+        const generationModel = panel.generation_metadata?.actual_model ? " / 実行モデル: " + escapeHtml(panel.generation_metadata.actual_model) + (panel.generation_metadata.fallback ? "（Astraからフォールバック）" : "") : "";
+        const metadata = 'ページ ' + escapeHtml(item.page.page_number) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + ' / Revision ' + escapeHtml(panel.revision || 0) + generationModel + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "") + (panel.generation_error ? " / " + escapeHtml(panel.generation_error) : "");
         return '<div class="generation-panel-row"><div class="generation-thumb">' + thumb + '</div><div><strong>' + escapeHtml(panel.description || "コマの説明") + '</strong><small>' + metadata + '</small></div><span class="panel-status panel-status-' + escapeAttr(status) + '">' + escapeHtml(panelStatusLabels[status] || status) + '</span>' + action + '</div>';
       }).join("");
     }
@@ -694,7 +804,7 @@
           await new Promise(function (resolve) { window.setTimeout(resolve, 500); });
           const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
           const byId = Object.fromEntries(data.panels.map(function (panel) { return [panel.id, panel]; }));
-          (state.storyboard || []).forEach(function (page) { (page.panels || []).forEach(function (panel) { const update = byId[panel.id]; if (update) { panel.generation_status = update.status; panel.generation_error = update.error; panel.image_url = update.image_url; panel.revision = update.revision; } }); });
+          (state.storyboard || []).forEach(function (page) { (page.panels || []).forEach(function (panel) { const update = byId[panel.id]; if (update) { panel.generation_status = update.status; panel.generation_error = update.error; panel.image_url = update.image_url; panel.revision = update.revision; panel.generation_metadata = update.generation_metadata; } }); });
           const active = data.panels.some(function (panel) { return panel.status === "queued" || panel.status === "processing"; });
           if (!active) { await fetchProject(false); render(); break; }
           if (activeStep === "generate") render();

@@ -14,14 +14,33 @@ from typing import Any, Callable, Dict, List, Optional
 from ..config import get_settings
 from ..schemas import normalize_analysis, normalize_characters, normalize_storyboard
 from .openai_client import OpenAIRequestError, parse_json_text, request_json, response_output_text
+from .model_registry import (
+    AUTO_REASONING,
+    capability,
+    model_for_task,
+    new_generation_metadata,
+    reasoning_for_model,
+    resolve_model_settings,
+)
 
 
 class AIProviderError(RuntimeError):
     """AI処理に失敗した。"""
 
-    def __init__(self, message: str, *, retryable: bool = True) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        model_access: bool = False,
+        requested_model: Optional[str] = None,
+        actual_model: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.model_access = model_access
+        self.requested_model = requested_model
+        self.actual_model = actual_model
 
 
 # Responses APIのStructured Outputsへ渡すスキーマ。全オブジェクトで
@@ -432,15 +451,45 @@ def _knowledge_reference(context: Optional[Dict[str, Any]]) -> str:
     )
 
 
+def _is_model_access_error(error: OpenAIRequestError) -> bool:
+    """Astraの利用不可だけを判定し、一般的な入力エラーは再試行しない。"""
+
+    code = str(getattr(error, "error_code", "") or "").lower()
+    if code in {
+        "model_not_found",
+        "model_not_allowed",
+        "model_access_denied",
+        "model_not_available",
+        "invalid_model",
+    }:
+        return True
+    return getattr(error, "status_code", None) in {403, 404}
+
+
 class DemoAIProvider:
     """APIキーなしで全工程を動かすデモプロバイダ。"""
 
     provider_name = "demo"
     uses_external_api = False
 
+    def __init__(self, model_settings: Optional[Dict[str, Any]] = None) -> None:
+        self.model_settings = model_settings or {}
+        self.last_generation_metadata: Optional[Dict[str, Any]] = None
+
+    def _record_demo(self, task: str) -> None:
+        """デモ処理も実行履歴の形をそろえる（外部APIは呼ばない）。"""
+
+        self.last_generation_metadata = new_generation_metadata(
+            task=task,
+            requested_model="demo",
+            actual_model="demo",
+            provider="demo",
+        )
+
     def analyze(
         self, text: str, title: str, knowledge_context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        self._record_demo("story_analysis")
         return demo_analysis(text, title)
 
     def characters(
@@ -449,6 +498,7 @@ class DemoAIProvider:
         analysis: Dict[str, Any],
         knowledge_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        self._record_demo("character")
         return demo_characters(analysis)
 
     def storyboard(
@@ -459,6 +509,7 @@ class DemoAIProvider:
         characters: List[Dict[str, Any]],
         knowledge_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        self._record_demo("storyboard")
         return demo_storyboard(text, analysis, settings, characters)
 
     def panel_prompt(
@@ -470,6 +521,7 @@ class DemoAIProvider:
     ) -> str:
         """デモ時も実AI時と同じPrompt生成境界を利用する。"""
 
+        self._record_demo("panel_prompt")
         return compose_panel_prompt(panel, characters, settings)
 
 
@@ -479,6 +531,24 @@ class OpenAIProvider(DemoAIProvider):
     provider_name = "openai"
     uses_external_api = True
 
+    def __init__(self, model_settings: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(model_settings)
+        runtime = get_settings()
+        configured = model_settings or {
+            "preset": "auto",
+            **{
+                f"{task}_model": runtime.openai_text_model
+                for task in ("story_analysis", "adaptation", "character", "storyboard", "qa", "panel_prompt")
+            },
+            "image_model": runtime.openai_image_model,
+            "reasoning_effort": AUTO_REASONING,
+        }
+        self.model_settings = resolve_model_settings(
+            configured,
+            legacy_text_model=runtime.openai_text_model,
+            legacy_image_model=runtime.openai_image_model,
+        )
+
     def _json_call(
         self,
         system: str,
@@ -486,50 +556,78 @@ class OpenAIProvider(DemoAIProvider):
         *,
         schema_name: str,
         schema: Dict[str, Any],
+        task_key: str,
     ) -> Dict[str, Any]:
         """Responses APIへ1回接続し、JSONオブジェクトを抽出する。"""
 
         settings = get_settings()
-        text_model = getattr(settings, "openai_text_model", None) or getattr(
-            settings, "openai_model", "gpt-5.6-luna"
-        )
+        requested_model = model_for_task(self.model_settings, task_key)
         responses_url = getattr(settings, "openai_responses_url", None) or getattr(
             settings, "openai_base_url", "https://api.openai.com/v1/responses"
         )
-        payload: Dict[str, Any] = {
-            "model": text_model,
-            "instructions": system,
-            "input": user,
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
-            "max_output_tokens": getattr(settings, "openai_max_output_tokens", 12_000),
-            "store": False,
-        }
-        try:
-            body = request_json(
-                responses_url,
-                api_key=settings.openai_api_key,
-                payload=payload,
-                timeout=getattr(settings, "openai_timeout_seconds", 90.0),
-                max_retries=getattr(settings, "openai_max_retries", 1),
+        fallback_model = capability(requested_model).fallback_model if capability(requested_model) else None
+        candidates = [requested_model]
+        if requested_model == "gpt-6-astra" and fallback_model:
+            candidates.append(fallback_model)
+        for candidate_index, actual_model in enumerate(candidates):
+            reasoning = reasoning_for_model(self.model_settings, actual_model)
+            payload: Dict[str, Any] = {
+                "model": actual_model,
+                "instructions": system,
+                "input": user,
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    }
+                },
+                "max_output_tokens": getattr(settings, "openai_max_output_tokens", 12_000),
+                "store": False,
+            }
+            if reasoning != AUTO_REASONING:
+                payload["reasoning"] = {"effort": reasoning}
+            try:
+                body = request_json(
+                    responses_url,
+                    api_key=settings.openai_api_key,
+                    payload=payload,
+                    timeout=getattr(settings, "openai_timeout_seconds", 90.0),
+                    max_retries=getattr(settings, "openai_max_retries", 1),
+                )
+            except OpenAIRequestError as exc:
+                is_access_error = (
+                    requested_model == "gpt-6-astra"
+                    and candidate_index == 0
+                    and _is_model_access_error(exc)
+                )
+                if is_access_error and len(candidates) > 1:
+                    continue
+                raise AIProviderError(
+                    str(exc),
+                    retryable=False,
+                    model_access=is_access_error,
+                    requested_model=requested_model,
+                    actual_model=actual_model if candidate_index else None,
+                ) from exc
+            content = response_output_text(body)
+            if not content:
+                raise AIProviderError("AIからテキスト出力を受け取れませんでした")
+            try:
+                parsed = parse_json_text(content)
+            except OpenAIRequestError as exc:
+                # モデルの形式不備だけは、同じコスト上限内で1回だけ修復要求する。
+                raise AIProviderError(str(exc), retryable=True) from exc
+            self.last_generation_metadata = new_generation_metadata(
+                task=task_key,
+                requested_model=requested_model,
+                actual_model=actual_model,
+                fallback=actual_model != requested_model,
+                reasoning_effort=reasoning,
             )
-        except OpenAIRequestError as exc:
-            # HTTP/認証/接続エラーは共通クライアントの再試行だけに限定する。
-            raise AIProviderError(str(exc), retryable=False) from exc
-        content = response_output_text(body)
-        if not content:
-            raise AIProviderError("AIからテキスト出力を受け取れませんでした")
-        try:
-            return parse_json_text(content)
-        except OpenAIRequestError as exc:
-            # モデルの形式不備だけは、同じコスト上限内で1回だけ修復要求する。
-            raise AIProviderError(str(exc), retryable=True) from exc
+            return parsed
+        raise AIProviderError("AIモデルを利用できませんでした", retryable=False)
 
     def _validated_call(
         self,
@@ -538,6 +636,7 @@ class OpenAIProvider(DemoAIProvider):
         *,
         schema_name: str,
         schema: Dict[str, Any],
+        task_key: str,
         normalizer: Callable[[Dict[str, Any]], Any],
         validator: Callable[[Any], bool],
     ) -> Any:
@@ -552,6 +651,7 @@ class OpenAIProvider(DemoAIProvider):
                     retry_user,
                     schema_name=schema_name,
                     schema=schema,
+                    task_key=task_key,
                 )
                 normalized = normalizer(raw)
                 if not validator(normalized):
@@ -598,6 +698,7 @@ class OpenAIProvider(DemoAIProvider):
             user,
             schema_name="story_analysis",
             schema=ANALYSIS_SCHEMA,
+            task_key="story_analysis",
             normalizer=normalize_analysis,
             validator=lambda value: isinstance(value, dict)
             and bool(value.get("title"))
@@ -624,6 +725,7 @@ class OpenAIProvider(DemoAIProvider):
             user,
             schema_name="character_bible",
             schema=CHARACTER_SCHEMA,
+            task_key="character",
             normalizer=lambda value: normalize_characters(value.get("characters")),
             validator=lambda value: isinstance(value, list)
             and bool(value)
@@ -659,6 +761,7 @@ class OpenAIProvider(DemoAIProvider):
             user,
             schema_name="manga_storyboard",
             schema=STORYBOARD_SCHEMA,
+            task_key="storyboard",
             normalizer=lambda value: compose_prompts(
                 normalize_storyboard(value.get("pages")), characters, settings
             ),
@@ -697,6 +800,7 @@ class OpenAIProvider(DemoAIProvider):
             user,
             schema_name="quality_review",
             schema=QUALITY_SCHEMA,
+            task_key="qa",
             normalizer=normalize_quality_review,
             validator=lambda value: isinstance(value, dict) and bool(value.get("summary")),
         )
@@ -746,6 +850,7 @@ class OpenAIProvider(DemoAIProvider):
             user,
             schema_name="panel_prompt",
             schema=PANEL_PROMPT_SCHEMA,
+            task_key="panel_prompt",
             normalizer=lambda value: str(value.get("prompt", "")).strip(),
             validator=lambda value: isinstance(value, str) and len(value) >= 20,
         )
@@ -787,8 +892,8 @@ def normalize_quality_review(value: Any) -> Dict[str, Any]:
     }
 
 
-def get_ai_provider() -> DemoAIProvider:
+def get_ai_provider(model_settings: Optional[Dict[str, Any]] = None) -> DemoAIProvider:
     settings = get_settings()
     if settings.ai_provider == "openai" and settings.openai_api_key:
-        return OpenAIProvider()
-    return DemoAIProvider()
+        return OpenAIProvider(model_settings)
+    return DemoAIProvider(model_settings)

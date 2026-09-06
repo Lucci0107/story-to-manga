@@ -14,6 +14,8 @@ services:
         value: openai
       - key: OPENAI_RESPONSES_URL
         value: https://api.openai.com/v1/responses
+      - key: OPENAI_MODELS_URL
+        value: https://api.openai.com/v1/models
       - key: OPENAI_IMAGE_URL
         value: https://api.openai.com/v1/images/generations
       - key: OPENAI_TEXT_MODEL

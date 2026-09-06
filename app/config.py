@@ -67,6 +67,7 @@ class Settings:
     openai_api_key: str
     openai_responses_url: str
     openai_base_url: str
+    openai_models_url: str
     openai_image_url: str
     openai_text_model: str
     openai_model: str
@@ -112,6 +113,9 @@ def get_settings() -> Settings:
         openai_base_url=os.getenv(
             "OPENAI_BASE_URL",
             os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses"),
+        ),
+        openai_models_url=os.getenv(
+            "OPENAI_MODELS_URL", "https://api.openai.com/v1/models"
         ),
         openai_image_url=os.getenv(
             "OPENAI_IMAGE_URL", "https://api.openai.com/v1/images/generations"

@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続と最小E2Eスモークを確認できるMVPです。ローカルGitは`main`で初期化済みですが、外部remoteは未接続です。本番デプロイは認証待ちです。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。ローカルGitは`main`で初期化済みですが、外部remoteは未接続です。本番デプロイは認証待ちです。
 
 ```text
 本文入力 / ファイル抽出
@@ -35,6 +35,9 @@
 - コマ単位の生成Job、状態表示、再試行、重複リクエスト抑止
 - デモPNG画像生成と、OpenAI画像APIへのサーバー側接続境界
 - OpenAI Responses APIのStructured OutputsによるStory Analysis、Character Bible、Storyboard、Knowledge-aware QA、パネルPrompt生成
+- OpenAIモデル能力レジストリ、Auto / Highest Quality / Balanced / Economyプリセット、工程別モデル選択、Global / Project overrideのサーバー側解決
+- GPT-6 Astraのモデル一覧APIによる可用性表示（5分キャッシュ）、アクセス不可時のGPT-5.6 Solへの限定フォールバック、requested/actual/fallback/reasoningメタデータ保存
+- GPT-6 Astra、GPT-5.6 Sol/Terra/LunaのResponses API選択と、GPT-Image-2の画像専用設定・allowlist分離
 - OpenAI Images API（`gpt-image-2`）のbase64/署名URL画像保存、画像形式検証、タイムアウト、限定再試行
 - AI出力のJSON Schema要求・サーバー側正規化・不正形式の1回限定修復要求
 - `.env`自動読込、`OPENAI_TEXT_MODEL` / `OPENAI_IMAGE_MODEL` / タイムアウト / 再試行回数の中央設定
@@ -51,7 +54,7 @@
 
 ## 検証済み
 
-- `pytest`: 26 passed（既存20 + OpenAI境界6）
+- `pytest`: 33 passed（既存26 + AIモデル設定7）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
 - `pip check`
@@ -62,6 +65,9 @@
 - ブラウザconsoleのerror/warningなし
 - 実ブラウザでデモモードのコマ生成、個別再生成、リロード後の画像保持を再確認
 - 隔離SQLite環境で実AIスモークを確認：`/api/health`のOpenAI切替、Knowledge 1件の参照、Analysis、Character Bible、Storyboard、Knowledge-aware QA、1ページ5コマの生成、1コマのOpenAI画像生成、画像GET、Project再読込後の`completed`/`revision 1`/画像保持
+- AIモデル設定画面でプリセット変更、詳細設定展開、工程別選択、保存・再読み込み、Astra可用性表示、390px/1440px表示、コンソール警告なしを確認
+- OpenAIモデル一覧APIを低コストに1回確認し、GPT-6 Astraは対象組織で未提供、GPT-5.6 Sol/Terra/Lunaは利用可能と確認
+- 実AIの最小Story AnalysisをAstra指定で1回実行し、AstraのアクセスエラーからGPT-5.6 Solへフォールバック、解析結果保存、requested/actual/fallback/reasoningメタデータ、リロード後の実行モデル表示を確認（画像生成は追加実行なし）
 
 ## In Progress
 
@@ -81,7 +87,7 @@
 - GitHub repository作成/remote接続、Renderログイン/OAuth、実AI用secret入力は本人操作が必要です。
 - `gh auth status`ではGitHubアカウントの保存済みTokenが無効と報告されています。再認証後にremote作成またはRender連携へ進めます。
 - Renderダッシュボードはログイン画面で、Render CLI/専用Connectorも利用できません。in-app Browserでの自動公開はここで停止しています。
-- ローカル`.env`のOpenAIキーは設定済みで、実AIスモークは成功しました。本番ではRender側のSecretへ同じ用途のキーを登録する必要があります。
+- ローカル`.env`のOpenAIキーは設定済みで、実AIスモークは成功しました。Astraは現在の組織では未提供のため、実際の分析はGPT-5.6 Solへ安全にフォールバックしました。本番ではRender側のSecretへ同じ用途のキーを登録する必要があります。
 
 ## 外部接続待ち
 

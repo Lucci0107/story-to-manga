@@ -18,6 +18,7 @@ from PIL import Image, ImageColor, ImageDraw
 
 from ..config import get_settings
 from .openai_client import OpenAIRequestError, request_bytes, request_json
+from .model_registry import is_allowed_image_model, model_for_task, new_generation_metadata
 
 
 class ArtworkGenerationError(RuntimeError):
@@ -121,7 +122,12 @@ def render_panel_image(panel: Dict[str, Any], settings: Dict[str, Any]) -> Image
     return image
 
 
-def save_panel_artwork(project_id: str, panel: Dict[str, Any], settings: Dict[str, Any]) -> str:
+def save_panel_artwork(
+    project_id: str,
+    panel: Dict[str, Any],
+    settings: Dict[str, Any],
+    model_settings: Dict[str, Any] | None = None,
+) -> str:
     """パネルのrevisionごとにファイルを分け、過去生成物を上書きしない。"""
 
     revision = int(panel.get("revision", 0)) + 1
@@ -132,19 +138,35 @@ def save_panel_artwork(project_id: str, panel: Dict[str, Any], settings: Dict[st
     if runtime.image_provider == "openai" and runtime.openai_api_key:
         filename = f"{_slug(str(panel.get('id', 'panel')))}-r{revision}.png"
         path = project_dir / filename
-        save_openai_image(panel, runtime, path)
+        image_model = model_for_task(
+            model_settings or {"image_model": runtime.openai_image_model}, "image"
+        )
+        actual_model = save_openai_image(panel, runtime, path, model_id=image_model)
+        panel["generation_metadata"] = new_generation_metadata(
+            task="image",
+            requested_model=image_model,
+            actual_model=actual_model,
+        )
         return str(path)
     filename = f"{_slug(str(panel.get('id', 'panel')))}-r{revision}.png"
     path = project_dir / filename
     render_panel_image(panel, settings).save(path, format="PNG", optimize=True)
+    panel["generation_metadata"] = new_generation_metadata(
+        task="image", requested_model="demo", actual_model="demo", provider="demo"
+    )
     return str(path)
 
 
-def save_openai_image(panel: Dict[str, Any], runtime: Any, path: Path) -> None:
+def save_openai_image(
+    panel: Dict[str, Any], runtime: Any, path: Path, *, model_id: str | None = None
+) -> str:
     """OpenAI Images APIのbase64レスポンスをサーバー側へ保存する。"""
 
+    requested_model = model_id if is_allowed_image_model(str(model_id or "")) else runtime.openai_image_model
+    if not is_allowed_image_model(str(requested_model)):
+        requested_model = "gpt-image-2"
     payload = {
-        "model": runtime.openai_image_model,
+        "model": requested_model,
         "prompt": panel.get("generation_prompt") or "漫画のコマ。文字は描かない。",
         "size": "1024x1024",
         "quality": "low",
@@ -162,7 +184,8 @@ def save_openai_image(panel: Dict[str, Any], runtime: Any, path: Path) -> None:
         if encoded:
             image_bytes = base64.b64decode(encoded, validate=True)
             path.write_bytes(_validate_image_bytes(image_bytes))
-            return
+            response_model = body.get("model")
+            return str(response_model) if is_allowed_image_model(str(response_model)) else str(requested_model)
         image_url = image_data.get("url")
         if image_url:
             parsed = urlparse(str(image_url))
@@ -175,7 +198,8 @@ def save_openai_image(panel: Dict[str, Any], runtime: Any, path: Path) -> None:
                 max_retries=getattr(runtime, "openai_max_retries", 1),
             )
             path.write_bytes(_validate_image_bytes(image_bytes))
-            return
+            response_model = body.get("model")
+            return str(response_model) if is_allowed_image_model(str(response_model)) else str(requested_model)
         raise ValueError("画像データがありません")
     except OpenAIRequestError as exc:
         raise ArtworkGenerationError(str(exc)) from exc
