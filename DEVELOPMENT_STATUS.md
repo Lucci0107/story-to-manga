@@ -88,6 +88,7 @@
 - 本番Smoke Check: `https://story-to-manga-b6bb.onrender.com`、health / login / CSS / JavaScriptが全項目HTTP 200
 - 本番Production QA: 合成ProjectでKnowledge upload/selection、Story Analysis、Character Bible、Storyboard Job、Knowledge-aware QA、リロード復元、Preview、PDF/ZIP Export、AIモデル設定の秘密非公開を確認
 - 本番実AI画像生成: `gpt-image-2`で先頭コマを1枚だけ生成し、`completed` / `revision 1` / 画像取得 / リロード後の保持を確認（再生成なし）
+- 本番デプロイ後QA: login HTMLのfavicon 5参照、favicon各形式HTTP 200、health 200、匿名admin API 401、秘密名/キー非露出、Productionの390px・Dark theme・console errorなしを確認
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 
 ## In Progress
@@ -100,6 +101,14 @@
 - `DATABASE_URL`がPostgreSQLの場合は`psycopg` backendを選択できます。接続失敗時に認証情報をエラーやログへ含めない設計です。
 - 画像・Exportの業務処理はStorage keyだけを扱い、Pathと`read_bytes`／`write_bytes`はLocalFileStorageへ閉じ込めています。
 - 外部DB／Object Storageへの実移行、既存SQLiteデータのバックフィル、S3互換backendの実装は今回の対象外です。データを失う設定変更は行っていません。
+
+## Admin Account Investigation
+
+- 分類: **B（管理者機能は実装済み、管理者アカウントは未作成）**。従来はrole/bootstrap/admin-only routeがなく、最初の登録ユーザーを自動adminにする実装もありませんでした。
+- ローカルSQLiteの既存ユーザーは`demo@example.com`のみで、roleは`user`です。既存ユーザーを自動昇格させず、パスワードも変更していません。
+- `users.role`は既存DBへ`DEFAULT 'user'`でmigrationされます。`ADMIN_EMAIL`と`ADMIN_INITIAL_PASSWORD`の両方が有効な場合だけ、起動時に新規adminを1件作成します。既存adminは保持し、同じメールの既存ユーザーを明示指定した場合はパスワードを上書きせずroleだけをadminへ更新します。
+- ログインURLは`/login`で一般ユーザーと共通です。server-sideでadmin roleを検証する`/api/admin/status`を追加し、未認証は401、一般ユーザーは403です。
+- ローカル`.env`とRender実環境には現在`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`の実値を設定していません。実値は記録・表示していません。
 
 ## Remaining
 
@@ -142,6 +151,10 @@
 - Storyboard JobのRenderタイムアウト対策コミット: `c33da98`
 - GitHub Actions CI成功確認: workflow run `34098711404`（`c33da98`）
 - Production QAは1ページ・1コマ画像の低コスト条件で完了しました。Storyboard処理中にRenderの一時502が発生した場合も、Job状態を保持したままUI/QA側で安全に再取得できることを確認しています。
+- Favicon/Admin hardeningコミット: `20bdc0a`、favicon MIME portability修正コミット: `3ec23c6`
+- GitHub Actions CI成功確認: workflow run `34118066143`（`3ec23c6`）
+- Render自動デプロイ成功: `dep-dafa6tvavr4c73bs9ba0`（GitHub deployment `6307945250`）
+- Production URL: `https://story-to-manga-b6bb.onrender.com`
 
 ## 次回セッションの確認
 
