@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功まで確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番デプロイはRender認証と課金承認待ちです。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Checkと低負荷Production QAまで完了しています。
 
 ```text
 本文入力 / ファイル抽出
@@ -33,6 +33,7 @@
 - 物語解析、漫画化設定、キャラクター、ネームの編集と永続化
 - ページ・コマの追加、削除、並び替え、レイアウト変更
 - コマ単位の生成Job、状態表示、再試行、重複リクエスト抑止
+- 外部AIの長時間Storyboardを永続Jobへ登録し、HTTPタイムアウトを避けるバックグラウンド処理とUIポーリング
 - デモPNG画像生成と、OpenAI画像APIへのサーバー側接続境界
 - OpenAI Responses APIのStructured OutputsによるStory Analysis、Character Bible、Storyboard、Knowledge-aware QA、パネルPrompt生成
 - OpenAIモデル能力レジストリ、Auto / Highest Quality / Balanced / Economyプリセット、工程別モデル選択、Global / Project overrideのサーバー側解決
@@ -61,7 +62,7 @@
 
 ## 検証済み
 
-- `pytest`: 47 passed（既存テスト + 永続化境界・Storage key回帰確認）
+- `pytest`: 48 passed（既存テスト + 永続化境界・Storage key回帰確認 + 外部Storyboard Job回帰確認）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
@@ -79,10 +80,14 @@
 - 共通Processing Dialogをデモプロバイダで確認：画像一括生成、個別再生成、物語解析、Character Bible、Storyboard、Knowledge取り込み、Knowledge-aware QA、PDF/ZIP Export、入力エラー。Desktop/Mobile中央配置、進捗文、二重送信抑止、成功/失敗後の自動終了、Reload後の非表示、ライト/ダークテーマ、コンソールエラーなし
 - OpenAIモデル一覧APIを低コストに1回確認し、GPT-6 Astraは対象組織で未提供、GPT-5.6 Sol/Terra/Lunaは利用可能と確認
 - 実AIの最小Story AnalysisをAstra指定で1回実行し、AstraのアクセスエラーからGPT-5.6 Solへフォールバック、解析結果保存、requested/actual/fallback/reasoningメタデータ、リロード後の実行モデル表示を確認（画像生成は追加実行なし）
+- 本番Smoke Check: `https://story-to-manga-b6bb.onrender.com`、health / login / CSS / JavaScriptが全項目HTTP 200
+- 本番Production QA: 合成ProjectでKnowledge upload/selection、Story Analysis、Character Bible、Storyboard Job、Knowledge-aware QA、リロード復元、Preview、PDF/ZIP Export、AIモデル設定の秘密非公開を確認
+- 本番実AI画像生成: `gpt-image-2`で先頭コマを1枚だけ生成し、`completed` / `revision 1` / 画像取得 / リロード後の保持を確認（再生成なし）
+- 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 
 ## In Progress
 
-- GitHub remote接続、`main` push、GitHub Actions CI成功まで完了。Renderの所有者認証・Git連携・Blueprint作成・Secret設定・課金承認を待つ本番デプロイ準備。
+- なし（Production QA完了）
 
 ## 永続化移行準備
 
@@ -93,9 +98,7 @@
 
 ## Remaining
 
-- Render認証、Production QA
-- Render Secret環境変数への`OPENAI_API_KEY`設定と本番AI疎通確認
-- Render Blueprintの有料Web Service（$7/月）＋Persistent Disk（$0.25/月）の課金承認
+- なし。外部PostgreSQL／Object Storageへの実移行は将来作業として未実施です。
 
 ## Failed
 
@@ -103,18 +106,15 @@
 
 ## Blocked
 
-- Renderログイン/OAuth、GitHub repositoryとのRender連携、実AI用secret入力は本人操作が必要です。
+- なし。Renderの有料Web Service + Persistent Diskはユーザーが承認・作成済みで、`OPENAI_API_KEY`もRender Secretとして設定済みです。
 - 現行保存方式を維持した長期本番には有料構成が必要です。Free Web ServiceはPersistent Diskを利用できず、SQLite・画像・Knowledge・Exportが再起動／再デプロイ／スピンダウンで失われるため、`plan: free`への変更は行っていません。
-- Blueprint見積もりはWeb Service $7/月 + Persistent Disk $0.25/月 = $7.25/月です。支払い承認なしではDeploy Blueprintへ進めません。
-- `gh auth status`ではGitHubアカウントの保存済みTokenが無効と報告されていますが、Gitの認証情報でremote設定と`main` pushは完了しています。Render連携にはRender側の所有者認証が必要です。
-- Renderダッシュボードはログイン画面で、Render CLI/専用Connectorも利用できません。in-app Browserでの自動公開はここで停止しています。
-- ローカル`.env`のOpenAIキーは設定済みで、実AIスモークは成功しました。Astraは現在の組織では未提供のため、実際の分析はGPT-5.6 Solへ安全にフォールバックしました。本番ではRender側のSecretへ同じ用途のキーを登録する必要があります。
+- Astraは現在の組織で利用できない場合にGPT-5.6 Solへフォールバックする設計です。秘密値は記録していません。
 
-## 外部接続待ち
+## 外部接続
 
 - GitHub remoteは`https://github.com/Lucci0107/story-to-manga.git`へ設定済みで、ローカル`main`はorigin/mainを追跡しています。GitHub repositoryはPublicの空repositoryから開始しました。
-- GitHub Actionsの`Validate application`は`65ba257`でsuccessを確認しました。Renderの所有者認証・連携情報と課金承認がないため、本番デプロイとProduction QAは未実施です。`render.yaml`、Dockerfile、health checkは準備済みです。
-- ローカルのキーなし既定値はデモですが、`OPENAI_API_KEY`がある場合はプロバイダ未指定でもOpenAIを選択します。Renderは`AI_PROVIDER=openai` / `IMAGE_PROVIDER=openai`を設定済みで、`OPENAI_API_KEY`だけがSecret待ちです。
+- GitHub Actionsの`Validate application`は`c33da98`でsuccessを確認しました。Render Blueprintは`main`を`autoDeployTrigger: checksPass`で監視し、CI成功後に自動デプロイします。
+- RenderのProduction URL、OpenAI Secret、永続ディスクを確認済みです。秘密値はリポジトリ・ログ・ブラウザへ保存していません。
 
 ## Deployment
 
@@ -128,16 +128,18 @@
 - Render Free制約調査・有料永続構成明示コミット: `b76e818`
 - GitHub Actions CI成功確認: workflow run `34072335458`（`b76e818`）
 - GitHub repository: `https://github.com/Lucci0107/story-to-manga`
-- Production URLは未取得です（Render課金承認・Blueprint作成待ち）。
+- Production URL: `https://story-to-manga-b6bb.onrender.com`
+- Render deployment: `dep-daf70mc9v7es73bnvjug` / GitHub deployment `6304526998`（success）
 - GitHub Actionsの`.github/workflows/ci.yml`は`main` push / PRで依存関係、pytest、compileall、JavaScript構文、pip checkを実行します。RenderはCI成功後のみmainを自動デプロイする設定です。
 - `scripts/production_smoke.py`で公開URL、`/api/health`、Login、CSS/JSの到達性をJSONで確認できます。
-- Renderのnative build設定へResponses API / Images APIのURL、モデル、タイムアウト、再試行、最大出力トークンを追加済みです。APIキーは設定していません。
-- ローカル実AIスモークは成功済みです。Render Free制約の調査、現行有料構成の保持、39件の回帰テスト、ローカルSmoke Checkは完了しました。Renderの認証・課金承認・Secret設定・本番URL取得・Production QAは未実施です。
+- Renderのnative build設定へResponses API / Images APIのURL、モデル、タイムアウト、再試行、最大出力トークンを追加済みです。APIキーは`sync: false`のRender Secretです。
+- Storyboard JobのRenderタイムアウト対策コミット: `c33da98`
+- GitHub Actions CI成功確認: workflow run `34098711404`（`c33da98`）
+- Production QAは1ページ・1コマ画像の低コスト条件で完了しました。Storyboard処理中にRenderの一時502が発生した場合も、Job状態を保持したままUI/QA側で安全に再取得できることを確認しています。
 
-## 再開時の確認
+## 次回セッションの確認
 
-1. `README.md`とこのファイルを読む
-2. `STORY_MANGA_DATA_DIR=/tmp/story-manga-check .venv/bin/pytest -q`を実行する
-3. `STORY_MANGA_DATA_DIR=/tmp/story-manga-local AI_PROVIDER=demo IMAGE_PROVIDER=demo .venv/bin/uvicorn app.main:app --reload`でブラウザQAを再実行する
-4. GitHubリポジトリとRenderの所有者認証が利用可能になったら、Render Secretへキーを設定して本番公開へ進む
-5. Production URLでhealth、AI、画像保存、Reload、Preview、Exportを確認する
+1. `git status --short --branch`で作業ツリーと`origin/main`を確認する
+2. 本番変更がある場合だけ、影響範囲のpytestと`.venv/bin/python scripts/production_smoke.py --url https://story-to-manga-b6bb.onrender.com`を実行する
+3. 通常のデプロイは`main`へpushし、GitHub Actions成功後のRender自動デプロイを確認する
+4. 外部PostgreSQL／S3互換Storageへの移行は、別タスクとしてデータバックフィル計画を作成してから行う

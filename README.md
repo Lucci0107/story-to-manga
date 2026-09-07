@@ -67,6 +67,8 @@ DB接続先は`DATABASE_URL`で切り替えられます。未指定時は従来�
 
 `render.yaml` と `Dockerfile` を用意しています。GitHubの`main`へpushすると、`.github/workflows/ci.yml`が依存関係、テスト、Python compile、JavaScript構文、`pip check`を検証します。Renderは`autoDeployTrigger: checksPass`により、CI成功後だけ同じ`main`の変更を自動デプロイします。
 
+Production URL: https://story-to-manga-b6bb.onrender.com
+
 このアプリはSQLite、生成画像、Knowledge本文、Exportファイルをローカルファイルシステムへ保存します。RenderのFree Web Serviceはローカルファイルが再起動・再デプロイ・スピンダウンで失われ、Persistent DiskもFreeでは利用できないため、現行の長期本番要件を満たしません。`render.yaml`では保存データを守るため、`plan: 0.5c-512mb`（Starter相当）と1GBのPersistent Diskを明示しています。Freeへ変更する場合は、diskを外して`plan: free`にできますが、同一インスタンスが動作している間だけの検証・デモ用途に限られ、Project・Session・Knowledge・画像・Exportの継続利用は保証できません。
 
 Free Render Postgresへ移行する案もありますが、Freeデータベースは30日で期限切れになるため、長期本番の無課金解決にはなりません。SQLiteから外部データベースへ移行し、画像・Exportを別の耐久ストレージへ移す場合は、別サービスの認証情報と追加実装が必要です。詳細は[Render Freeの制約](https://render.com/docs/free)と[Persistent Diskの仕様](https://render.com/docs/disks)を参照してください。
@@ -89,12 +91,12 @@ Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置
 - `SESSION_DAYS`
 - `STORY_MANGA_DATA_DIR`
 
-SQLite、生成画像、Knowledge、Exportは`STORY_MANGA_DATA_DIR`配下へ保存するため、Renderでは永続ディスクを使用します。初回接続時だけGitHub repository authorization、Render Git連携、`OPENAI_API_KEY`のRender Secret登録が必要です。日常の更新は`main`へのpushとCI成功だけで進みます。
+SQLite、生成画像、Knowledge、Exportは`STORY_MANGA_DATA_DIR`配下へ保存するため、Renderでは永続ディスクを使用します。初回接続時のGitHub/Render連携、Blueprint作成、`OPENAI_API_KEY`のRender Secret登録は完了済みです。日常の更新は`main`へのpushとCI成功だけで進みます。Production QAではhealth、Story Analysis、Character Bible、Storyboard Job、Knowledge-aware QA、1枚の画像生成、Reload、Preview、PDF/ZIP Exportを確認済みです。
 
 公開後は次の安全な軽量確認を実行できます。キーや本文は送信・表示しません。
 
 ```bash
-.venv/bin/python scripts/production_smoke.py --url https://<your-service>.onrender.com
+.venv/bin/python scripts/production_smoke.py --url https://story-to-manga-b6bb.onrender.com
 ```
 
 デプロイ失敗時はGitHub Actionsの失敗したcheckを修正して`main`へ再pushします。Render側のBuild/Runtimeログで起動・Health Checkだけを確認し、同じ設定のまま再デプロイします。Deploy HookはGit自動デプロイと二重化するため、通常は使用しません。デモ画像はPNGで保存され、PDFには生成済み画像とアプリ側のセリフを埋め込みます。
