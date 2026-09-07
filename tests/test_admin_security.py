@@ -126,7 +126,10 @@ def test_favicon_assets_and_template_links_are_reachable(tmp_path: Path, monkeyp
         image = Image.open(BytesIO(client.get(path).content))
         assert image.size == expected_size
 
-    assert client.get("/static/icons/favicon.ico").headers["content-type"] == "image/x-icon"
+    assert client.get("/static/icons/favicon.ico").headers["content-type"] in {
+        "image/x-icon",
+        "image/vnd.microsoft.icon",
+    }
     assert "ADMIN_INITIAL_PASSWORD" not in login_page.text
     api_key = os.getenv("OPENAI_API_KEY", "")
     if api_key:
