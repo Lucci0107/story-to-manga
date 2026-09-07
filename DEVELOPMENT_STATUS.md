@@ -50,6 +50,9 @@
 - コマの表示方法（全体を表示 / 枠に合わせる）をPreviewとPDFへ反映
 - 生成済み画像を埋め込むPDFと、画像/Project JSONのZIP
 - アカウント、接続状態、表示テーマを確認する設定画面
+- Story to Mangaブランドのfavicon（SVG、ICO、16/32px PNG、180px Apple Touch Icon）と全base templateへの参照
+- `users.role`の後方互換migration、`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`によるidempotentなserver-side admin bootstrap
+- 既存ユーザーのパスワードを上書きしないadmin promotion、admin-only `/api/admin/status`、一般ユーザーへの403保護
 - RTL/LTR、ライト/ダークテーマ、モバイル/デスクトップ対応
 - Render用`render.yaml`、Dockerfile、環境変数サンプル、GitHub Actions CI
 - RenderのGit連携用`main` branch / `autoDeployTrigger: checksPass`、OpenAI Secretの`sync: false`宣言、公開後Smoke Checkスクリプト
@@ -62,7 +65,7 @@
 
 ## 検証済み
 
-- `pytest`: 48 passed（既存テスト + 永続化境界・Storage key回帰確認 + 外部Storyboard Job回帰確認）
+- `pytest`: 53 passed（既存テスト + 永続化境界・Storage key回帰確認 + 外部Storyboard Job回帰確認 + favicon/admin security回帰確認）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
@@ -74,6 +77,8 @@
 - 実ブラウザで物語抽出、解析、設定、Character Bible編集、ネーム編集、コマ生成・個別再生成、QA、Preview、PDF/ZIP Export、リロード復元を確認
 - PNG画像表示、吹き出し/ナレーション/SFX、モバイル390px・デスクトップ1440pxレイアウト、ライト/ダークテーマを確認
 - ブラウザconsoleのerror/warningなし
+- Login、Dashboard、Project、404のbase templateでfavicon各形式を確認し、静的ファイルHTTP 200と16/32/180pxサイズを検証
+- 管理者bootstrapの新規作成・重複抑止・既存ユーザー保持、PBKDF2ハッシュ、admin-only endpoint、一般ユーザー403、未設定環境の安全な起動をテスト
 - 実ブラウザでデモモードのコマ生成、個別再生成、リロード後の画像保持を再確認
 - 隔離SQLite環境で実AIスモークを確認：`/api/health`のOpenAI切替、Knowledge 1件の参照、Analysis、Character Bible、Storyboard、Knowledge-aware QA、1ページ5コマの生成、1コマのOpenAI画像生成、画像GET、Project再読込後の`completed`/`revision 1`/画像保持
 - AIモデル設定画面でプリセット変更、詳細設定展開、工程別選択、保存・再読み込み、Astra可用性表示、390px/1440px表示、コンソール警告なしを確認
@@ -87,7 +92,7 @@
 
 ## In Progress
 
-- なし（Production QA完了）
+- なし（faviconと管理者bootstrapの追加検証完了）
 
 ## 永続化移行準備
 
@@ -98,7 +103,8 @@
 
 ## Remaining
 
-- なし。外部PostgreSQL／Object Storageへの実移行は将来作業として未実施です。
+- Renderの`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD` Secretは未設定です。管理者ログインを有効化する場合はRenderで本人が設定し、デプロイ後に`/login`から初回ログインしてください。
+- 外部PostgreSQL／Object Storageへの実移行は将来作業として未実施です。
 
 ## Failed
 
@@ -106,7 +112,7 @@
 
 ## Blocked
 
-- なし。Renderの有料Web Service + Persistent Diskはユーザーが承認・作成済みで、`OPENAI_API_KEY`もRender Secretとして設定済みです。
+- Renderの有料Web Service + Persistent Diskはユーザーが承認・作成済みで、`OPENAI_API_KEY`もRender Secretとして設定済みです。管理者用Secretだけは、実値の入力が必要なため未設定です。
 - 現行保存方式を維持した長期本番には有料構成が必要です。Free Web ServiceはPersistent Diskを利用できず、SQLite・画像・Knowledge・Exportが再起動／再デプロイ／スピンダウンで失われるため、`plan: free`への変更は行っていません。
 - Astraは現在の組織で利用できない場合にGPT-5.6 Solへフォールバックする設計です。秘密値は記録していません。
 

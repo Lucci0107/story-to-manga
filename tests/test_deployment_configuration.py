@@ -20,6 +20,8 @@ def test_render_uses_main_checks_pass_and_server_side_openai_secret() -> None:
     assert "plan: 0.5c-512mb" in RENDER_YAML
     assert "name: story-manga-data" in RENDER_YAML
     assert "mountPath: /var/data" in RENDER_YAML
+    assert "- key: ADMIN_EMAIL\n        sync: false" in RENDER_YAML
+    assert "- key: ADMIN_INITIAL_PASSWORD\n        sync: false" in RENDER_YAML
 
 
 def test_ci_workflow_contains_required_validation_gates() -> None:

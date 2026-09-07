@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -65,6 +66,7 @@ def init_db() -> None:
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
                 ai_model_settings_json TEXT
             );
 
@@ -196,6 +198,8 @@ def init_db() -> None:
                 "ALTER TABLE projects ADD COLUMN generation_metadata_json TEXT NOT NULL DEFAULT '[]'"
             )
         user_columns = conn.table_columns("users")
+        if "role" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
         if "ai_model_settings_json" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN ai_model_settings_json TEXT")
         knowledge_columns = conn.table_columns("knowledge_documents")
@@ -204,6 +208,8 @@ def init_db() -> None:
         export_columns = conn.table_columns("exports")
         if "storage_key" not in export_columns:
             conn.execute("ALTER TABLE exports ADD COLUMN storage_key TEXT")
+    # 環境変数が揃っている場合だけ初期管理者を作成し、未設定でも起動を妨げない。
+    bootstrap_admin()
 
 
 def hash_password(password: str) -> str:
@@ -229,6 +235,77 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
+def _configured_admin_credentials() -> tuple[str, str] | None:
+    """管理者bootstrap用の環境変数を検証し、秘密値を外へ返さない。"""
+
+    email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    password = os.getenv("ADMIN_INITIAL_PASSWORD", "")
+    if "@" not in email or len(email) > 160 or len(password) < 12 or len(password) > 256:
+        return None
+    return email, password
+
+
+def get_admin_user() -> Optional[Mapping[str, Any]]:
+    """最初の管理者を返す。パスワードハッシュは呼び出し側で公開しない。"""
+
+    with connection() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+
+
+def is_admin(user: Mapping[str, Any] | None) -> bool:
+    """DBから取得したユーザーの管理者権限だけを判定する。"""
+
+    if not user:
+        return False
+    try:
+        role = user["role"]
+    except (KeyError, IndexError):
+        role = "user"
+    return str(role) == "admin"
+
+
+def bootstrap_admin() -> Optional[Mapping[str, Any]]:
+    """環境変数で指定された初期管理者をidempotentに作成する。
+
+    既存の管理者は変更せず、同じメールアドレスの既存ユーザーを見つけた場合も
+    パスワードを上書きせずにそのアカウントへadminロールだけを付与する。
+    環境変数が未設定・不正な場合はアプリを停止せず、何もしない。
+    """
+
+    configured = _configured_admin_credentials()
+    if not configured:
+        return get_admin_user()
+    email, password = configured
+    with connection() as conn:
+        existing_admin = conn.execute(
+            "SELECT * FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if existing_admin:
+            return existing_admin
+
+        existing_user = conn.execute(
+            "SELECT * FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        if existing_user:
+            conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (existing_user["id"],))
+            return conn.execute(
+                "SELECT * FROM users WHERE id = ?", (existing_user["id"],)
+            ).fetchone()
+
+        user_id = str(uuid.uuid4())
+        created_at = utc_now()
+        conn.execute(
+            """
+            INSERT INTO users (id, email, password_hash, created_at, role, ai_model_settings_json)
+            VALUES (?, ?, ?, ?, 'admin', ?)
+            """,
+            (user_id, email, hash_password(password), created_at, _json(DEFAULT_AI_MODEL_SETTINGS)),
+        )
+        return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
 def create_user(email: str, password: str) -> Dict[str, Any]:
     """ユーザーを作成する。"""
 
@@ -236,7 +313,7 @@ def create_user(email: str, password: str) -> Dict[str, Any]:
     created_at = utc_now()
     with connection() as conn:
         conn.execute(
-            "INSERT INTO users (id, email, password_hash, created_at, ai_model_settings_json) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, email, password_hash, created_at, role, ai_model_settings_json) VALUES (?, ?, ?, ?, 'user', ?)",
             (
                 user_id,
                 email.lower().strip(),
@@ -245,7 +322,12 @@ def create_user(email: str, password: str) -> Dict[str, Any]:
                 _json(DEFAULT_AI_MODEL_SETTINGS),
             ),
         )
-    return {"id": user_id, "email": email.lower().strip(), "created_at": created_at}
+    return {
+        "id": user_id,
+        "email": email.lower().strip(),
+        "role": "user",
+        "created_at": created_at,
+    }
 
 
 def get_user_by_email(email: str) -> Optional[Mapping[str, Any]]:

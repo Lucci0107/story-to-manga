@@ -35,8 +35,15 @@ python3 -m venv .venv
 - `/projects/new`: 本文入力・ファイル取り込み
 - `/knowledge`: Project横断のKnowledge Library（参照資料、Version履歴、アーカイブ）
 - `/settings`: アカウント、AI接続状態、表示テーマ
+- `/api/admin/status`: 管理者セッションだけが利用できるserver-side権限確認API
 - `/knowledge/{id}`: Knowledgeの本文プレビュー、メタデータ、Version追加・有効化
 - `/projects/{id}`: 物語、Knowledge設定、解析、漫画化設定、キャラクター、ネーム、生成、編集、QA、プレビュー、書き出し
+
+## 管理者アカウント
+
+一般ユーザーと管理者は同じ`/login`画面からログインします。管理者アカウントを新規環境で作る場合は、サーバー側のSecretとして`ADMIN_EMAIL`と`ADMIN_INITIAL_PASSWORD`（12文字以上）を両方設定して起動してください。初回起動時だけidempotentに作成され、既存の管理者は変更されません。設定がない場合もアプリは起動し、管理者アカウントは作成されません。
+
+既存ユーザーと同じメールアドレスを`ADMIN_EMAIL`へ明示した場合は、そのユーザーのパスワードを上書きせずadminロールだけを付与します。パスワード値はDB、HTML、JavaScript、ログへ保存・出力しません。`ADMIN_INITIAL_PASSWORD`は`.env`またはRender Secretへ設定し、Gitへコミットしないでください。
 
 ## Knowledge Library
 
@@ -89,6 +96,8 @@ Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置
 - `OPENAI_MAX_OUTPUT_TOKENS`
 - `MAX_UPLOAD_BYTES`
 - `SESSION_DAYS`
+- `ADMIN_EMAIL`（管理者bootstrap用のRender Secret）
+- `ADMIN_INITIAL_PASSWORD`（管理者bootstrap用のRender Secret）
 - `STORY_MANGA_DATA_DIR`
 
 SQLite、生成画像、Knowledge、Exportは`STORY_MANGA_DATA_DIR`配下へ保存するため、Renderでは永続ディスクを使用します。初回接続時のGitHub/Render連携、Blueprint作成、`OPENAI_API_KEY`のRender Secret登録は完了済みです。日常の更新は`main`へのpushとCI成功だけで進みます。Production QAではhealth、Story Analysis、Character Bible、Storyboard Job、Knowledge-aware QA、1枚の画像生成、Reload、Preview、PDF/ZIP Exportを確認済みです。

@@ -38,6 +38,10 @@ services:
         value: "5242880"
       - key: SESSION_DAYS
         value: "14"
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_INITIAL_PASSWORD
+        sync: false
       - key: STORY_MANGA_DATA_DIR
         value: /var/data/story-manga
     disk:

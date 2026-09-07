@@ -121,6 +121,14 @@ def current_user(request: Request):
     return user
 
 
+def require_admin(user=Depends(current_user)):
+    """管理者ロールをDB上で確認する。クライアントの値は信用しない。"""
+
+    if not db.is_admin(user):
+        raise HTTPException(status_code=403, detail="管理者権限が必要です")
+    return user
+
+
 def redirect_with_session(url: str, token: str) -> RedirectResponse:
     response = RedirectResponse(url=url, status_code=303)
     response.set_cookie(
@@ -742,6 +750,13 @@ async def health():
         "ai_provider": get_ai_provider().provider_name,
         "image_provider": active_image_provider,
     }
+
+
+@app.get("/api/admin/status")
+async def admin_status(user=Depends(require_admin)):
+    """管理者ログインとserver-side権限確認用の最小エンドポイント。"""
+
+    return {"admin": True, "email": user["email"], "role": user["role"]}
 
 
 def ai_model_settings_response(user_id: str, project: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
