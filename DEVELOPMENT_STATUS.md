@@ -93,7 +93,7 @@
 
 ## In Progress
 
-- なし（faviconと管理者bootstrapの追加検証完了）
+- Render Secret設定後のadmin bootstrapは最新deploy成功まで確認済み。実管理者のログイン/`/api/admin/status` 200だけは、管理者メールアドレスと初期パスワードをチャットへ出さず、本人がブラウザへ入力する段階です。
 
 ## 永続化移行準備
 
@@ -108,11 +108,11 @@
 - ローカルSQLiteの既存ユーザーは`demo@example.com`のみで、roleは`user`です。既存ユーザーを自動昇格させず、パスワードも変更していません。
 - `users.role`は既存DBへ`DEFAULT 'user'`でmigrationされます。`ADMIN_EMAIL`と`ADMIN_INITIAL_PASSWORD`の両方が有効な場合だけ、起動時に新規adminを1件作成します。既存adminは保持し、同じメールの既存ユーザーを明示指定した場合はパスワードを上書きせずroleだけをadminへ更新します。
 - ログインURLは`/login`で一般ユーザーと共通です。server-sideでadmin roleを検証する`/api/admin/status`を追加し、未認証は401、一般ユーザーは403です。
-- ローカル`.env`とRender実環境には現在`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`の実値を設定していません。実値は記録・表示していません。
+- ローカル`.env`には設定していません。Renderの`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD` Secretはユーザー設定済みで、最新Render deploy `dep-dafaej740ujc73adsi70`（GitHub deployment `6308205978`）のsuccessを確認しました。実値は記録・表示していません。
 
 ## Remaining
 
-- Renderの`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD` Secretは未設定です。管理者ログインを有効化する場合はRenderで本人が設定し、デプロイ後に`/login`から初回ログインしてください。
+- Production管理者の実ログインと`/api/admin/status` 200確認は、本人が`/login`へ管理者資格情報を直接入力した後に実施します。パスワードはチャットへ貼り付けません。
 - 外部PostgreSQL／Object Storageへの実移行は将来作業として未実施です。
 
 ## Failed
@@ -121,7 +121,7 @@
 
 ## Blocked
 
-- Renderの有料Web Service + Persistent Diskはユーザーが承認・作成済みで、`OPENAI_API_KEY`もRender Secretとして設定済みです。管理者用Secretだけは、実値の入力が必要なため未設定です。
+- Renderの有料Web Service + Persistent Diskはユーザーが承認・作成済みで、`OPENAI_API_KEY`と管理者用SecretはRender Secretとして設定済みです。実管理者ログイン検証だけが本人のブラウザ入力待ちです。
 - 現行保存方式を維持した長期本番には有料構成が必要です。Free Web ServiceはPersistent Diskを利用できず、SQLite・画像・Knowledge・Exportが再起動／再デプロイ／スピンダウンで失われるため、`plan: free`への変更は行っていません。
 - Astraは現在の組織で利用できない場合にGPT-5.6 Solへフォールバックする設計です。秘密値は記録していません。
 
@@ -155,6 +155,7 @@
 - GitHub Actions CI成功確認: workflow run `34118066143`（`3ec23c6`）
 - Render自動デプロイ成功: `dep-dafa6tvavr4c73bs9ba0`（GitHub deployment `6307945250`）
 - Production URL: `https://story-to-manga-b6bb.onrender.com`
+- Render Secret設定後の自動デプロイ成功: `dep-dafaej740ujc73adsi70`（GitHub deployment `6308205978`）。最新Production smokeはhealth/login/CSS/JS 200、匿名`/api/admin/status` 401。
 
 ## 次回セッションの確認
 
