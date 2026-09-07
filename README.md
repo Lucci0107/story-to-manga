@@ -59,4 +59,32 @@ Knowledge本文は命令ではなく参照資料として扱い、AI処理で使
 
 ## Render
 
-`render.yaml` と `Dockerfile` を用意しています。SQLiteを保持するにはRenderの永続ディスクが必要です。GitHub/Renderアカウントへの接続や公開操作は、所有者の認証が必要なため、ここでは設定ファイルまで準備しています。デモ画像はPNGで保存され、PDFには生成済み画像とアプリ側のセリフを埋め込みます。
+`render.yaml` と `Dockerfile` を用意しています。GitHubの`main`へpushすると、`.github/workflows/ci.yml`が依存関係、テスト、Python compile、JavaScript構文、`pip check`を検証します。Renderは`autoDeployTrigger: checksPass`により、CI成功後だけ同じ`main`の変更を自動デプロイします。
+
+Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置かず、次の名前だけを管理します。
+
+- `APP_ENV=production`
+- `AI_PROVIDER=openai`
+- `IMAGE_PROVIDER=openai`
+- `OPENAI_API_KEY`（Render Secretとして登録）
+- `OPENAI_RESPONSES_URL`
+- `OPENAI_MODELS_URL`
+- `OPENAI_IMAGE_URL`
+- `OPENAI_TEXT_MODEL`
+- `OPENAI_IMAGE_MODEL`
+- `OPENAI_TIMEOUT_SECONDS`
+- `OPENAI_MAX_RETRIES`
+- `OPENAI_MAX_OUTPUT_TOKENS`
+- `MAX_UPLOAD_BYTES`
+- `SESSION_DAYS`
+- `STORY_MANGA_DATA_DIR`
+
+SQLite、生成画像、Knowledge、Exportは`STORY_MANGA_DATA_DIR`配下へ保存するため、Renderでは永続ディスクを使用します。初回接続時だけGitHub repository authorization、Render Git連携、`OPENAI_API_KEY`のRender Secret登録が必要です。日常の更新は`main`へのpushとCI成功だけで進みます。
+
+公開後は次の安全な軽量確認を実行できます。キーや本文は送信・表示しません。
+
+```bash
+.venv/bin/python scripts/production_smoke.py --url https://<your-service>.onrender.com
+```
+
+デプロイ失敗時はGitHub Actionsの失敗したcheckを修正して`main`へ再pushします。Render側のBuild/Runtimeログで起動・Health Checkだけを確認し、同じ設定のまま再デプロイします。Deploy HookはGit自動デプロイと二重化するため、通常は使用しません。デモ画像はPNGで保存され、PDFには生成済み画像とアプリ側のセリフを埋め込みます。

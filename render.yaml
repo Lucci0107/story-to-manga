@@ -2,6 +2,8 @@ services:
   - type: web
     name: story-to-manga
     runtime: python
+    branch: main
+    autoDeployTrigger: checksPass
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
@@ -12,6 +14,8 @@ services:
         value: openai
       - key: IMAGE_PROVIDER
         value: openai
+      - key: OPENAI_API_KEY
+        sync: false
       - key: OPENAI_RESPONSES_URL
         value: https://api.openai.com/v1/responses
       - key: OPENAI_MODELS_URL
@@ -28,6 +32,10 @@ services:
         value: "1"
       - key: OPENAI_MAX_OUTPUT_TOKENS
         value: "12000"
+      - key: MAX_UPLOAD_BYTES
+        value: "5242880"
+      - key: SESSION_DAYS
+        value: "14"
       - key: STORY_MANGA_DATA_DIR
         value: /var/data/story-manga
     disk:

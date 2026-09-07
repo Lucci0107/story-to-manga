@@ -50,12 +50,13 @@
 - 生成済み画像を埋め込むPDFと、画像/Project JSONのZIP
 - アカウント、接続状態、表示テーマを確認する設定画面
 - RTL/LTR、ライト/ダークテーマ、モバイル/デスクトップ対応
-- Render用`render.yaml`、Dockerfile、環境変数サンプル
+- Render用`render.yaml`、Dockerfile、環境変数サンプル、GitHub Actions CI
+- RenderのGit連携用`main` branch / `autoDeployTrigger: checksPass`、OpenAI Secretの`sync: false`宣言、公開後Smoke Checkスクリプト
 - `.env` / `.env.*` のGit除外ルール（`.env.example`は例外）
 
 ## 検証済み
 
-- `pytest`: 37 passed（既存26 + AIモデル設定7 + Processing Dialog 4）
+- `pytest`: 39 passed（既存26 + AIモデル設定7 + Processing Dialog 4 + deployment automation 2）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
 - `pip check`
@@ -73,7 +74,7 @@
 
 ## In Progress
 
-- GitHub/Renderの所有者認証を待つ本番デプロイ準備
+- GitHub/Renderの所有者認証を待つ本番デプロイ準備。ローカルCI、RenderのCI成功後自動デプロイ設定、公開後Smoke Checkは準備済み。
 
 ## Remaining
 
@@ -105,6 +106,8 @@
 - AI接続コミット: `9e522f1 Connect OpenAI Responses and image providers`
 - 状態・Git安全設定コミット: `8f52105`、`16f135b`
 - Production URLは未取得です。
+- GitHub Actionsの`.github/workflows/ci.yml`は`main` push / PRで依存関係、pytest、compileall、JavaScript構文、pip checkを実行します。RenderはCI成功後のみmainを自動デプロイする設定です。
+- `scripts/production_smoke.py`で公開URL、`/api/health`、Login、CSS/JSの到達性をJSONで確認できます。
 - Renderのnative build設定へResponses API / Images APIのURL、モデル、タイムアウト、再試行、最大出力トークンを追加済みです。APIキーは設定していません。
 - ローカル実AIスモークは成功済みですが、Renderの認証・Secret設定・本番URL取得・Production QAは未実施です。
 
