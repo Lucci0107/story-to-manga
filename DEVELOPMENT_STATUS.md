@@ -93,7 +93,7 @@
 
 ## In Progress
 
-- Render Secret設定後のadmin bootstrapは最新deploy成功まで確認済み。実管理者のログイン/`/api/admin/status` 200だけは、管理者メールアドレスと初期パスワードをチャットへ出さず、本人がブラウザへ入力する段階です。
+- Render Secret設定後のadmin bootstrapコードは最新deployへ反映済みです。実管理者のログイン/`/api/admin/status` 200だけは、管理者メールアドレスと初期パスワードをチャットへ出さず、本人がブラウザへ入力して確認する段階です。
 
 ## 永続化移行準備
 
@@ -104,11 +104,11 @@
 
 ## Admin Account Investigation
 
-- 分類: **B（管理者機能は実装済み、管理者アカウントは未作成）**。従来はrole/bootstrap/admin-only routeがなく、最初の登録ユーザーを自動adminにする実装もありませんでした。
-- ローカルSQLiteの既存ユーザーは`demo@example.com`のみで、roleは`user`です。既存ユーザーを自動昇格させず、パスワードも変更していません。
+- 分類: **E（環境変数bootstrap方式）**。管理者機能とbootstrapは実装済みで、Render Secret設定後の最新deployへ反映されています。実アカウントの存在は、資格情報を取得・表示せずに本人がログインした後の`/api/admin/status` 200で最終確認します。
+- ローカルSQLiteの既存ユーザーは`demo@example.com`のみで、roleは`user`です。既存ユーザーを自動昇格させず、パスワードも変更していません。Render本番の管理者メールアドレス・初期パスワードはSecret値のため読み出し・記録していません。
 - `users.role`は既存DBへ`DEFAULT 'user'`でmigrationされます。`ADMIN_EMAIL`と`ADMIN_INITIAL_PASSWORD`の両方が有効な場合だけ、起動時に新規adminを1件作成します。既存adminは保持し、同じメールの既存ユーザーを明示指定した場合はパスワードを上書きせずroleだけをadminへ更新します。
 - ログインURLは`/login`で一般ユーザーと共通です。server-sideでadmin roleを検証する`/api/admin/status`を追加し、未認証は401、一般ユーザーは403です。
-- ローカル`.env`には設定していません。Renderの`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD` Secretはユーザー設定済みで、最新Render deploy `dep-dafaej740ujc73adsi70`（GitHub deployment `6308205978`）のsuccessを確認しました。実値は記録・表示していません。
+- ローカル`.env`には設定していません。Renderの`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD` Secretはユーザー設定済みです。設定後のRender deploy `dep-dafaej740ujc73adsi70`（GitHub deployment `6308205978`）と、状態記録更新後の自動deployをsuccess確認しました。実値は記録・表示していません。
 
 ## Remaining
 
@@ -155,7 +155,7 @@
 - GitHub Actions CI成功確認: workflow run `34118066143`（`3ec23c6`）
 - Render自動デプロイ成功: `dep-dafa6tvavr4c73bs9ba0`（GitHub deployment `6307945250`）
 - Production URL: `https://story-to-manga-b6bb.onrender.com`
-- Render Secret設定後の自動デプロイ成功: `dep-dafaej740ujc73adsi70`（GitHub deployment `6308205978`）。最新Production smokeはhealth/login/CSS/JS 200、匿名`/api/admin/status` 401。
+- Render Secret設定後の自動デプロイ成功: `dep-dafaej740ujc73adsi70`（GitHub deployment `6308205978`）。状態記録更新コミット後のCI/自動deployもsuccess。最新Production smokeはhealth/login/CSS/JS 200、匿名`/api/admin/status` 401。
 
 ## 次回セッションの確認
 
