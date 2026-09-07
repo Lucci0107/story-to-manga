@@ -45,6 +45,8 @@ python3 -m venv .venv
 
 既存ユーザーと同じメールアドレスを`ADMIN_EMAIL`へ明示した場合は、そのユーザーのパスワードを上書きせずadminロールだけを付与します。パスワード値はDB、HTML、JavaScript、ログへ保存・出力しません。`ADMIN_INITIAL_PASSWORD`は`.env`またはRender Secretへ設定し、Gitへコミットしないでください。
 
+初回管理者のログインと`/api/admin/status`の200を確認した後は、Render Dashboardの対象Web Serviceで **Environment** を開き、`ADMIN_INITIAL_PASSWORD`を削除して保存できます。既存のPersistent Disk上のadminレコードとハッシュは変更されないため、通常の再デプロイ後もログインできます。bootstrapを完全に無効化する場合は`ADMIN_EMAIL`も削除できます。DBやPersistent Diskを新規化・消去した場合は自動復旧できないため、復旧用に新しい一時Secretを設定して再デプロイし、管理者作成を確認した後に再び削除してください。Secret削除後もRenderの`sync: false`宣言は残し、実値はGitへ保存しません。
+
 ## Knowledge Library
 
 物語の設定資料・画面ルール・キャラクター補助資料などを複数Documentとして登録できます。対応形式は本文入力、`.txt`、`.md`、`.pdf`、`.docx`です。DocumentはVersion履歴を持ち、Projectごとに以下を設定できます。

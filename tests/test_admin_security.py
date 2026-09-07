@@ -59,6 +59,28 @@ def test_existing_user_is_preserved_when_explicitly_promoted(tmp_path: Path, mon
     assert not db.verify_password("unused-initial-password", admin["password_hash"])
 
 
+def test_existing_admin_survives_bootstrap_secret_removal(tmp_path: Path, monkeypatch) -> None:
+    """初回作成後にbootstrap環境変数を削除しても管理者を保持する。"""
+
+    clear_admin_environment(monkeypatch)
+    monkeypatch.setenv("ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setenv("ADMIN_INITIAL_PASSWORD", "initial-admin-password")
+    client_for(tmp_path, monkeypatch)
+
+    created_admin = db.get_admin_user()
+    assert created_admin is not None
+    created_admin_id = created_admin["id"]
+
+    clear_admin_environment(monkeypatch)
+    db.init_db()
+
+    retained_admin = db.get_admin_user()
+    assert retained_admin is not None
+    assert retained_admin["id"] == created_admin_id
+    assert retained_admin["role"] == "admin"
+    assert db.verify_password("initial-admin-password", retained_admin["password_hash"])
+
+
 def test_admin_endpoint_uses_server_side_role_check(tmp_path: Path, monkeypatch) -> None:
     clear_admin_environment(monkeypatch)
     monkeypatch.setenv("ADMIN_EMAIL", "admin@example.com")

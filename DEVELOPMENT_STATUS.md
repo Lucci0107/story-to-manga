@@ -4,7 +4,9 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Checkと低負荷Production QAまで完了しています。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。
+
+**最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
 ```text
 本文入力 / ファイル抽出
@@ -53,6 +55,7 @@
 - Story to Mangaブランドのfavicon（SVG、ICO、16/32px PNG、180px Apple Touch Icon）と全base templateへの参照
 - `users.role`の後方互換migration、`ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`によるidempotentなserver-side admin bootstrap
 - 既存ユーザーのパスワードを上書きしないadmin promotion、admin-only `/api/admin/status`、一般ユーザーへの403保護
+- 本番管理者のログイン、ログアウト、再ログイン、認証済みadmin status確認
 - RTL/LTR、ライト/ダークテーマ、モバイル/デスクトップ対応
 - Render用`render.yaml`、Dockerfile、環境変数サンプル、GitHub Actions CI
 - RenderのGit連携用`main` branch / `autoDeployTrigger: checksPass`、OpenAI Secretの`sync: false`宣言、公開後Smoke Checkスクリプト
@@ -79,6 +82,7 @@
 - ブラウザconsoleのerror/warningなし
 - Login、Dashboard、Project、404のbase templateでfavicon各形式を確認し、静的ファイルHTTP 200と16/32/180pxサイズを検証
 - 管理者bootstrapの新規作成・重複抑止・既存ユーザー保持、PBKDF2ハッシュ、admin-only endpoint、一般ユーザー403、未設定環境の安全な起動をテスト
+- 初回管理者作成後に`ADMIN_INITIAL_PASSWORD`と`ADMIN_EMAIL`を削除しても既存adminを保持する回帰テスト
 - 実ブラウザでデモモードのコマ生成、個別再生成、リロード後の画像保持を再確認
 - 隔離SQLite環境で実AIスモークを確認：`/api/health`のOpenAI切替、Knowledge 1件の参照、Analysis、Character Bible、Storyboard、Knowledge-aware QA、1ページ5コマの生成、1コマのOpenAI画像生成、画像GET、Project再読込後の`completed`/`revision 1`/画像保持
 - AIモデル設定画面でプリセット変更、詳細設定展開、工程別選択、保存・再読み込み、Astra可用性表示、390px/1440px表示、コンソール警告なしを確認
@@ -89,11 +93,12 @@
 - 本番Production QA: 合成ProjectでKnowledge upload/selection、Story Analysis、Character Bible、Storyboard Job、Knowledge-aware QA、リロード復元、Preview、PDF/ZIP Export、AIモデル設定の秘密非公開を確認
 - 本番実AI画像生成: `gpt-image-2`で先頭コマを1枚だけ生成し、`completed` / `revision 1` / 画像取得 / リロード後の保持を確認（再生成なし）
 - 本番デプロイ後QA: login HTMLのfavicon 5参照、favicon各形式HTTP 200、health 200、匿名admin API 401、秘密名/キー非露出、Productionの390px・Dark theme・console errorなしを確認
+- 本番管理者QA: 管理者ログイン、ログアウト、再ログイン、ダッシュボード表示、認証済み`/api/admin/status` 200を確認（認証Cookieは読み出し・記録していません）
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 
 ## In Progress
 
-- Render Secret設定後のadmin bootstrapコードは最新deployへ反映済みです。実管理者のログイン/`/api/admin/status` 200だけは、管理者メールアドレスと初期パスワードをチャットへ出さず、本人がブラウザへ入力して確認する段階です。
+- なし。管理者認証を含むProduction QAは完了しています。`ADMIN_INITIAL_PASSWORD`のRender Secret削除は任意の運用ハードニングであり、アプリの完了条件には影響しません。
 
 ## 永続化移行準備
 
@@ -112,7 +117,7 @@
 
 ## Remaining
 
-- Production管理者の実ログインと`/api/admin/status` 200確認は、本人が`/login`へ管理者資格情報を直接入力した後に実施します。パスワードはチャットへ貼り付けません。
+- `ADMIN_INITIAL_PASSWORD`（必要に応じて`ADMIN_EMAIL`も）のRender Secret削除は、ユーザーが任意で実施できる後処理です。削除手順はREADMEに記録しています。
 - 外部PostgreSQL／Object Storageへの実移行は将来作業として未実施です。
 
 ## Failed
@@ -121,7 +126,7 @@
 
 ## Blocked
 
-- Renderの有料Web Service + Persistent Diskはユーザーが承認・作成済みで、`OPENAI_API_KEY`と管理者用SecretはRender Secretとして設定済みです。実管理者ログイン検証だけが本人のブラウザ入力待ちです。
+- Renderの有料Web Service + Persistent Diskはユーザーが承認・作成済みで、`OPENAI_API_KEY`と管理者用SecretはRender Secretとして設定済みです。実管理者ログイン、ログアウト、再ログイン、認証済みadmin status 200を確認済みです。
 - 現行保存方式を維持した長期本番には有料構成が必要です。Free Web ServiceはPersistent Diskを利用できず、SQLite・画像・Knowledge・Exportが再起動／再デプロイ／スピンダウンで失われるため、`plan: free`への変更は行っていません。
 - Astraは現在の組織で利用できない場合にGPT-5.6 Solへフォールバックする設計です。秘密値は記録していません。
 
