@@ -2,6 +2,8 @@ services:
   - type: web
     name: story-to-manga
     runtime: python
+    # SQLiteと生成ファイルを永続化するdiskを使うため、Freeではなく現行Starter相当を明示する。
+    plan: 0.5c-512mb
     branch: main
     autoDeployTrigger: checksPass
     buildCommand: pip install -r requirements.txt

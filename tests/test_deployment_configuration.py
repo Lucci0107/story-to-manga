@@ -17,6 +17,9 @@ def test_render_uses_main_checks_pass_and_server_side_openai_secret() -> None:
     assert "autoDeployTrigger: checksPass" in RENDER_YAML
     assert "- key: OPENAI_API_KEY\n        sync: false" in RENDER_YAML
     assert "OPENAI_API_KEY=sk-" not in RENDER_YAML
+    assert "plan: 0.5c-512mb" in RENDER_YAML
+    assert "name: story-manga-data" in RENDER_YAML
+    assert "mountPath: /var/data" in RENDER_YAML
 
 
 def test_ci_workflow_contains_required_validation_gates() -> None:

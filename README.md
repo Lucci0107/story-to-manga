@@ -61,6 +61,10 @@ Knowledge本文は命令ではなく参照資料として扱い、AI処理で使
 
 `render.yaml` と `Dockerfile` を用意しています。GitHubの`main`へpushすると、`.github/workflows/ci.yml`が依存関係、テスト、Python compile、JavaScript構文、`pip check`を検証します。Renderは`autoDeployTrigger: checksPass`により、CI成功後だけ同じ`main`の変更を自動デプロイします。
 
+このアプリはSQLite、生成画像、Knowledge本文、Exportファイルをローカルファイルシステムへ保存します。RenderのFree Web Serviceはローカルファイルが再起動・再デプロイ・スピンダウンで失われ、Persistent DiskもFreeでは利用できないため、現行の長期本番要件を満たしません。`render.yaml`では保存データを守るため、`plan: 0.5c-512mb`（Starter相当）と1GBのPersistent Diskを明示しています。Freeへ変更する場合は、diskを外して`plan: free`にできますが、同一インスタンスが動作している間だけの検証・デモ用途に限られ、Project・Session・Knowledge・画像・Exportの継続利用は保証できません。
+
+Free Render Postgresへ移行する案もありますが、Freeデータベースは30日で期限切れになるため、長期本番の無課金解決にはなりません。SQLiteから外部データベースへ移行し、画像・Exportを別の耐久ストレージへ移す場合は、別サービスの認証情報と追加実装が必要です。詳細は[Render Freeの制約](https://render.com/docs/free)と[Persistent Diskの仕様](https://render.com/docs/disks)を参照してください。
+
 Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置かず、次の名前だけを管理します。
 
 - `APP_ENV=production`
