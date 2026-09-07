@@ -19,7 +19,7 @@ jobs:
     env:
       AI_PROVIDER: demo
       IMAGE_PROVIDER: demo
-      STORY_MANGA_DATA_DIR: ${{ runner.temp }}/story-manga-ci
+      STORY_MANGA_DATA_DIR: /tmp/story-manga-ci
     steps:
       - name: Checkout
         uses: actions/checkout@v5
