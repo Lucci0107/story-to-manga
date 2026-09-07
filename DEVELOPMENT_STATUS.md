@@ -74,7 +74,7 @@
 
 ## In Progress
 
-- GitHub/Renderの所有者認証を待つ本番デプロイ準備。ローカルCI、RenderのCI成功後自動デプロイ設定、公開後Smoke Checkは準備済み。
+- GitHub remote接続、`main` push、GitHub Actions CI成功まで完了。Renderの所有者認証・Git連携・Blueprint作成・Secret設定を待つ本番デプロイ準備。
 
 ## Remaining
 
@@ -87,15 +87,15 @@
 
 ## Blocked
 
-- GitHub repository作成/remote接続、Renderログイン/OAuth、実AI用secret入力は本人操作が必要です。
-- `gh auth status`ではGitHubアカウントの保存済みTokenが無効と報告されています。再認証後にremote作成またはRender連携へ進めます。
+- Renderログイン/OAuth、GitHub repositoryとのRender連携、実AI用secret入力は本人操作が必要です。
+- `gh auth status`ではGitHubアカウントの保存済みTokenが無効と報告されていますが、Gitの認証情報でremote設定と`main` pushは完了しています。Render連携にはRender側の所有者認証が必要です。
 - Renderダッシュボードはログイン画面で、Render CLI/専用Connectorも利用できません。in-app Browserでの自動公開はここで停止しています。
 - ローカル`.env`のOpenAIキーは設定済みで、実AIスモークは成功しました。Astraは現在の組織では未提供のため、実際の分析はGPT-5.6 Solへ安全にフォールバックしました。本番ではRender側のSecretへ同じ用途のキーを登録する必要があります。
 
 ## 外部接続待ち
 
-- このアプリ用のGitHub remoteは未作成です。ローカルGitは初期化済みです。
-- GitHub/Renderの所有者認証・接続情報もないため、本番デプロイとProduction QAは未実施です。`render.yaml`、Dockerfile、health checkは準備済みです。
+- GitHub remoteは`https://github.com/Lucci0107/story-to-manga.git`へ設定済みで、ローカル`main`はorigin/mainを追跡しています。GitHub repositoryはPublicの空repositoryから開始しました。
+- GitHub Actionsの`Validate application`は`79b763d`でsuccessを確認しました。Renderの所有者認証・連携情報がないため、本番デプロイとProduction QAは未実施です。`render.yaml`、Dockerfile、health checkは準備済みです。
 - ローカルのキーなし既定値はデモですが、`OPENAI_API_KEY`がある場合はプロバイダ未指定でもOpenAIを選択します。Renderは`AI_PROVIDER=openai` / `IMAGE_PROVIDER=openai`を設定済みで、`OPENAI_API_KEY`だけがSecret待ちです。
 
 ## Deployment
@@ -105,6 +105,9 @@
 - ローカル初回コミット: `213096b Build Story to Manga MVP with Knowledge Library`
 - AI接続コミット: `9e522f1 Connect OpenAI Responses and image providers`
 - 状態・Git安全設定コミット: `8f52105`、`16f135b`
+- GitHub remote / CI準備コミット: `6b39569`、CI修正`79b763d`
+- GitHub Actions CI成功確認: workflow run `34071596759`（`79b763d`）
+- GitHub repository: `https://github.com/Lucci0107/story-to-manga`
 - Production URLは未取得です。
 - GitHub Actionsの`.github/workflows/ci.yml`は`main` push / PRで依存関係、pytest、compileall、JavaScript構文、pip checkを実行します。RenderはCI成功後のみmainを自動デプロイする設定です。
 - `scripts/production_smoke.py`で公開URL、`/api/health`、Login、CSS/JSの到達性をJSONで確認できます。
