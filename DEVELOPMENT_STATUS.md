@@ -112,6 +112,8 @@
 - 状態・Git安全設定コミット: `8f52105`、`16f135b`
 - GitHub remote / CI準備コミット: `6b39569`、CI修正`79b763d`
 - GitHub Actions CI成功確認: workflow run `34071774041`（`65ba257`）
+- Render Free制約調査・有料永続構成明示コミット: `b76e818`
+- GitHub Actions CI成功確認: workflow run `34072335458`（`b76e818`）
 - GitHub repository: `https://github.com/Lucci0107/story-to-manga`
 - Production URLは未取得です（Render課金承認・Blueprint作成待ち）。
 - GitHub Actionsの`.github/workflows/ci.yml`は`main` push / PRで依存関係、pytest、compileall、JavaScript構文、pip checkを実行します。RenderはCI成功後のみmainを自動デプロイする設定です。
