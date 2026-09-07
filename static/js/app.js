@@ -840,6 +840,30 @@
       saveProject({ storyboard: storyboard, current_step: "storyboard" }, message, true);
     }
 
+    async function pollStoryboardJob(jobId, operationMessage, button) {
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await new Promise(function (resolve) { window.setTimeout(resolve, 2000); });
+        const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+        const job = (data.jobs || []).find(function (item) { return item.id === jobId; });
+        if (!job) throw new Error("Storyboardの処理状態を取得できませんでした");
+        if (job.status === "completed") {
+          await fetchProject(false);
+          render();
+          showToast("ページとコマの構成を作成しました");
+          return;
+        }
+        if (job.status === "failed") {
+          throw new Error(job.error || "Storyboardの生成に失敗しました");
+        }
+        updateProcessingDialog({
+          message: operationMessage,
+          progress: job.status === "queued" ? "生成キューで順番を待っています" : "AIがページとコマの構成を作成しています",
+          submessage: "完了後に生成結果を保存します。画面を閉じても処理は継続します。"
+        });
+      }
+      throw new Error("Storyboardの処理状況の確認がタイムアウトしました。しばらくしてから再読み込みしてください");
+    }
+
     async function generateStoryboard() {
       if (!state.analysis) { showToast("先に物語解析を生成してください", "error"); return; }
       const button = content.querySelector("[data-generate-storyboard]");
@@ -852,6 +876,15 @@
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/storyboard", { method: "POST", body: "{}" });
         state = data.project;
+        if (data.accepted && data.job?.id) {
+          updateProcessingDialog({
+            message: "ストーリーボードを生成しています…",
+            progress: "生成キューへ登録しました",
+            submessage: "Render上のバックグラウンド処理でネームを作成しています。"
+          });
+          await pollStoryboardJob(data.job.id, "ストーリーボードを生成しています…", button);
+          return;
+        }
         showToast("ページとコマの構成を作成しました");
         render();
       } catch (error) { showToast(error.message, "error"); if (button) button.disabled = false; }

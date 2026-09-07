@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.main import app
+from app.services.ai_pipeline import DemoAIProvider
 from app.services.knowledge import retrieve_knowledge_context
 
 
@@ -97,6 +98,47 @@ def test_project_pipeline_and_export(tmp_path: Path) -> None:
     assert zip_download.headers["content-type"].startswith("application/zip")
     with zipfile.ZipFile(io.BytesIO(zip_download.content)) as archive:
         assert any(name.startswith("pages/") and name.endswith(".png") for name in archive.namelist())
+
+
+def test_external_storyboard_uses_persisted_background_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """外部AIの長時間StoryboardをHTTPタイムアウトから切り離す。"""
+
+    client = client_for(tmp_path)
+    client.post(
+        "/register",
+        data={"email": "storyboard-job@example.com", "password": "long-password"},
+        follow_redirects=False,
+    )
+    created = client.post(
+        "/api/projects",
+        data={"title": "Storyboard Job", "story_text": "蒼は灯台へ向かった。"},
+    )
+    project_id = created.json()["project"]["id"]
+
+    monkeypatch.setattr("app.main.get_ai_provider", lambda _settings: DemoAIProvider())
+    assert client.post(f"/api/projects/{project_id}/analysis").status_code == 200
+    assert client.post(f"/api/projects/{project_id}/characters").status_code == 200
+
+    class ExternalDemoProvider(DemoAIProvider):
+        provider_name = "openai"
+        uses_external_api = True
+
+    monkeypatch.setattr(
+        "app.main.get_ai_provider", lambda _settings: ExternalDemoProvider()
+    )
+    storyboard = client.post(f"/api/projects/{project_id}/storyboard")
+    assert storyboard.status_code == 202
+    assert storyboard.json()["accepted"] is True
+    job_id = storyboard.json()["job"]["id"]
+
+    status = client.get(f"/api/projects/{project_id}/generation/status")
+    job = next(item for item in status.json()["jobs"] if item["id"] == job_id)
+    assert job["job_type"] == "storyboard"
+    assert job["status"] == "completed"
+    reloaded = client.get(f"/api/projects/{project_id}").json()["project"]
+    assert reloaded["storyboard"]
 
 
 def test_project_ownership_is_enforced(tmp_path: Path) -> None:

@@ -538,7 +538,10 @@ def record_generation_metadata(
 
 
 def create_generation_job(
-    project_id: str, target_id: str, idempotency_key: str
+    project_id: str,
+    target_id: Optional[str],
+    idempotency_key: str,
+    job_type: str = "panel_artwork",
 ) -> Optional[Dict[str, Any]]:
     """同じ処理が実行中なら新規Jobを作らない。"""
 
@@ -559,11 +562,56 @@ def create_generation_job(
             """
             INSERT INTO generation_jobs
               (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
-            VALUES (?, ?, ?, 'panel_artwork', 'queued', NULL, ?, ?)
+            VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?)
             """,
-            (job_id, project_id, target_id, idempotency_key, now),
+            (job_id, project_id, target_id, job_type, idempotency_key, now),
         )
     return get_generation_job(job_id)
+
+
+def create_async_generation_job(
+    project_id: str, job_type: str, idempotency_key: str
+) -> tuple[Optional[Dict[str, Any]], bool]:
+    """長時間のProject処理をJobへ登録し、新規作成かどうかも返す。"""
+
+    with connection() as conn:
+        existing = conn.execute(
+            """
+            SELECT * FROM generation_jobs
+            WHERE project_id = ? AND job_type = ? AND idempotency_key = ?
+              AND status IN ('queued', 'processing')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (project_id, job_type, idempotency_key),
+        ).fetchone()
+        if existing:
+            return dict(existing), False
+        job_id = str(uuid.uuid4())
+        now = utc_now()
+        conn.execute(
+            """
+            INSERT INTO generation_jobs
+              (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
+            VALUES (?, ?, NULL, ?, 'queued', NULL, ?, ?)
+            """,
+            (job_id, project_id, job_type, idempotency_key, now),
+        )
+    return get_generation_job(job_id), True
+
+
+def get_active_generation_job(project_id: str, job_type: str) -> Optional[Dict[str, Any]]:
+    """Project単位の長時間Jobが実行中か確認する。"""
+
+    with connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM generation_jobs
+            WHERE project_id = ? AND job_type = ? AND status IN ('queued', 'processing')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (project_id, job_type),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_generation_job(job_id: str) -> Optional[Dict[str, Any]]:

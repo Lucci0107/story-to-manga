@@ -448,6 +448,66 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             db.update_project(project_id, user_id, status="partially_failed")
 
 
+def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
+    """Storyboardの長時間AI処理をHTTP応答から切り離して実行する。"""
+
+    job = db.get_generation_job(job_id)
+    if not job:
+        return
+    db.update_generation_job(job_id, "processing")
+    try:
+        project = db.get_project(project_id, user_id)
+        if not project or not project.get("analysis"):
+            raise AIProviderError("先に物語解析を生成してください", retryable=False)
+        provider = get_ai_provider(project_ai_model_settings(project, user_id))
+        knowledge_context = retrieve_knowledge_context(
+            project_id,
+            user_id,
+            "storyboard",
+            str(project["analysis"]),
+        )
+        characters = project.get("characters") or provider.characters(
+            project["original_text"], project["analysis"], knowledge_context
+        )
+        storyboard = provider.storyboard(
+            project["original_text"],
+            project["analysis"],
+            project["settings"],
+            characters,
+            knowledge_context,
+        )
+        characters = normalize_characters(characters)
+        storyboard = normalize_storyboard(storyboard)
+        if not project.get("characters"):
+            record_provider_generation(project_id, user_id, provider)
+        record_provider_generation(project_id, user_id, provider)
+        for page in storyboard:
+            for panel in page.get("panels", []):
+                panel["knowledge_refs"] = knowledge_context.get("references", [])
+        db.update_project(
+            project_id,
+            user_id,
+            characters=characters,
+            storyboard=storyboard,
+            status="storyboard_ready",
+            current_step="storyboard",
+            clear_quality_check=True,
+        )
+        db.update_generation_job(job_id, "completed")
+    except Exception as exc:  # noqa: BLE001
+        message = safe_job_error(exc)
+        logger.error("storyboard generation failed: %s", message)
+        project = db.get_project(project_id, user_id)
+        if project:
+            db.update_project(
+                project_id,
+                user_id,
+                status="partially_failed",
+                current_step="storyboard",
+            )
+        db.update_generation_job(job_id, "failed", message)
+
+
 def demo_story() -> str:
     return (
         "夕暮れの町で、蒼は古いキーホルダーを握りしめて灯台へ向かった。\n\n"
@@ -1115,11 +1175,49 @@ async def api_generate_characters(project_id: str, user=Depends(current_user)):
 
 
 @app.post("/api/projects/{project_id}/storyboard")
-async def api_generate_storyboard(project_id: str, user=Depends(current_user)):
+async def api_generate_storyboard(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(current_user),
+):
     project = require_project(project_id, user["id"])
     if not project.get("analysis"):
         raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
+
+    if getattr(provider, "uses_external_api", False):
+        job, created = db.create_async_generation_job(
+            project_id,
+            "storyboard",
+            f"storyboard:{project_id}",
+        )
+        if not job:
+            raise HTTPException(status_code=503, detail="Storyboard処理を開始できませんでした")
+        if created:
+            updated = db.update_project(
+                project_id,
+                user["id"],
+                status="processing",
+                current_step="storyboard",
+            )
+            background_tasks.add_task(
+                process_storyboard_job,
+                project_id,
+                user["id"],
+                str(job["id"]),
+            )
+        else:
+            updated = project
+        return JSONResponse(
+            {
+                "accepted": True,
+                "job": job,
+                "project": project_view(updated or project),
+                "mode": provider.provider_name,
+            },
+            status_code=202,
+        )
+
     knowledge_context = retrieve_knowledge_context(
         project_id,
         user["id"],
