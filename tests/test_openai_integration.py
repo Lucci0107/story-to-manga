@@ -13,6 +13,7 @@ from PIL import Image
 
 from app.services.ai_pipeline import OpenAIProvider
 from app.services.artwork import ArtworkGenerationError, save_openai_image
+from app.services.storage import LocalFileStorage
 
 
 class FakeHTTPResponse:
@@ -285,15 +286,16 @@ def test_openai_image_base64_is_validated_and_saved(tmp_path: Path, monkeypatch:
         return FakeHTTPResponse({"data": [{"b64_json": encoded}]})
 
     monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
-    target = tmp_path / "panel.png"
+    storage = LocalFileStorage(tmp_path)
+    storage_key = storage.asset_key("project-1", "panel.png")
     save_openai_image(
         {"generation_prompt": "白黒の灯台のコマ"},
         runtime_settings(),
-        target,
+        storage,
+        storage_key,
     )
 
-    assert target.exists()
-    with Image.open(target) as image:
+    with Image.open(io.BytesIO(storage.get_bytes(storage_key))) as image:
         assert image.size == (8, 8)
 
 
@@ -304,5 +306,11 @@ def test_invalid_openai_image_is_user_visible(tmp_path: Path, monkeypatch: pytes
         return FakeHTTPResponse({"data": [{"b64_json": base64.b64encode(b"bad").decode("ascii")}]})
 
     monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    storage = LocalFileStorage(tmp_path)
     with pytest.raises(ArtworkGenerationError):
-        save_openai_image({"generation_prompt": "画像"}, runtime_settings(), tmp_path / "bad.png")
+        save_openai_image(
+            {"generation_prompt": "画像"},
+            runtime_settings(),
+            storage,
+            storage.asset_key("project-1", "bad.png"),
+        )

@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功まで確認済みです。本番デプロイはRender認証と課金承認待ちです。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功まで確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番デプロイはRender認証と課金承認待ちです。
 
 ```text
 本文入力 / ファイル抽出
@@ -55,13 +55,19 @@
 - RenderではFree Web ServiceにPersistent Diskを付けられず、現行のSQLite・画像・Knowledge・Export保存を守るには有料Web Serviceが必要であることを確認
 - `render.yaml`のWeb Service planを`0.5c-512mb`（Starter相当）として明示し、1GB Persistent Diskを維持
 - `.env` / `.env.*` のGit除外ルール（`.env.example`は例外）
+- `DATABASE_URL`でSQLite／PostgreSQL backendを切り替えるDatabase serviceと、DB-API差分を隠すRepository接続境界
+- `StorageService`とLocalFileStorageによる画像／Export保存の集約、Storage key保存、旧`file_path`の読み出し互換
+- 外部PostgreSQL／Object Storageの実接続・既存データ移行を行わずに、将来の移行設定・依存関係・テスト境界を準備
 
 ## 検証済み
 
-- `pytest`: 39 passed（既存26 + AIモデル設定7 + Processing Dialog 4 + deployment automation 2）
+- `pytest`: 47 passed（既存テスト + 永続化境界・Storage key回帰確認）
+- `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
 - `pip check`
+- 永続化変更後のAPIテストで、画像取得、PDF／ZIP生成・ダウンロード、ExportのStorage key保存を確認
+- 永続化境界変更後、隔離SQLite領域で`production_smoke.py`を実行し、health、ログイン画面、CSS、JavaScriptのHTTP到達性を確認（全項目OK）
 - APIキー文字列のソース混入チェック（検出なし）
 - 実ブラウザで新規登録、KnowledgeのMarkdown/direct入力、Version追加・旧Version有効化、Project紐付け、Scope/優先度/follow-latest/pinned設定を確認
 - 実ブラウザで物語抽出、解析、設定、Character Bible編集、ネーム編集、コマ生成・個別再生成、QA、Preview、PDF/ZIP Export、リロード復元を確認
@@ -77,6 +83,13 @@
 ## In Progress
 
 - GitHub remote接続、`main` push、GitHub Actions CI成功まで完了。Renderの所有者認証・Git連携・Blueprint作成・Secret設定・課金承認を待つ本番デプロイ準備。
+
+## 永続化移行準備
+
+- 現行の既定値はSQLite＋LocalFileStorageで、既存の`data/`レイアウトとローカル開発フローを維持しています。
+- `DATABASE_URL`がPostgreSQLの場合は`psycopg` backendを選択できます。接続失敗時に認証情報をエラーやログへ含めない設計です。
+- 画像・Exportの業務処理はStorage keyだけを扱い、Pathと`read_bytes`／`write_bytes`はLocalFileStorageへ閉じ込めています。
+- 外部DB／Object Storageへの実移行、既存SQLiteデータのバックフィル、S3互換backendの実装は今回の対象外です。データを失う設定変更は行っていません。
 
 ## Remaining
 

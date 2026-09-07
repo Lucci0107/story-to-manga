@@ -57,6 +57,12 @@ Knowledge本文は命令ではなく参照資料として扱い、AI処理で使
 - Knowledgeも同様に参照コンテンツとして扱い、プロンプト境界を明示します。
 - APIキーや本文を通常ログへ出力しません。
 
+## 永続化層と将来の外部サービス移行
+
+DB接続先は`DATABASE_URL`で切り替えられます。未指定時は従来どおり`STORY_MANGA_DATA_DIR`配下のSQLiteを使い、`sqlite:///...`を明示してもSQLiteを選べます。`postgresql://...`または`postgres://...`を指定すると、Repository層がPostgreSQL接続を選択します。PostgreSQL用依存関係とスキーマ適用の境界は準備済みですが、既存SQLiteデータの移行を自動では行いません。実移行時にはバックアップ、データ移行、整合性確認を別途実施します。
+
+生成画像とExportは`StorageService`へ集約し、現在は`STORAGE_BACKEND=local`の`data/assets`・`data/exports`を使います。DBにはローカル絶対パスではなくStorage keyを保存し、既存Exportの`file_path`も読み出し時だけ互換参照します。そのため、将来S3互換Object Storage実装を追加して同じStorage契約へ切り替えられます。`STORAGE_BUCKET`、`STORAGE_ENDPOINT_URL`、`STORAGE_REGION`などの設定名は予約済みですが、今回の変更では外部Storageへ接続しません。`STORAGE_BACKEND`に未実装の値を指定した場合は、ローカルへ黙って保存せず設定エラーにします。
+
 ## Render
 
 `render.yaml` と `Dockerfile` を用意しています。GitHubの`main`へpushすると、`.github/workflows/ci.yml`が依存関係、テスト、Python compile、JavaScript構文、`pip check`を検証します。Renderは`autoDeployTrigger: checksPass`により、CI成功後だけ同じ`main`の変更を自動デプロイします。

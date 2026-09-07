@@ -10,7 +10,7 @@ import base64
 import binascii
 from io import BytesIO
 import re
-from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Dict
 from urllib.parse import urlparse
 
@@ -19,6 +19,7 @@ from PIL import Image, ImageColor, ImageDraw
 from ..config import get_settings
 from .openai_client import OpenAIRequestError, request_bytes, request_json
 from .model_registry import is_allowed_image_model, model_for_task, new_generation_metadata
+from .storage import StorageError, StorageService, get_storage
 
 
 class ArtworkGenerationError(RuntimeError):
@@ -127,40 +128,47 @@ def save_panel_artwork(
     panel: Dict[str, Any],
     settings: Dict[str, Any],
     model_settings: Dict[str, Any] | None = None,
+    storage: StorageService | None = None,
 ) -> str:
-    """パネルのrevisionごとにファイルを分け、過去生成物を上書きしない。"""
+    """パネルのrevisionごとにStorageへ保存し、過去生成物を上書きしない。"""
 
     revision = int(panel.get("revision", 0)) + 1
     panel["revision"] = revision
-    project_dir = get_settings().asset_dir / _slug(project_id)
-    project_dir.mkdir(parents=True, exist_ok=True)
+    storage = storage or get_storage()
+    filename = f"{_slug(str(panel.get('id', 'panel')))}-r{revision}.png"
+    storage_key = storage.asset_key(project_id, filename)
     runtime = get_settings()
     if runtime.image_provider == "openai" and runtime.openai_api_key:
-        filename = f"{_slug(str(panel.get('id', 'panel')))}-r{revision}.png"
-        path = project_dir / filename
         image_model = model_for_task(
             model_settings or {"image_model": runtime.openai_image_model}, "image"
         )
-        actual_model = save_openai_image(panel, runtime, path, model_id=image_model)
+        actual_model = save_openai_image(
+            panel, runtime, storage, storage_key, model_id=image_model
+        )
         panel["generation_metadata"] = new_generation_metadata(
             task="image",
             requested_model=image_model,
             actual_model=actual_model,
         )
-        return str(path)
-    filename = f"{_slug(str(panel.get('id', 'panel')))}-r{revision}.png"
-    path = project_dir / filename
-    render_panel_image(panel, settings).save(path, format="PNG", optimize=True)
+        return storage_key
+    buffer = BytesIO()
+    render_panel_image(panel, settings).save(buffer, format="PNG", optimize=True)
+    storage.put_bytes(storage_key, buffer.getvalue(), content_type="image/png")
     panel["generation_metadata"] = new_generation_metadata(
         task="image", requested_model="demo", actual_model="demo", provider="demo"
     )
-    return str(path)
+    return storage_key
 
 
 def save_openai_image(
-    panel: Dict[str, Any], runtime: Any, path: Path, *, model_id: str | None = None
+    panel: Dict[str, Any],
+    runtime: Any,
+    storage: StorageService,
+    storage_key: str,
+    *,
+    model_id: str | None = None,
 ) -> str:
-    """OpenAI Images APIのbase64レスポンスをサーバー側へ保存する。"""
+    """OpenAI Images APIの画像を検証し、Storageへ保存する。"""
 
     requested_model = model_id if is_allowed_image_model(str(model_id or "")) else runtime.openai_image_model
     if not is_allowed_image_model(str(requested_model)):
@@ -183,7 +191,9 @@ def save_openai_image(
         encoded = image_data.get("b64_json")
         if encoded:
             image_bytes = base64.b64decode(encoded, validate=True)
-            path.write_bytes(_validate_image_bytes(image_bytes))
+            storage.put_bytes(
+                storage_key, _validate_image_bytes(image_bytes), content_type="image/png"
+            )
             response_model = body.get("model")
             return str(response_model) if is_allowed_image_model(str(response_model)) else str(requested_model)
         image_url = image_data.get("url")
@@ -197,13 +207,15 @@ def save_openai_image(
                 timeout=getattr(runtime, "openai_timeout_seconds", 120.0),
                 max_retries=getattr(runtime, "openai_max_retries", 1),
             )
-            path.write_bytes(_validate_image_bytes(image_bytes))
+            storage.put_bytes(
+                storage_key, _validate_image_bytes(image_bytes), content_type="image/png"
+            )
             response_model = body.get("model")
             return str(response_model) if is_allowed_image_model(str(response_model)) else str(requested_model)
         raise ValueError("画像データがありません")
     except OpenAIRequestError as exc:
         raise ArtworkGenerationError(str(exc)) from exc
-    except (AttributeError, OSError, ValueError, KeyError, IndexError, TypeError, binascii.Error) as exc:
+    except (AttributeError, OSError, ValueError, KeyError, IndexError, TypeError, binascii.Error, StorageError) as exc:
         raise ArtworkGenerationError("画像生成サービスから有効な画像を取得できませんでした") from exc
 
 
@@ -220,5 +232,7 @@ def _validate_image_bytes(image_bytes: bytes) -> bytes:
     return image_bytes
 
 
-def asset_url(project_id: str, path: str) -> str:
-    return f"/media/{_slug(project_id)}/{Path(path).name}"
+def asset_url(project_id: str, storage_key: str) -> str:
+    """既存のmedia URL契約を維持しつつ、DBへ保存する参照はStorage keyにする。"""
+
+    return f"/media/{_slug(project_id)}/{PurePosixPath(str(storage_key)).name}"

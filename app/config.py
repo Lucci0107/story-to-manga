@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -60,11 +60,19 @@ class Settings:
 
     app_env: str
     data_dir: Path
+    database_url: str
+    database_connect_timeout_seconds: int
+    storage_backend: str
+    storage_bucket: str
+    storage_endpoint_url: str
+    storage_region: str
+    storage_access_key_id: str = field(repr=False)
+    storage_secret_access_key: str = field(repr=False)
     max_upload_bytes: int
     session_days: int
     ai_provider: str
     image_provider: str
-    openai_api_key: str
+    openai_api_key: str = field(repr=False)
     openai_responses_url: str
     openai_base_url: str
     openai_models_url: str
@@ -94,12 +102,23 @@ def get_settings() -> Settings:
 
     _load_local_env()
     configured_data_dir = os.getenv("STORY_MANGA_DATA_DIR", str(BASE_DIR / "data"))
+    data_dir = Path(configured_data_dir).expanduser().resolve()
+    configured_database_url = os.getenv("DATABASE_URL", "").strip()
+    database_url = configured_database_url or f"sqlite:///{(data_dir / 'story_manga.sqlite3').as_posix()}"
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     configured_ai_provider = os.getenv("AI_PROVIDER")
     configured_image_provider = os.getenv("IMAGE_PROVIDER")
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),
-        data_dir=Path(configured_data_dir).expanduser().resolve(),
+        data_dir=data_dir,
+        database_url=database_url,
+        database_connect_timeout_seconds=max(1, min(60, _int_env("DATABASE_CONNECT_TIMEOUT_SECONDS", 10))),
+        storage_backend=os.getenv("STORAGE_BACKEND", "local").strip().lower() or "local",
+        storage_bucket=os.getenv("STORAGE_BUCKET", "").strip(),
+        storage_endpoint_url=os.getenv("STORAGE_ENDPOINT_URL", "").strip(),
+        storage_region=os.getenv("STORAGE_REGION", "").strip(),
+        storage_access_key_id=os.getenv("STORAGE_ACCESS_KEY_ID", "").strip(),
+        storage_secret_access_key=os.getenv("STORAGE_SECRET_ACCESS_KEY", "").strip(),
         max_upload_bytes=_int_env("MAX_UPLOAD_BYTES", 5 * 1024 * 1024),
         session_days=max(1, _int_env("SESSION_DAYS", 14)),
         ai_provider=(configured_ai_provider or ("openai" if api_key else "demo")).lower(),

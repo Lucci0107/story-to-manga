@@ -1,7 +1,9 @@
-"""SQLite永続化層。
+"""制作データのRepository層。
 
 Projectの制作データはJSON列にまとめつつ、検索と所有権確認に必要な値は
 通常の列として保持する。AIの出力は編集可能な中間データとして保存する。
+接続先の選択やDB-API差分はservices.databaseへ委譲し、SQLite固有処理を
+Repositoryの外へ閉じ込める。
 """
 
 from __future__ import annotations
@@ -9,12 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from .config import ensure_data_dirs, get_settings
+from .config import get_settings
+from .services.database import DatabaseConnection, connection as database_connection
 from .services.model_registry import DEFAULT_AI_MODEL_SETTINGS
 
 
@@ -46,15 +48,10 @@ def _loads(value: Optional[str], fallback: Any) -> Any:
         return fallback
 
 
-def connection() -> sqlite3.Connection:
-    """リクエスト単位のSQLite接続を返す。"""
+def connection() -> DatabaseConnection:
+    """Repository向けに設定済みbackendの接続を返す。"""
 
-    settings = ensure_data_dirs()
-    conn = sqlite3.connect(settings.database_path, timeout=20)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+    return database_connection()
 
 
 def init_db() -> None:
@@ -113,6 +110,7 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 format TEXT NOT NULL,
+                storage_key TEXT,
                 file_path TEXT,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -188,9 +186,7 @@ def init_db() -> None:
                 ON project_knowledge(project_id, enabled, priority DESC);
             """
         )
-        project_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
-        }
+        project_columns = conn.table_columns("projects")
         if "quality_check_json" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN quality_check_json TEXT")
         if "ai_model_settings_json" not in project_columns:
@@ -199,16 +195,15 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE projects ADD COLUMN generation_metadata_json TEXT NOT NULL DEFAULT '[]'"
             )
-        user_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()
-        }
+        user_columns = conn.table_columns("users")
         if "ai_model_settings_json" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN ai_model_settings_json TEXT")
-        knowledge_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()
-        }
+        knowledge_columns = conn.table_columns("knowledge_documents")
         if "archived" not in knowledge_columns:
             conn.execute("ALTER TABLE knowledge_documents ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        export_columns = conn.table_columns("exports")
+        if "storage_key" not in export_columns:
+            conn.execute("ALTER TABLE exports ADD COLUMN storage_key TEXT")
 
 
 def hash_password(password: str) -> str:
@@ -253,14 +248,14 @@ def create_user(email: str, password: str) -> Dict[str, Any]:
     return {"id": user_id, "email": email.lower().strip(), "created_at": created_at}
 
 
-def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
+def get_user_by_email(email: str) -> Optional[Mapping[str, Any]]:
     with connection() as conn:
         return conn.execute(
             "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)
         ).fetchone()
 
 
-def get_user(user_id: str) -> Optional[sqlite3.Row]:
+def get_user(user_id: str) -> Optional[Mapping[str, Any]]:
     with connection() as conn:
         return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
@@ -305,7 +300,7 @@ def create_session(user_id: str) -> str:
     return token
 
 
-def get_user_by_session(token: Optional[str]) -> Optional[sqlite3.Row]:
+def get_user_by_session(token: Optional[str]) -> Optional[Mapping[str, Any]]:
     if not token:
         return None
     token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -331,7 +326,7 @@ def delete_session(token: Optional[str]) -> None:
         conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
 
 
-def _project_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "id": row["id"],
         "user_id": row["user_id"],
@@ -601,13 +596,15 @@ def list_generation_jobs(project_id: str) -> List[Dict[str, Any]]:
 
 
 def create_export(
-    project_id: str, file_format: str, file_path: Optional[str], status: str
+    project_id: str, file_format: str, storage_key: Optional[str], status: str
 ) -> Dict[str, Any]:
+    """Export記録を作成する。storage_keyはbackend非依存の参照値として保存する。"""
+
     export_id = str(uuid.uuid4())
     with connection() as conn:
         conn.execute(
-            "INSERT INTO exports (id, project_id, format, file_path, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (export_id, project_id, file_format, file_path, status, utc_now()),
+            "INSERT INTO exports (id, project_id, format, storage_key, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (export_id, project_id, file_format, storage_key, status, utc_now()),
         )
     return get_export(export_id)  # type: ignore[return-value]
 
@@ -615,16 +612,22 @@ def create_export(
 def get_export(export_id: str) -> Optional[Dict[str, Any]]:
     with connection() as conn:
         row = conn.execute("SELECT * FROM exports WHERE id = ?", (export_id,)).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    result = dict(row)
+    # 旧SQLite行はfile_pathだけを持つため、移行完了まで互換参照を返す。
+    if not result.get("storage_key"):
+        result["storage_key"] = result.get("file_path")
+    return result
 
 
 def update_export(
-    export_id: str, file_path: Optional[str], status: str
+    export_id: str, storage_key: Optional[str], status: str
 ) -> Optional[Dict[str, Any]]:
     with connection() as conn:
         conn.execute(
-            "UPDATE exports SET file_path = ?, status = ? WHERE id = ?",
-            (file_path, status, export_id),
+            "UPDATE exports SET storage_key = ?, status = ? WHERE id = ?",
+            (storage_key, status, export_id),
         )
     return get_export(export_id)
 
@@ -637,7 +640,7 @@ def delete_project(project_id: str, user_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def _knowledge_document_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _knowledge_document_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     """Knowledge DocumentのDB行をAPI内部の辞書へ変換する。"""
 
     keys = set(row.keys())
@@ -984,7 +987,7 @@ def list_project_knowledge(project_id: str, user_id: str) -> Optional[List[Dict[
             LEFT JOIN knowledge_versions av ON av.id = d.active_version_id
             LEFT JOIN knowledge_versions sv ON sv.id = pk.selected_version_id
             WHERE pk.project_id = ? AND d.user_id = ?
-            ORDER BY pk.priority DESC, d.title COLLATE NOCASE
+            ORDER BY pk.priority DESC, LOWER(d.title)
             """,
             (project_id, user_id),
         ).fetchall()

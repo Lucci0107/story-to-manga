@@ -19,7 +19,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -58,6 +58,12 @@ from .services.model_registry import (
     model_registry_view,
     resolve_model_settings,
     validate_model_settings,
+)
+from .services.storage import (
+    StorageConfigurationError,
+    StorageError,
+    StorageObjectNotFound,
+    get_storage,
 )
 
 
@@ -407,7 +413,7 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
             latest_panel["generation_prompt"] = append_knowledge_prompt(base_prompt, knowledge_context)
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
-            file_path = save_panel_artwork(
+            storage_key = save_panel_artwork(
                 latest["id"], latest_panel, latest["settings"], model_settings
             )
             image_metadata = latest_panel.get("generation_metadata")
@@ -415,7 +421,7 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                 image_event = dict(image_metadata)
                 image_event["target_id"] = str(latest_panel["id"])
                 db.record_generation_metadata(project_id, user_id, image_event)
-            latest_panel["image_url"] = asset_url(latest["id"], file_path)
+            latest_panel["image_url"] = asset_url(latest["id"], storage_key)
             latest_panel["generation_status"] = "completed"
             latest_panel["generation_error"] = None
             db.update_project(project_id, user_id, storyboard=latest["storyboard"], clear_quality_check=True)
@@ -653,11 +659,15 @@ async def project_media(project_id: str, filename: str, user=Depends(current_use
     project = require_project(project_id, user["id"])
     safe_project_id = Path(project["id"]).name
     safe_filename = Path(filename).name
-    path = get_settings().asset_dir / safe_project_id / safe_filename
-    if not path.exists() or not path.is_file():
+    try:
+        storage = get_storage()
+        content = storage.get_bytes(storage.asset_key(safe_project_id, safe_filename))
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except (StorageError, StorageObjectNotFound):
         raise HTTPException(status_code=404, detail="画像が見つかりません")
-    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return FileResponse(path, media_type=media_type)
+    media_type = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
+    return Response(content=content, media_type=media_type)
 
 
 @app.get("/api/health")
@@ -1241,19 +1251,27 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
 @app.post("/api/projects/{project_id}/export")
 async def api_export(project_id: str, payload: ExportRequest, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
+    try:
+        storage = get_storage()
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
     export_record = db.create_export(project_id, payload.format, None, "processing")
-    settings = get_settings()
-    target = settings.export_dir / f"{project_id}-{export_record['id']}.{payload.format}"
+    storage_key = storage.export_key(project_id, export_record["id"], payload.format)
     try:
         if payload.format == "pdf":
-            export_pdf(project, target)
+            content = export_pdf(project, storage)
         else:
-            export_zip(project, target)
+            content = export_zip(project, storage)
+        storage.put_bytes(
+            storage_key,
+            content,
+            content_type="application/pdf" if payload.format == "pdf" else "application/zip",
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("export failed")
         db.update_export(export_record["id"], None, "failed")
         raise HTTPException(status_code=500, detail="書き出しに失敗しました") from exc
-    completed = db.update_export(export_record["id"], str(target), "completed")
+    completed = db.update_export(export_record["id"], storage_key, "completed")
     ungenerated = [
         panel.get("id")
         for _page, panel in all_panels(project)
@@ -1272,9 +1290,19 @@ async def api_download_export(project_id: str, export_id: str, user=Depends(curr
     export_record = db.get_export(export_id)
     if not export_record or export_record["project_id"] != project_id or export_record["status"] != "completed":
         raise HTTPException(status_code=404, detail="書き出しファイルが見つかりません")
-    path = Path(str(export_record["file_path"])).resolve()
-    export_root = get_settings().export_dir.resolve()
-    if export_root not in path.parents or not path.exists():
+    storage_key = export_record.get("storage_key") or export_record.get("file_path")
+    try:
+        storage = get_storage()
+        content = storage.get_bytes(str(storage_key or ""))
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except (StorageError, StorageObjectNotFound):
         raise HTTPException(status_code=404, detail="書き出しファイルが見つかりません")
     media_type = "application/pdf" if export_record["format"] == "pdf" else "application/zip"
-    return FileResponse(path, media_type=media_type, filename=f"story-to-manga.{export_record['format']}")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename=story-to-manga.{export_record['format']}"
+        },
+    )

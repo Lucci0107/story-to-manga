@@ -81,6 +81,10 @@ def test_project_pipeline_and_export(tmp_path: Path) -> None:
 
     exported = client.post(f"/api/projects/{project_id}/export", json={"format": "pdf"})
     assert exported.status_code == 200
+    export_record = db.get_export(exported.json()["export"]["id"])
+    assert export_record is not None
+    assert export_record["storage_key"].startswith("exports/")
+    assert not Path(export_record["storage_key"]).is_absolute()
     downloaded = client.get(exported.json()["download_url"])
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"].startswith("application/pdf")

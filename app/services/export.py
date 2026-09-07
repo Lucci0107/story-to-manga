@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import zipfile
-from pathlib import Path
+from io import BytesIO
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
@@ -15,8 +16,8 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
-from ..config import get_settings
 from .artwork import render_panel_image
+from .storage import StorageError, StorageObjectNotFound, StorageService, get_storage
 
 
 PDF_FONT = "Helvetica"
@@ -93,22 +94,27 @@ def _crop_image_to_box(image: Image.Image, width: float, height: float, crop_mod
 
 
 def _panel_asset(
-    project: Dict[str, Any], panel: Dict[str, Any], width: float, height: float
+    project: Dict[str, Any],
+    panel: Dict[str, Any],
+    width: float,
+    height: float,
+    storage: StorageService,
 ) -> Optional[ImageReader]:
-    """生成済みのローカル画像をPDFへ渡し、表示方法も反映する。"""
+    """Storageから生成済み画像を読み、表示方法も反映する。"""
 
     image_url = str(panel.get("image_url") or "")
-    filename = Path(image_url).name
+    filename = PurePosixPath(image_url).name
     if not filename:
         return None
-    source = get_settings().asset_dir / str(project.get("id")) / filename
-    if source.suffix.lower() == ".svg":
+    if PurePosixPath(filename).suffix.lower() == ".svg":
         image = render_panel_image(panel, project.get("settings") or {})
         return ImageReader(_crop_image_to_box(image, width, height, panel.get("crop_mode", "fit")))
-    if not source.exists() or not source.is_file():
+    try:
+        source_bytes = storage.get_bytes(storage.asset_key(str(project.get("id")), filename))
+    except (StorageError, StorageObjectNotFound):
         return None
     try:
-        with Image.open(source) as image:
+        with Image.open(BytesIO(source_bytes)) as image:
             prepared = _crop_image_to_box(
                 image.convert("RGB"), width, height, panel.get("crop_mode", "fit")
             )
@@ -117,11 +123,13 @@ def _panel_asset(
         return None
 
 
-def export_pdf(project: Dict[str, Any], path: Path) -> None:
-    """生成済みパネル画像へアプリ側の文字要素を重ねたPDFを作る。"""
+def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -> bytes:
+    """生成済みパネル画像へアプリ側の文字要素を重ねたPDFを返す。"""
 
+    storage = storage or get_storage()
     width, height = A4
-    c = canvas.Canvas(str(path), pagesize=A4)
+    output = BytesIO()
+    c = canvas.Canvas(output, pagesize=A4)
     c.setTitle(project.get("title", "Story to Manga"))
     for page in project.get("storyboard", []):
         c.setFillColorRGB(0.96, 0.95, 0.91)
@@ -133,7 +141,7 @@ def export_pdf(project: Dict[str, Any], path: Path) -> None:
         c.drawRightString(width - 42, height - 56, f"PAGE {page.get('page_number', '')}")
         for panel, box in zip(page.get("panels", []), _page_panel_boxes(page, width, height)):
             x, y, box_width, box_height = box
-            asset = _panel_asset(project, panel, box_width, box_height)
+            asset = _panel_asset(project, panel, box_width, box_height, storage)
             c.saveState()
             c.setFillColorRGB(0.88, 0.88, 0.85)
             c.roundRect(x, y, box_width, box_height, 8, stroke=0, fill=1)
@@ -171,13 +179,15 @@ def export_pdf(project: Dict[str, Any], path: Path) -> None:
         c.drawString(42, height - 58, "まだネームが生成されていません")
         c.showPage()
     c.save()
+    return output.getvalue()
 
 
-def export_zip(project: Dict[str, Any], path: Path) -> None:
-    """ページ構成、生成画像、編集可能なJSONをまとめる。"""
+def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -> bytes:
+    """ページ構成、生成画像、編集可能なJSONをStorageからまとめて返す。"""
 
-    settings = get_settings()
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    storage = storage or get_storage()
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         manifest = {
             "title": project.get("title"),
             "settings": project.get("settings"),
@@ -187,9 +197,12 @@ def export_zip(project: Dict[str, Any], path: Path) -> None:
         for page in project.get("storyboard", []):
             for panel in page.get("panels", []):
                 image_url = panel.get("image_url") or ""
-                filename = Path(image_url).name
+                filename = PurePosixPath(str(image_url)).name
                 if not filename:
                     continue
-                source = settings.asset_dir / project["id"] / filename
-                if source.exists():
-                    archive.write(source, f"pages/page-{page.get('page_number')}/{filename}")
+                try:
+                    content = storage.get_bytes(storage.asset_key(str(project["id"]), filename))
+                except (StorageError, StorageObjectNotFound):
+                    continue
+                archive.writestr(f"pages/page-{page.get('page_number')}/{filename}", content)
+    return output.getvalue()
