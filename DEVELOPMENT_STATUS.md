@@ -1,6 +1,6 @@
 # Story to Manga 開発状況
 
-更新日: 2026-09-08
+更新日: 2026-09-09
 
 ## 現在の状態
 
@@ -126,11 +126,14 @@
 - 最新Production QA: `https://story-to-manga-b6bb.onrender.com`で合成ProjectのStoryboardを実AIで1回だけ生成し、`processing → completed`、8ページ・34コマ表示、実行モデル`gpt-5.6-sol`、Processing Dialog終了、ボタン復帰、reload後のネーム保持、`コマ生成へ`の次工程遷移を確認しました。画像生成は実行していません。
 - Panel生成の全体進捗UXを追加：既存Processing Dialogへ、同一生成リクエスト単位の`batch_id`に基づく`completed / generating / waiting / failed`件数、現在のページ・コマ、heartbeat時刻を接続しました。active JobがwaitingだけでもDialogを維持し、個別再生成では対象コマだけを集計します。
 - Panel生成のreload・画面遷移復元と通信耐性を追加：server-sideのactive Jobを再取得してDialogとpollingを復元し、一時的なpolling失敗ではJobを停止せず、連続失敗・長時間未収束時は「状態不明」と再読み込み操作を表示します。既存のstale recovery、duplicate防止、個別Retryを維持しています。
+- Panel Jobの状態不明処理を強化：連続したtimeout／network／429／5xxではbounded reconnect後にblocking Dialogを閉じ、画面内の非ブロッキング警告から「状態を再確認」または「再読み込み」へ誘導します。401/403は再ログイン導線、404はProject本体の一度だけの再取得へ分岐し、AbortController・run token・単一pollerで古い応答の上書きと永久pollingを防止します。
+- 対応するactive Jobを失ったqueued/processing Panelをserver-sideでfailed／Retry可能へ収束させる孤児状態復旧を追加しました。既存のstale recovery、atomic保存、重複生成防止、個別再生成は変更していません。
 - Panel Jobの完了・失敗をProject保存と同一transactionで確定し、stale失敗Jobを遅いBackgroundTaskが再開・completedへ戻さないRepository境界を追加しました。ローカルdemoの一括生成、waiting/generating表示、reload復元、完了後のDialog終了と操作復帰を実ブラウザで確認しました。
 - `f4f216f`のGitHub Actions CI（run `34226922292`）はsuccess、Render自動deploy後の`/api/health`はHTTP 200、Production smokeのhealth/login/CSS/JavaScriptも全項目成功しました。
 - Panel生成のProduction QA: 本番の新規合成ProjectでStory Analysis、AI漫画化設定、Character Bible、8ページStoryboardを実AIで生成し、画像生成は個別コマを2枚だけ実行しました。1枚目の`completed / gpt-image-2 / revision 1`保存、2枚目の生成中reload後の中央Processing Dialog復元（`0 / 1 完了・生成中 1`、ページ・コマ表示）、完了後のDialog終了、`2 / 31`保存済み表示、reload後の画像保持を確認しました。
 - Panel生成のProduction UX: 390px viewportでactive JobのDialog復元とコマ進捗表示を確認し、横overflowなし（body scroll width 375px / viewport client width 375px）、Production console error 0件を確認しました。`/api/health`はHTTP 200、OpenAI/image provider表示、最新`app.css?v=8`／`app.js?v=9`配信も確認済みです。
 - Panel生成の最新コミット`daeefec`（GitHub Actions run `34239836516`）はsuccess、CI通過後のRender自動deployで変更済みassetが本番へ反映されました。
+- Panel Job状態不明修正のローカル回帰：`pytest` 96 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。隔離Demo環境で16コマの一括生成について、中央Dialog、実際のgenerating/waiting集計、terminal cleanup、reload後の生成済み保持、Dark theme、孤児Panelのserver-side Retry可能化を確認しました。実AI／追加画像生成は行っていません。
 
 ## In Progress
 

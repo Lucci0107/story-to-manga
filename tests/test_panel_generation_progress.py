@@ -145,3 +145,20 @@ def test_stale_failed_panel_job_cannot_restart(tmp_path: Path) -> None:
 
     assert db.start_generation_job(job["id"]) is False
     assert db.get_generation_job(job["id"])["status"] == "failed"
+
+
+def test_orphaned_active_panel_state_becomes_retryable(tmp_path: Path) -> None:
+    """Jobが失われてもPanelだけをactiveのまま残さず、再試行可能へ収束させる。"""
+
+    user, project = _project_with_panels(tmp_path)
+
+    recovered = db.recover_orphaned_panel_states(project["id"], user["id"])
+    saved = db.get_project(project["id"], user["id"])
+
+    assert set(recovered) == {"panel-2", "panel-3", "panel-4"}
+    assert saved and saved["status"] == "partially_failed"
+    assert all(
+        panel["generation_status"] == "failed"
+        for _page, panel in all_panels(saved)
+        if panel["id"] in set(recovered)
+    )

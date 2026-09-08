@@ -472,6 +472,14 @@
     let selectedPanelId = null;
     let saveTimer = null;
     let polling = false;
+    let panelPollingTimer = null;
+    let panelPollingWaitResolve = null;
+    let panelPollingAbortController = null;
+    let panelPollingRun = 0;
+    let panelPollingState = "idle";
+    let panelRecoveryNotice = null;
+    let panelRecheckInFlight = false;
+    let panelStateSyncInFlight = false;
     let panelGenerationState = null;
     let storyboardPolling = false;
     let storyboardJobState = null;
@@ -587,11 +595,81 @@
       });
     }
 
+    class WorkspaceApiError extends Error {
+      constructor(message, status, category, cause) {
+        super(message);
+        this.name = "WorkspaceApiError";
+        this.status = Number(status || 0);
+        this.category = category || "http";
+        this.cause = cause || null;
+      }
+    }
+
+    function httpErrorCategory(status) {
+      if (status === 401) return "auth";
+      if (status === 403) return "forbidden";
+      if (status === 404) return "not_found";
+      if (status === 408) return "timeout";
+      if (status === 429) return "rate_limit";
+      if (status >= 500) return "server";
+      return "http";
+    }
+
     async function api(url, options) {
-      const response = await fetch(url, { headers: { Accept: "application/json", "Content-Type": "application/json", ...(options?.headers || {}) }, ...options });
-      const data = await response.json().catch(function () { return {}; });
-      if (!response.ok) throw new Error(data.detail || "サーバーとの通信に失敗しました");
-      return data;
+      const request = { ...(options || {}) };
+      const timeoutMs = Number(request.timeoutMs || 0);
+      const externalSignal = request.signal;
+      delete request.timeoutMs;
+      delete request.signal;
+      const controller = typeof AbortController === "function" ? new AbortController() : null;
+      const headers = { Accept: "application/json", "Content-Type": "application/json", ...(request.headers || {}) };
+      delete request.headers;
+      let timeoutId = null;
+      let externalAbort = null;
+      if (controller) {
+        request.signal = controller.signal;
+        externalAbort = function () { controller.abort(); };
+        if (externalSignal?.aborted) controller.abort();
+        else externalSignal?.addEventListener("abort", externalAbort, { once: true });
+      }
+      if (controller && timeoutMs > 0) timeoutId = window.setTimeout(function () { controller.abort(); }, timeoutMs);
+      try {
+        let response;
+        try {
+          response = await fetch(url, { ...request, headers: headers });
+        } catch (error) {
+          const timedOut = error?.name === "AbortError" && timeoutMs > 0;
+          throw new WorkspaceApiError(
+            timedOut ? "サーバーとの通信がタイムアウトしました" : "サーバーとの接続に失敗しました",
+            0,
+            timedOut ? "timeout" : "network",
+            error
+          );
+        }
+        const body = await response.text();
+        let data = {};
+        if (body.trim()) {
+          try {
+            data = JSON.parse(body);
+          } catch (error) {
+            if (response.ok) throw new WorkspaceApiError("サーバーから不正な応答を受け取りました", response.status, "invalid_response", error);
+          }
+        }
+        if (!response.ok) {
+          const fallback = response.status === 401
+            ? "ログイン状態を確認してください"
+            : response.status === 403
+              ? "このProjectへのアクセス権を確認できません"
+              : response.status === 404
+                ? "対象のProjectまたはJobが見つかりません"
+                : "サーバーとの通信に失敗しました";
+          throw new WorkspaceApiError(data && data.detail ? data.detail : fallback, response.status, httpErrorCategory(response.status));
+        }
+        return data;
+      } finally {
+        if (timeoutId) window.clearTimeout(timeoutId);
+        if (externalSignal && externalAbort) externalSignal.removeEventListener("abort", externalAbort);
+      }
     }
 
     async function fetchProject(shouldRender) {
@@ -1208,21 +1286,167 @@
       return { message: message, progress: parts.join(" ・ "), submessage: submessage, actionLabel: "", action: null };
     }
 
-    function showPanelStatusUnknown() {
-      updateProcessingDialog({
-        message: "処理状況を確認できません。",
-        progress: "状態不明",
-        submessage: "サーバーとの接続を再確認しています。Jobを勝手に停止せず、必要なら再読み込みしてください。",
-        actionLabel: "再読み込み",
-        action: function () { window.location.reload(); }
+    function panelStatusUrl() {
+      return "/api/projects/" + encodeURIComponent(state.id) + "/generation/status";
+    }
+
+    function clearPanelPollingTimer() {
+      if (panelPollingTimer) window.clearTimeout(panelPollingTimer);
+      panelPollingTimer = null;
+      if (panelPollingWaitResolve) panelPollingWaitResolve(false);
+      panelPollingWaitResolve = null;
+    }
+
+    function cancelPanelPolling() {
+      panelPollingRun += 1;
+      clearPanelPollingTimer();
+      if (panelPollingAbortController) panelPollingAbortController.abort();
+      panelPollingAbortController = null;
+      polling = false;
+      panelPollingState = "idle";
+    }
+
+    function waitForPanelPoll(delay, runId) {
+      return new Promise(function (resolve) {
+        clearPanelPollingTimer();
+        panelPollingWaitResolve = resolve;
+        panelPollingTimer = window.setTimeout(function () {
+          panelPollingTimer = null;
+          panelPollingWaitResolve = null;
+          resolve(runId === panelPollingRun);
+        }, delay);
       });
     }
 
-    async function restorePanelGenerationState() {
-      if (activeStep !== "generate" || polling) return;
+    function panelRecoveryKind(error) {
+      if (error?.status === 401 || error?.category === "auth") return "auth";
+      if (error?.status === 403 || error?.category === "forbidden") return "forbidden";
+      if (error?.status === 404 || error?.category === "not_found") return "not_found";
+      if (error?.category === "timeout") return "timeout";
+      return "connection";
+    }
+
+    function showPanelRecoveryNotice(kind) {
+      const notices = {
+        connection: {
+          message: "処理状況を確認できません。",
+          detail: "サーバーとの接続が安定しないため、Jobの状態を確認できません。Jobを停止したとは判断していません。"
+        },
+        timeout: {
+          message: "処理状況の確認がタイムアウトしました。",
+          detail: "画像生成には時間がかかる場合があります。保存済みの状態を再確認できます。"
+        },
+        not_found: {
+          message: "生成Jobを見つけられませんでした。",
+          detail: "Projectの状態を再取得してください。保存済みのコマは保持されています。"
+        },
+        auth: {
+          message: "ログイン状態を確認できません。",
+          detail: "再ログイン後に、生成状況を再確認してください。"
+        },
+        forbidden: {
+          message: "Projectへのアクセス権を確認できません。",
+          detail: "Projectの所有者アカウントで再ログインしてください。"
+        }
+      };
+      const notice = notices[kind] || notices.connection;
+      hideProcessingDialog();
+      panelPollingState = kind === "auth" || kind === "forbidden" ? "connection_error" : "unknown_recoverable";
+      panelGenerationState = panelGenerationState
+        ? { ...panelGenerationState, active: false, status: "unknown" }
+        : { active: false, status: "unknown", total: 0, completed: 0, generating: 0, waiting: 0, failed: 0 };
+      panelRecoveryNotice = { kind: kind, message: notice.message, detail: notice.detail };
+      if (activeStep === "generate") render();
+      showToast(notice.message + " 状態を再確認できます。", "error");
+    }
+
+    function showPanelStatusUnknown(reason) {
+      showPanelRecoveryNotice(reason === "not_found" ? "not_found" : reason === "timeout" ? "timeout" : "connection");
+    }
+
+    function renderPanelRecoveryNotice() {
+      if (!panelRecoveryNotice) return "";
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      const loginAction = panelRecoveryNotice.kind === "auth" || panelRecoveryNotice.kind === "forbidden"
+        ? '<a class="secondary-button compact-button" data-panel-login href="/login?next=' + escapeAttr(next) + '">再ログイン</a>'
+        : "";
+      return '<div class="form-notice error-notice generation-recovery-notice" role="alert"><span class="notice-mark">!</span><div><strong>' + escapeHtml(panelRecoveryNotice.message) + '</strong><p>' + escapeHtml(panelRecoveryNotice.detail) + '</p><div class="generation-recovery-actions"><button type="button" class="secondary-button compact-button" data-panel-recheck' + (panelRecheckInFlight ? " disabled" : "") + '>状態を再確認</button><button type="button" class="text-button" data-panel-reload>再読み込み</button>' + loginAction + '</div></div></div>';
+    }
+
+    async function rediscoverPanelStateAfterNotFound() {
       try {
-        const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+        // Job状態APIを再送し続けず、Project本体を一度だけ再取得して保存済みPanelを確認する。
+        await fetchProject(false);
+        const panels = allPanels().map(function (item) { return item.panel; });
+        const activePanels = panels.filter(function (panel) { return ["queued", "processing"].includes(panel.generation_status); });
+        if (!activePanels.length) {
+          const failed = panels.filter(function (panel) { return panel.generation_status === "failed"; }).length;
+          panelGenerationState = {
+            active: false,
+            status: failed ? "partially_failed" : "completed",
+            total: panels.length,
+            completed: panels.filter(function (panel) { return panel.generation_status === "completed"; }).length,
+            generating: 0,
+            waiting: 0,
+            failed: failed
+          };
+          panelPollingState = failed ? "partially_failed" : "completed";
+          panelRecoveryNotice = null;
+          hideProcessingDialog();
+          if (activeStep === "generate") render();
+          showToast("保存済みのPanel状態を表示しました");
+          return true;
+        }
+      } catch (_error) {
+        // 再取得にも失敗した場合は、下の非ブロッキング警告へ進む。
+      }
+      showPanelStatusUnknown("not_found");
+      return false;
+    }
+
+    async function recheckPanelGenerationState() {
+      if (panelRecheckInFlight || activeStep !== "generate") return;
+      panelRecheckInFlight = true;
+      cancelPanelPolling();
+      hideProcessingDialog();
+      render();
+      try {
+        const data = await api(panelStatusUrl(), { timeoutMs: 10000 });
         applyGenerationStatus(data);
+        await fetchProject(false).catch(function () {});
+        const snapshot = data.panel_generation || {};
+        panelRecoveryNotice = null;
+        if (snapshot.active) {
+          const targetIds = snapshot.batch_panel_ids || snapshot.active_panel_ids || [];
+          const operationMessage = targetIds.length === 1 ? "コマを再生成しています…" : "漫画画像を生成しています…";
+          render();
+          showProcessingDialog({
+            message: operationMessage,
+            progress: "サーバー上の生成状態を復元しています",
+            submessage: "確認できたJobの状態に戻して処理を追跡します。"
+          });
+          await pollGeneration(targetIds, operationMessage);
+        } else {
+          panelPollingState = "completed";
+          render();
+          showToast("保存済みの生成状態を確認しました");
+        }
+      } catch (error) {
+        if (panelRecoveryKind(error) === "not_found") await rediscoverPanelStateAfterNotFound();
+        else showPanelRecoveryNotice(panelRecoveryKind(error));
+      } finally {
+        panelRecheckInFlight = false;
+        if (activeStep === "generate") render();
+      }
+    }
+
+    async function restorePanelGenerationState() {
+      if (activeStep !== "generate" || polling || panelStateSyncInFlight || panelRecheckInFlight) return;
+      panelStateSyncInFlight = true;
+      try {
+        const data = await api(panelStatusUrl(), { timeoutMs: 10000 });
+        applyGenerationStatus(data);
+        panelRecoveryNotice = null;
         render();
         const snapshot = data.panel_generation || {};
         if (!snapshot.active) return;
@@ -1234,8 +1458,12 @@
           submessage: "再読み込み前に開始したJobを引き続き確認します。"
         });
         await pollGeneration(targetIds, operationMessage);
-      } catch (_error) {
-        // 初回の状態確認に失敗しても、編集画面を利用不能にはしない。
+      } catch (error) {
+        if (panelRecoveryKind(error) === "not_found") await rediscoverPanelStateAfterNotFound();
+        else showPanelRecoveryNotice(panelRecoveryKind(error));
+      } finally {
+        panelStateSyncInFlight = false;
+        if (activeStep === "generate" && !polling) render();
       }
     }
 
@@ -1259,34 +1487,48 @@
       const generated = panels.filter(function (item) { return item.panel.generation_status === "completed"; }).length;
       const failed = panels.filter(function (item) { return item.panel.generation_status === "failed"; }).length;
       const snapshot = panelGenerationState || {};
-      const panelBusy = Boolean(snapshot.active || polling);
+      const panelBusy = Boolean(snapshot.active || polling || panelRecheckInFlight);
       const aggregate = snapshot.active && snapshot.total ? snapshot : { total: panels.length, completed: generated, generating: 0, waiting: 0, failed: failed };
       const globalStatus = snapshot.active ? '<div class="generation-global-status" role="status" aria-live="polite"><strong>' + aggregate.completed + ' / ' + aggregate.total + ' 完了</strong><span>' + (aggregate.generating ? '生成中 ' + aggregate.generating + ' ・ ' : '') + (aggregate.waiting ? '待機 ' + aggregate.waiting + ' ・ ' : '') + (aggregate.failed ? '失敗 ' + aggregate.failed : '処理を継続しています') + '</span>' + (snapshot.current_page && snapshot.current_panel ? '<span>現在：ページ' + escapeHtml(snapshot.current_page) + '・コマ' + escapeHtml(snapshot.current_panel) + '</span>' : '') + '</div>' : '';
       const disabled = panelBusy ? " disabled" : "";
-      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding"><div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all' + disabled + '>未生成をまとめて生成</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary"><div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
+      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding">' + renderPanelRecoveryNotice() + '<div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all' + disabled + '>未生成をまとめて生成</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary"><div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
       content.querySelector("[data-generate-all]")?.addEventListener("click", function () { queueGeneration([], false, false); });
       content.querySelector("[data-retry-failed]")?.addEventListener("click", function () { queueGeneration([], true, false); });
       content.querySelectorAll("[data-retry-panel]").forEach(function (button) { button.addEventListener("click", function () { queueGeneration([button.dataset.retryPanel], true, true); }); });
       content.querySelectorAll("[data-regenerate-panel]").forEach(function (button) { button.addEventListener("click", function () { queueGeneration([button.dataset.regeneratePanel], false, true); }); });
+      content.querySelector("[data-panel-recheck]")?.addEventListener("click", function () { recheckPanelGenerationState(); });
+      content.querySelector("[data-panel-reload]")?.addEventListener("click", function () { window.location.reload(); });
       content.querySelector("[data-goto-storyboard]")?.addEventListener("click", function () { goToStep("storyboard"); });
       content.querySelector("[data-next-step]")?.addEventListener("click", function () { goToStep("edit"); });
     }
 
     async function queueGeneration(panelIds, retryFailed, force) {
-      if (polling || panelGenerationState?.active) return;
+      if (polling || panelGenerationState?.active || panelRecheckInFlight || panelStateSyncInFlight) return;
       const buttons = content.querySelectorAll("[data-generate-all], [data-retry-failed], [data-retry-panel], [data-regenerate-panel]");
       buttons.forEach(function (button) { button.disabled = true; });
       const operationMessage = force && panelIds.length === 1 ? "漫画画像を再生成しています…" : "漫画画像を生成しています…";
+      panelRecoveryNotice = null;
       showProcessingDialog({
         message: operationMessage,
         progress: "生成対象を確認しています",
         submessage: "選択したコマだけを処理し、完了した画像から保存します。"
       });
+      let phase = "preflight";
       try {
+        // 状態不明後に古いJobが残っていても、POST前に再確認して二重生成を防ぐ。
+        const currentStatus = await api(panelStatusUrl(), { timeoutMs: 10000 });
+        applyGenerationStatus(currentStatus);
+        if (currentStatus.panel_generation?.active) {
+          const activeIds = currentStatus.panel_generation.batch_panel_ids || currentStatus.panel_generation.active_panel_ids || panelIds;
+          panelRecoveryNotice = null;
+          await pollGeneration(activeIds, operationMessage);
+          return;
+        }
+        phase = "post";
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generate", { method: "POST", body: JSON.stringify({ panel_ids: panelIds, retry_failed: retryFailed, force: force }) });
         const queuedPanelIds = Array.isArray(data.queued_panel_ids) ? data.queued_panel_ids.filter(Boolean) : [];
         if (!queuedPanelIds.length) {
-          const status = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+          const status = await api(panelStatusUrl(), { timeoutMs: 10000 });
           applyGenerationStatus(status);
           if (status.panel_generation?.active) {
             const activeIds = status.panel_generation.batch_panel_ids || status.panel_generation.active_panel_ids || [];
@@ -1300,14 +1542,18 @@
         }
         showToast(queuedPanelIds.length + "コマを生成キューに追加しました");
         updateProcessingDialog({ progress: queuedPanelIds.length + "コマを順番に生成します" });
-        const initialStatus = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+        const initialStatus = await api(panelStatusUrl(), { timeoutMs: 10000 });
         applyGenerationStatus(initialStatus);
         await fetchProject(true);
         await pollGeneration(queuedPanelIds, operationMessage);
       } catch (error) {
+        if (phase === "preflight") {
+          showPanelRecoveryNotice(panelRecoveryKind(error));
+          return;
+        }
         // POST応答だけが失われた場合、再送せずserver stateを確認する。
         try {
-          const status = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+          const status = await api(panelStatusUrl(), { timeoutMs: 10000 });
           applyGenerationStatus(status);
           if (status.panel_generation?.active) {
             const activeIds = status.panel_generation.batch_panel_ids || status.panel_generation.active_panel_ids || panelIds;
@@ -1315,32 +1561,59 @@
             return;
           }
         } catch (_statusError) {}
-        hideProcessingDialog();
-        showToast(error.message, "error");
+        if (["auth", "forbidden", "not_found"].includes(panelRecoveryKind(error))) {
+          showPanelRecoveryNotice(panelRecoveryKind(error));
+        } else {
+          hideProcessingDialog();
+          showToast(error.message || "コマ生成を開始できませんでした", "error");
+        }
         render();
       }
     }
 
     async function pollGeneration(targetPanelIds, operationMessage) {
       if (polling) return;
+      const runId = ++panelPollingRun;
       polling = true;
-      const targetIds = new Set(targetPanelIds || []);
+      panelPollingState = "active";
+      let targetIds = new Set(targetPanelIds || []);
       let finished = false;
+      let recoveryShown = false;
       const startedAt = Date.now();
       const maximumPollingMs = 30 * 60 * 1000;
       let consecutiveNetworkErrors = 0;
       try {
         while (Date.now() - startedAt < maximumPollingMs) {
           const interval = Date.now() - startedAt < 60 * 1000 ? 1500 : 5000;
-          await new Promise(function (resolve) { window.setTimeout(resolve, interval); });
-          let data;
+          if (!await waitForPanelPoll(interval, runId) || runId !== panelPollingRun) return;
+          let data = null;
+          const requestController = typeof AbortController === "function" ? new AbortController() : null;
+          panelPollingAbortController = requestController;
           try {
-            data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+            data = await api(panelStatusUrl(), { timeoutMs: 10000, signal: requestController?.signal });
             consecutiveNetworkErrors = 0;
-          } catch (_error) {
+          } catch (error) {
+            if (runId !== panelPollingRun) return;
+            const kind = panelRecoveryKind(error);
+            if (kind === "auth" || kind === "forbidden") {
+              panelPollingState = "connection_error";
+              showPanelRecoveryNotice(kind);
+              recoveryShown = true;
+              break;
+            }
+            if (kind === "not_found") {
+              await rediscoverPanelStateAfterNotFound();
+              recoveryShown = true;
+              break;
+            }
             consecutiveNetworkErrors += 1;
-            if (consecutiveNetworkErrors >= 4) showPanelStatusUnknown();
-            else updateProcessingDialog({
+            panelPollingState = "reconnecting";
+            if (consecutiveNetworkErrors >= 4) {
+              showPanelStatusUnknown(kind === "timeout" ? "timeout" : "connection");
+              recoveryShown = true;
+              break;
+            }
+            updateProcessingDialog({
               message: operationMessage || "漫画画像を生成しています…",
               progress: "進行状況を確認しています…",
               submessage: "一時的な通信エラーです。Jobはサーバー側で継続します。",
@@ -1348,17 +1621,35 @@
               action: null
             });
             continue;
+          } finally {
+            if (panelPollingAbortController === requestController) panelPollingAbortController = null;
           }
+          if (runId !== panelPollingRun) return;
           applyGenerationStatus(data);
-          const progress = panelProgress(data, targetIds);
           const snapshot = data.panel_generation || {};
-          const active = targetIds.size
-            ? progress.tracked.some(function (panel) { return panel.status === "queued" || panel.status === "processing"; })
-            : Boolean(snapshot.active);
+          const serverTargetIds = snapshot.batch_panel_ids || snapshot.active_panel_ids || [];
+          if (snapshot.active && serverTargetIds.length && (!targetIds.size || !serverTargetIds.some(function (id) { return targetIds.has(id); }))) {
+            // 古い対象Panelの応答が遅れても、サーバーが現在追跡しているbatchへ切り替える。
+            targetIds = new Set(serverTargetIds);
+          }
+          const progress = panelProgress(data, targetIds);
+          const hasTrackedActive = progress.tracked.some(function (panel) { return panel.status === "queued" || panel.status === "processing"; });
+          if (!snapshot.active && hasTrackedActive) {
+            // Jobが消えたのにPanelだけがactiveなら、サーバーのstale/orphan復旧を待つため永久pollしない。
+            showPanelStatusUnknown("not_found");
+            recoveryShown = true;
+            break;
+          }
+          const active = Boolean(snapshot.active) || hasTrackedActive;
+          if (targetIds.size && progress.tracked.length < targetIds.size && !snapshot.active) {
+            showPanelStatusUnknown("not_found");
+            recoveryShown = true;
+            break;
+          }
           if (!active) {
             finished = true;
+            panelPollingState = progress.failed ? "partially_failed" : "completed";
             await fetchProject(false).catch(function () {});
-            polling = false;
             render();
             if (progress.failed) {
               showToast(progress.failed + "コマの生成に失敗しました。再試行できます", "error");
@@ -1367,19 +1658,27 @@
             }
             break;
           }
+          panelPollingState = progress.waiting && !progress.generating ? "waiting" : "generating";
           updateProcessingDialog(panelDialogOptions(operationMessage, data, progress));
           if (activeStep === "generate") render();
         }
-        if (!finished) {
-          showPanelStatusUnknown();
-          showToast("生成状況の確認に時間がかかっています。再読み込みで状態を確認できます", "error");
+        if (!finished && !recoveryShown && runId === panelPollingRun) {
+          showPanelStatusUnknown("timeout");
+          recoveryShown = true;
         }
       } catch (error) {
-        showPanelStatusUnknown();
-        showToast(error.message || "生成状況を確認できません", "error");
+        if (runId === panelPollingRun && !recoveryShown) {
+          showPanelRecoveryNotice(panelRecoveryKind(error));
+          recoveryShown = true;
+        }
       } finally {
-        polling = false;
-        if (finished) hideProcessingDialog();
+        if (runId === panelPollingRun) {
+          polling = false;
+          panelPollingAbortController = null;
+          clearPanelPollingTimer();
+          if (finished) hideProcessingDialog();
+          if (activeStep === "generate") render();
+        }
       }
     }
 

@@ -1691,22 +1691,28 @@ async def api_retry_panel(
 @app.get("/api/projects/{project_id}/generation/status")
 async def api_generation_status(project_id: str, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
-    recovered_panel = db.recover_stale_panel_jobs(
+    recovered_stale_panel = db.recover_stale_panel_jobs(
         project_id,
         user["id"],
         get_settings().storyboard_job_stale_seconds,
+    )
+    recovered_orphaned_panel = db.recover_orphaned_panel_states(
+        project_id, user["id"]
     )
     recovered_storyboard = db.recover_stale_storyboard_jobs(
         project_id,
         user["id"],
         get_settings().storyboard_job_stale_seconds,
     )
+    recovered_panel = recovered_stale_panel + recovered_orphaned_panel
     recovered = recovered_panel + recovered_storyboard
     if recovered:
         logger.warning(
-            "stale generation jobs recovered project_id=%s panel_count=%s storyboard_count=%s",
+            "generation state recovered project_id=%s stale_panel_job_count=%s "
+            "orphan_panel_count=%s storyboard_count=%s",
             project_id,
-            len(recovered_panel),
+            len(recovered_stale_panel),
+            len(recovered_orphaned_panel),
             len(recovered_storyboard),
         )
         project = require_project(project_id, user["id"])
@@ -1746,6 +1752,10 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
         "jobs": jobs,
         "storyboard_job": storyboard_job,
         "panel_generation": panel_generation_snapshot(project, jobs, recovered_panel),
+        "panel_recovery": {
+            "stale_job_ids": recovered_stale_panel,
+            "orphan_panel_ids": recovered_orphaned_panel,
+        },
     }
 
 

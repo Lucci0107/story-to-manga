@@ -261,6 +261,10 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .form-notice p { margin: 0; }
 .form-notice.error-notice { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
 .notice-mark { display: grid; width: 19px; height: 19px; flex: 0 0 19px; place-items: center; border: 1px solid var(--accent); border-radius: 50%; color: var(--accent-deep); font-family: serif; font-size: 12px; }
+.generation-recovery-notice { align-items: flex-start; margin-bottom: 16px; }
+.generation-recovery-notice strong { display: block; margin-bottom: 4px; color: var(--danger); }
+.generation-recovery-notice p { line-height: 1.6; }
+.generation-recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 
 /* 制作ワークスペース */

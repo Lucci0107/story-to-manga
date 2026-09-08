@@ -1233,6 +1233,63 @@ def recover_stale_panel_jobs(
     return recovered
 
 
+def recover_orphaned_panel_states(project_id: str, user_id: str) -> List[str]:
+    """対応するactive JobがないPanelのactive状態を再試行可能へ収束させる。"""
+
+    message = "画像生成Jobを確認できませんでした。再試行してください"
+    now = utc_now()
+    recovered: List[str] = []
+    with connection() as conn:
+        owner = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not owner:
+            return recovered
+        project_row = conn.execute(
+            "SELECT storyboard_json FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not project_row:
+            return recovered
+        active_rows = conn.execute(
+            """
+            SELECT target_id FROM generation_jobs
+            WHERE project_id = ? AND job_type = 'panel_artwork'
+              AND status IN ('queued', 'processing')
+            """,
+            (project_id,),
+        ).fetchall()
+        active_target_ids = {
+            str(row["target_id"]) for row in active_rows if row["target_id"]
+        }
+        storyboard = _loads(project_row["storyboard_json"], [])
+        for page in storyboard if isinstance(storyboard, list) else []:
+            for panel in page.get("panels", []) if isinstance(page, dict) else []:
+                if not isinstance(panel, dict):
+                    continue
+                panel_id = str(panel.get("id") or "")
+                if (
+                    panel_id
+                    and panel_id not in active_target_ids
+                    and panel.get("generation_status") in {"queued", "processing"}
+                ):
+                    panel["generation_status"] = "failed"
+                    panel["generation_error"] = message
+                    recovered.append(panel_id)
+        if not recovered:
+            return recovered
+        conn.execute(
+            """
+            UPDATE projects
+            SET storyboard_json = ?, status = 'partially_failed', current_step = 'generate', updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_json(storyboard), now, project_id, user_id),
+        )
+    return recovered
+
+
 def list_generation_jobs(project_id: str) -> List[Dict[str, Any]]:
     with connection() as conn:
         rows = conn.execute(

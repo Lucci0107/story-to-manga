@@ -75,13 +75,25 @@ def test_generation_progress_uses_job_state_and_preserves_selective_retry() -> N
     """パネル進捗がJob状態由来で、対象コマだけを追跡することを確認する。"""
 
     assert "const queuedPanelIds = Array.isArray(data.queued_panel_ids)" in APP_SCRIPT
-    assert "const targetIds = new Set(targetPanelIds || [])" in APP_SCRIPT
+    assert "let targetIds = new Set(targetPanelIds || [])" in APP_SCRIPT
     assert 'panel.status === "completed"' in APP_SCRIPT
     assert 'panel.status === "failed"' in APP_SCRIPT
     assert 'data.panel_generation' in APP_SCRIPT
     assert 'function restorePanelGenerationState()' in APP_SCRIPT
     assert 'waiting' in APP_SCRIPT
-    assert '"状態不明"' in APP_SCRIPT
+    assert "class WorkspaceApiError" in APP_SCRIPT
+    assert "timeoutMs" in APP_SCRIPT
+    assert "panelPollingRun" in APP_SCRIPT
+    assert "cancelPanelPolling()" in APP_SCRIPT
+    assert "panelPollingState = \"reconnecting\"" in APP_SCRIPT
+    assert "consecutiveNetworkErrors >= 4" in APP_SCRIPT
+    assert "showPanelRecoveryNotice" in APP_SCRIPT
+    assert 'data-panel-recheck' in APP_SCRIPT
+    assert 'data-panel-reload' in APP_SCRIPT
+    assert "rediscoverPanelStateAfterNotFound" in APP_SCRIPT
+    assert '"unknown_recoverable"' in APP_SCRIPT
+    assert 'panelPollingState = "completed"' in APP_SCRIPT
+    assert '"partially_failed"' in APP_SCRIPT
     assert '30 * 60 * 1000' in APP_SCRIPT
     assert '"失敗したコマは生成画面から再試行できます。"' not in APP_SCRIPT
     assert "queueGeneration([button.dataset.retryPanel], true, true)" in APP_SCRIPT
