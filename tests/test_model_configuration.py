@@ -107,11 +107,13 @@ def test_registry_accepts_supported_models_and_rejects_arbitrary_ids() -> None:
 def test_preset_and_project_override_resolution() -> None:
     highest = resolve_model_settings({"preset": "highest_quality"})
     assert highest["story_analysis_model"] == "gpt-6-astra"
+    assert highest["settings_recommendation_model"] == "gpt-6-astra"
     assert highest["character_model"] == "gpt-5.6-sol"
     balanced = resolve_model_settings(
         {"preset": "balanced"}, {"storyboard_model": "gpt-6-astra"}
     )
     assert balanced["story_analysis_model"] == "gpt-5.6-terra"
+    assert balanced["settings_recommendation_model"] == "gpt-5.6-terra"
     assert balanced["storyboard_model"] == "gpt-6-astra"
     legacy = resolve_model_settings(
         None, legacy_text_model="gpt-5.6-luna", legacy_image_model="gpt-image-2"

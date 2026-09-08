@@ -417,6 +417,19 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .settings-direction-readonly > span { color: var(--muted); font-size: 10px; }
 .settings-direction-readonly strong { color: var(--ink); font-size: 15px; }
 .settings-direction-readonly small { color: var(--muted); font-size: 9px; }
+.recommendation-panel { display: grid; gap: 10px; margin-bottom: 15px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 11px; background: var(--accent-soft); padding: 15px 17px; color: var(--ink-soft); font-size: 11px; }
+.recommendation-panel > p { margin: 0; line-height: 1.7; }
+.recommendation-panel strong { color: var(--ink); font-size: 12px; }
+.recommendation-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recommendation-header > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.recommendation-budget { display: flex; flex-wrap: wrap; gap: 6px; }
+.recommendation-budget span { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 999px; background: var(--surface); padding: 5px 8px; color: var(--muted); font-family: monospace; font-size: 9px; }
+.recommendation-fallback, .recommendation-stale { border-color: transparent; margin: 0; padding: 8px 0 0; }
+.recommendation-preview { display: grid; gap: 7px; border-top: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); padding-top: 11px; }
+.recommendation-preview p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.recommendation-preview .save-row { justify-content: flex-start; margin-top: 4px; }
+.recommendation-empty { background: var(--surface-soft); }
+.recommendation-applied-note { grid-column: 1 / -1; border-left: 2px solid var(--accent); padding-left: 9px; }
 .language-change-warning { margin-top: 11px; }
 .language-change-warning[hidden] { display: none; }
 .reading-order-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; margin-bottom: 15px; border-left: 3px solid var(--accent); border-radius: 7px; background: var(--accent-soft); padding: 10px 12px; color: var(--ink-soft); font-size: 10px; }

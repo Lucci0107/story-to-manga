@@ -342,12 +342,13 @@
     const dataNode = document.getElementById("ai-model-settings-data");
     if (!rootNode || !dataNode) return;
     let state = parseJson(dataNode.textContent || "{}", {});
-    const taskOrder = ["story_analysis", "adaptation", "character", "storyboard", "qa", "panel_prompt"];
+    const taskOrder = ["story_analysis", "adaptation", "settings_recommendation", "character", "storyboard", "qa", "panel_prompt"];
     const taskKeys = taskOrder.map(function (task) { return task + "_model"; });
     const defaultValues = {
       preset: "auto",
       story_analysis_model: "auto",
       adaptation_model: "auto",
+      settings_recommendation_model: "auto",
       character_model: "auto",
       storyboard_model: "auto",
       qa_model: "auto",
@@ -395,7 +396,7 @@
         return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current.reasoning_effort ? " selected" : "") + '>' + escapeHtml(item.label) + '</option>';
       }).join("");
       const astra = statusInfo("gpt-6-astra");
-      rootNode.innerHTML = '<form class="ai-model-form" id="ai-model-form"><div class="ai-model-preset-row"><label class="editor-label"><span>プリセット</span><select aria-label="プリセット" data-ai-preset>' + presetOptions + '</select></label><div class="ai-model-preset-help">' + escapeHtml((registry.presets || []).find(function (item) { return item.id === current.preset; })?.description || "工程ごとにモデルを選択します。") + '</div></div><div class="ai-availability-note"><span class="availability-dot availability-' + escapeAttr(astra.status) + '"></span><strong>GPT-6 Astra</strong><span>' + escapeHtml(astra.label) + '。アカウントの権限により、利用時はGPT-5.6 Solへ自動フォールバックします。</span></div><details class="ai-advanced"><summary>工程ごとの詳細設定</summary><div class="ai-model-grid">' + modelSelect("story_analysis_model", "Story Analysis", "物語の構造化解析") + modelSelect("adaptation_model", "Manga Adaptation", "漫画用脚本への変換") + modelSelect("character_model", "Character Bible", "人物の一貫性設定") + modelSelect("storyboard_model", "Storyboard", "ページ・コマ設計") + modelSelect("qa_model", "Knowledge-aware QA", "原作とKnowledgeの確認") + modelSelect("panel_prompt_model", "Panel Prompt", "コマ画像用Prompt") + '</div><div class="ai-model-bottom-row"><label class="ai-model-field"><span>Image Generation<small>画像生成はテキストモデルと分離</small></span><select aria-label="Image Generationのモデル" data-ai-model-field="image_model">' + imageOptions + '</select><em class="ai-model-effective">実効: GPT-Image-2</em></label><label class="ai-model-field"><span>Reasoning<small>対応モデルでのみ送信</small></span><select aria-label="推論強度" data-ai-model-field="reasoning_effort">' + reasoningOptions + '</select></label></div></details><div class="save-row"><span class="field-help" data-ai-model-status>保存済みの設定は次回の制作にも適用されます。</span><button type="submit" class="primary-button compact-button">AIモデル設定を保存</button></div></form>';
+      rootNode.innerHTML = '<form class="ai-model-form" id="ai-model-form"><div class="ai-model-preset-row"><label class="editor-label"><span>プリセット</span><select aria-label="プリセット" data-ai-preset>' + presetOptions + '</select></label><div class="ai-model-preset-help">' + escapeHtml((registry.presets || []).find(function (item) { return item.id === current.preset; })?.description || "工程ごとにモデルを選択します。") + '</div></div><div class="ai-availability-note"><span class="availability-dot availability-' + escapeAttr(astra.status) + '"></span><strong>GPT-6 Astra</strong><span>' + escapeHtml(astra.label) + '。アカウントの権限により、利用時はGPT-5.6 Solへ自動フォールバックします。</span></div><details class="ai-advanced"><summary>工程ごとの詳細設定</summary><div class="ai-model-grid">' + modelSelect("story_analysis_model", "Story Analysis", "物語の構造化解析") + modelSelect("adaptation_model", "Manga Adaptation", "漫画用脚本への変換") + modelSelect("settings_recommendation_model", "漫画化設定の推奨", "Analysisから初期設定を推定") + modelSelect("character_model", "Character Bible", "人物の一貫性設定") + modelSelect("storyboard_model", "Storyboard", "ページ・コマ設計") + modelSelect("qa_model", "Knowledge-aware QA", "原作とKnowledgeの確認") + modelSelect("panel_prompt_model", "Panel Prompt", "コマ画像用Prompt") + '</div><div class="ai-model-bottom-row"><label class="ai-model-field"><span>Image Generation<small>画像生成はテキストモデルと分離</small></span><select aria-label="Image Generationのモデル" data-ai-model-field="image_model">' + imageOptions + '</select><em class="ai-model-effective">実効: GPT-Image-2</em></label><label class="ai-model-field"><span>Reasoning<small>対応モデルでのみ送信</small></span><select aria-label="推論強度" data-ai-model-field="reasoning_effort">' + reasoningOptions + '</select></label></div></details><div class="save-row"><span class="field-help" data-ai-model-status>保存済みの設定は次回の制作にも適用されます。</span><button type="submit" class="primary-button compact-button">AIモデル設定を保存</button></div></form>';
       const form = rootNode.querySelector("#ai-model-form");
       form?.addEventListener("change", function (event) {
         if (event.target.matches("[data-ai-preset]") && event.target.value !== "auto") {
@@ -451,6 +452,9 @@
     let saveTimer = null;
     let polling = false;
     let knowledgeRequestId = 0;
+    let recommendationLoading = false;
+    let recommendationAttempted = false;
+    let pendingRecommendation = null;
     const content = document.getElementById("workspace-content");
     if (!content) return;
 
@@ -585,6 +589,41 @@
         setSaveState("保存エラー", false);
         showToast(error.message, "error");
         throw error;
+      }
+    }
+
+    function recommendationSettings(value) {
+      const recommendation = value || {};
+      return {
+        target_page_count: recommendation.recommended_page_count,
+        color_mode: recommendation.recommended_color_mode,
+        visual_style: recommendation.recommended_visual_style,
+        pacing: recommendation.recommended_pacing,
+        dialogue_density: recommendation.recommended_dialogue_density,
+        target_audience: recommendation.recommended_target_audience
+      };
+    }
+
+    async function loadSettingsRecommendation(force) {
+      if (recommendationLoading || !state.analysis) return;
+      recommendationLoading = true;
+      showProcessingDialog({
+        message: "漫画化設定を最適化しています…",
+        progress: force ? "分析結果から新しい推奨値を作成しています" : "シナリオの複雑度とページ配分を確認しています",
+        submessage: "推奨値は確認・編集してから保存できます。"
+      });
+      try {
+        const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/settings/recommendation", { method: "POST", body: JSON.stringify({ force: Boolean(force) }) });
+        state = data.project;
+        pendingRecommendation = force ? data.recommendation : null;
+        if (data.fallback) showToast("AI推奨を取得できなかったため、分析結果から標準推奨を表示しています。", "error");
+        render();
+      } catch (error) {
+        showToast(error.message || "AI推奨を取得できませんでした", "error");
+      } finally {
+        recommendationLoading = false;
+        hideProcessingDialog();
+        if (activeStep === "settings" && !state.manga_settings_recommendation) render();
       }
     }
 
@@ -780,18 +819,42 @@
     }
 
     function renderSettings() {
-      const settings = state.settings || {};
+      const savedSettings = state.settings || {};
+      const storedRecommendation = state.manga_settings_recommendation;
+      const recommendation = storedRecommendation && !storedRecommendation.user_override && !storedRecommendation.stale && !pendingRecommendation ? storedRecommendation : null;
+      const settings = { ...savedSettings, ...(recommendation ? recommendationSettings(recommendation) : {}) };
       const styleOptions = [{ value: "dynamic", label: "動きのある少年漫画風" }, { value: "elegant", label: "繊細で余白のある演出" }, { value: "cinematic", label: "映画的な陰影" }, { value: "comedy", label: "表情豊かなコメディ" }, { value: "minimal", label: "線と余白のミニマル" }, { value: "webtoon", label: "縦読み向けの明快さ" }];
       const currentLanguage = canonicalLanguage(settings);
       const languageOptions = [{ value: "ja", label: "日本語" }, { value: "en", label: "English" }];
       const direction = readingDirectionLabel(settings);
-      content.innerHTML = heading("漫画化の方針を決める", "AIが提案するページ構成とコマの雰囲気をここで指定します。") + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">目標ページ数<small>デモ生成では最大8ページまで作成します。</small><input type="number" min="1" max="64" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "視覚スタイル", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div><div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
+      const budget = recommendation?.scene_page_budget || [];
+      const budgetText = budget.slice(0, 8).map(function (item) { return '<span>' + escapeHtml(item.scene || "シーン") + ' ' + escapeHtml(item.estimated_pages || 1) + 'p</span>'; }).join("");
+      const fallbackNotice = storedRecommendation?.fallback ? '<div class="form-notice recommendation-fallback"><span class="notice-mark">!</span><p>AIによる推奨値を取得できなかったため、既存の分析結果から標準推奨を表示しています。</p></div>' : '';
+      const staleNotice = storedRecommendation?.stale ? '<div class="form-notice recommendation-stale"><span class="notice-mark">!</span><p>シナリオ分析が更新されています。現在の設定は保持したまま、必要なら再提案してください。</p></div>' : '';
+      const preview = pendingRecommendation ? '<div class="recommendation-preview" role="status"><div><strong>再提案のプレビュー</strong><p>' + escapeHtml(pendingRecommendation.page_count_reason || pendingRecommendation.recommendation_reason || "分析結果から新しい推奨値を作成しました。") + '</p></div><div class="save-row"><button type="button" class="secondary-button compact-button" data-cancel-recommendation>現在の設定を維持</button><button type="button" class="primary-button compact-button" data-apply-recommendation>推奨値を適用</button></div></div>' : '';
+      const recommendationRetry = recommendationAttempted ? '<button type="button" class="secondary-button compact-button" data-retry-recommendation>AI推奨を再試行</button>' : '';
+      const recommendationPanel = storedRecommendation ? '<section class="recommendation-panel" aria-live="polite"><div class="recommendation-header"><div><span class="settings-badge">AI推奨</span><strong>シナリオ分析からの初期提案</strong></div><button type="button" class="text-button" data-refresh-recommendation' + (recommendationLoading ? ' disabled' : '') + '>分析結果から再提案</button></div><p>' + escapeHtml(storedRecommendation.page_count_reason || storedRecommendation.recommendation_reason || "分析結果に基づく漫画化設定です。") + '</p>' + (budgetText ? '<div class="recommendation-budget" aria-label="シーン別ページ配分">' + budgetText + '</div>' : '') + fallbackNotice + staleNotice + preview + '</section>' : '<section class="recommendation-panel recommendation-empty" aria-live="polite"><div><span class="settings-badge">AI推奨</span><strong>分析結果から初期値を作成します</strong></div><p>目標ページ数、テンポ、画面スタイルなどを既存のStory Analysisから推定します。</p>' + recommendationRetry + '</section>';
+      content.innerHTML = heading("漫画化の方針を決める", "AIが提案するページ構成とコマの雰囲気をここで指定します。") + recommendationPanel + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">目標ページ数<small>' + (recommendation ? 'AI推奨値。保存前に自由に変更できます。' : 'デモ生成では最大8ページまで作成します。') + '</small><input type="number" min="1" max="120" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "視覚スタイル", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div>' + (recommendation ? '<div class="field-help recommendation-applied-note">表示中の値はAI推奨を反映しています。保存した設定は次回以降自動上書きされません。</div>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
       const languageSelect = content.querySelector('[data-settings-field="language"]');
       const directionNode = content.querySelector("[data-reading-direction]");
       const warning = content.querySelector("[data-language-warning]");
       languageSelect?.addEventListener("change", function () {
         if (directionNode) directionNode.textContent = readingDirectionLabel({ language: languageSelect.value });
         if (warning) warning.hidden = languageSelect.value === currentLanguage;
+      });
+      content.querySelector("[data-refresh-recommendation]")?.addEventListener("click", function () { loadSettingsRecommendation(true); });
+      content.querySelector("[data-retry-recommendation]")?.addEventListener("click", function () { loadSettingsRecommendation(false); });
+      content.querySelector("[data-cancel-recommendation]")?.addEventListener("click", function () { pendingRecommendation = null; render(); });
+      content.querySelector("[data-apply-recommendation]")?.addEventListener("click", async function (event) {
+        const button = event.currentTarget;
+        if (!pendingRecommendation || button.disabled) return;
+        button.disabled = true;
+        const next = { ...savedSettings, ...recommendationSettings(pendingRecommendation) };
+        delete next.reading_direction;
+        try {
+          pendingRecommendation = null;
+          await saveProject({ settings: next, current_step: "settings" }, "AI推奨を適用しました", true);
+        } catch (_error) { button.disabled = false; }
       });
       content.querySelector("[data-save-settings]").addEventListener("click", function () {
         const next = { ...settings };
@@ -800,6 +863,10 @@
         saveProject({ settings: next, current_step: "settings" }, "漫画化設定を保存しました", true);
       });
       content.querySelector("[data-next-step]").addEventListener("click", function () { goToStep("characters"); });
+      if (state.analysis && !storedRecommendation && !recommendationLoading && !recommendationAttempted) {
+        recommendationAttempted = true;
+        loadSettingsRecommendation(false);
+      }
     }
 
     function renderCharacters() {

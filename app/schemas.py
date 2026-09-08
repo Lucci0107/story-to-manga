@@ -60,7 +60,7 @@ ALLOWED_CROP_MODES = {"fit", "fill"}
 class SettingsPayload(BaseModel):
     """漫画化設定。"""
 
-    target_page_count: int = Field(default=8, ge=1, le=64)
+    target_page_count: int = Field(default=8, ge=1, le=120)
     language: Optional[str] = None
     reading_direction: Optional[str] = None
     color_mode: str = "bw"
@@ -171,6 +171,12 @@ class ProjectPatch(BaseModel):
         if value is not None and value not in ALLOWED_PROJECT_STATUSES:
             raise ValueError("statusが不正です")
         return value
+
+
+class SettingsRecommendationRequest(BaseModel):
+    """漫画化設定の推奨取得。force=Trueはユーザーが明示した再提案だけに使う。"""
+
+    force: bool = False
 
 
 class GenerateRequest(BaseModel):

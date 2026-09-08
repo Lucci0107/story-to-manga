@@ -93,6 +93,7 @@ def init_db() -> None:
                 current_step TEXT NOT NULL,
                 settings_json TEXT NOT NULL,
                 analysis_json TEXT,
+                manga_settings_recommendation_json TEXT,
                 characters_json TEXT NOT NULL,
                 storyboard_json TEXT NOT NULL,
                 ai_model_settings_json TEXT,
@@ -198,6 +199,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE projects ADD COLUMN quality_check_json TEXT")
         if "ai_model_settings_json" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN ai_model_settings_json TEXT")
+        if "manga_settings_recommendation_json" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN manga_settings_recommendation_json TEXT")
         if "generation_metadata_json" not in project_columns:
             conn.execute(
                 "ALTER TABLE projects ADD COLUMN generation_metadata_json TEXT NOT NULL DEFAULT '[]'"
@@ -441,6 +444,9 @@ def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             _loads(row["settings_json"], dict(DEFAULT_SETTINGS))
         ),
         "analysis": _loads(row["analysis_json"], None),
+        "manga_settings_recommendation": _loads(
+            row["manga_settings_recommendation_json"], None
+        ),
         "characters": _loads(row["characters_json"], []),
         "storyboard": canonicalize_storyboard_panel_orders(
             _loads(row["storyboard_json"], [])
@@ -468,9 +474,9 @@ def create_project(
             INSERT INTO projects (
                 id, user_id, title, source_type, source_filename, original_text,
                 status, current_step, settings_json, analysis_json,
-                characters_json, storyboard_json, ai_model_settings_json,
+                manga_settings_recommendation_json, characters_json, storyboard_json, ai_model_settings_json,
                 generation_metadata_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
@@ -482,6 +488,7 @@ def create_project(
                 "draft",
                 "story",
                 _json(DEFAULT_SETTINGS),
+                None,
                 None,
                 _json([]),
                 _json([]),
@@ -572,6 +579,49 @@ def update_project(
                 project_id,
                 user_id,
             ),
+        )
+    return get_project(project_id, user_id)
+
+
+def save_manga_settings_recommendation(
+    project_id: str,
+    user_id: str,
+    recommendation: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """漫画化設定の推奨値をProjectへ保存する。"""
+
+    with connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE projects
+            SET manga_settings_recommendation_json = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_json(recommendation), utc_now(), project_id, user_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+    return get_project(project_id, user_id)
+
+
+def mark_manga_settings_recommendation_override(
+    project_id: str,
+    user_id: str,
+) -> Optional[Dict[str, Any]]:
+    """ユーザー保存を記録し、以後の初期推奨で設定値を上書きしない。"""
+
+    project = get_project(project_id, user_id)
+    if not project:
+        return None
+    recommendation = project.get("manga_settings_recommendation")
+    if not isinstance(recommendation, dict):
+        return project
+    recommendation = dict(recommendation)
+    recommendation["user_override"] = True
+    with connection() as conn:
+        conn.execute(
+            "UPDATE projects SET manga_settings_recommendation_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (_json(recommendation), utc_now(), project_id, user_id),
         )
     return get_project(project_id, user_id)
 

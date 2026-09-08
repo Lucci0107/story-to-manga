@@ -98,6 +98,35 @@ def valid_character() -> dict:
     }
 
 
+def valid_settings_recommendation() -> dict:
+    return {
+        "recommended_page_count": 18,
+        "recommended_visual_style": "cinematic",
+        "recommended_color_mode": "bw",
+        "recommended_pacing": "balanced",
+        "recommended_dialogue_density": "medium",
+        "recommended_target_audience": "一般読者",
+        "recommendation_reason": "主要シーンの余白を確保します。",
+        "page_count_reason": "導入と結末を急がず描きます。",
+        "scene_page_budget": [
+            {
+                "scene": "導入",
+                "scene_type": "establishing",
+                "importance": "medium",
+                "estimated_pages": 4,
+                "reason": "舞台を示す",
+            },
+            {
+                "scene": "決断",
+                "scene_type": "climax",
+                "importance": "high",
+                "estimated_pages": 14,
+                "reason": "感情の頂点",
+            },
+        ],
+    }
+
+
 def test_responses_structured_output_and_knowledge_are_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Responses API形式とKnowledge参照境界が実リクエストへ反映される。"""
 
@@ -123,6 +152,29 @@ def test_responses_structured_output_and_knowledge_are_sent(monkeypatch: pytest.
     assert requests[0]["text"]["format"]["strict"] is True
     assert "<knowledge_reference>" in requests[0]["input"]
     assert "霧の町では余白を広くする" in requests[0]["input"]
+
+
+def test_settings_recommendation_uses_structured_output_and_knowledge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(response_with_json(valid_settings_recommendation()))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    result = OpenAIProvider().recommend_settings(
+        valid_analysis(),
+        {"language": "ja", "reading_direction": "right_to_left"},
+        {"prompt_text": "重要な感情シーンは余白を広くする。"},
+    )
+    assert result["recommended_page_count"] == 18
+    assert requests[0]["text"]["format"]["name"] == "manga_settings_recommendation"
+    assert requests[0]["model"] == "gpt-5.6-luna"
+    assert "<knowledge_reference>" in requests[0]["input"]
+    assert "余白を広くする" in requests[0]["input"]
 
 
 def test_invalid_structured_output_is_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:

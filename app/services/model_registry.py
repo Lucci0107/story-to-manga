@@ -113,6 +113,7 @@ SUPPORTED_REASONING_LEVELS = (AUTO_REASONING, "low", "medium", "high")
 MODEL_TASKS = (
     "story_analysis",
     "adaptation",
+    "settings_recommendation",
     "character",
     "storyboard",
     "qa",
@@ -121,6 +122,7 @@ MODEL_TASKS = (
 TASK_LABELS = {
     "story_analysis": "Story Analysis",
     "adaptation": "Manga Adaptation",
+    "settings_recommendation": "漫画化設定の推奨",
     "character": "Character Bible",
     "storyboard": "Storyboard",
     "qa": "Knowledge-aware QA",
@@ -146,6 +148,7 @@ PRESET_POLICIES: Dict[str, Dict[str, str]] = {
     "auto": {
         "story_analysis": "gpt-5.6-terra",
         "adaptation": "gpt-5.6-sol",
+        "settings_recommendation": "gpt-5.6-terra",
         "character": "gpt-5.6-sol",
         "storyboard": "gpt-5.6-sol",
         "qa": "gpt-5.6-luna",
@@ -155,6 +158,7 @@ PRESET_POLICIES: Dict[str, Dict[str, str]] = {
     "highest_quality": {
         "story_analysis": "gpt-6-astra",
         "adaptation": "gpt-6-astra",
+        "settings_recommendation": "gpt-6-astra",
         "character": "gpt-5.6-sol",
         "storyboard": "gpt-6-astra",
         "qa": "gpt-5.6-terra",
@@ -164,6 +168,7 @@ PRESET_POLICIES: Dict[str, Dict[str, str]] = {
     "balanced": {
         "story_analysis": "gpt-5.6-terra",
         "adaptation": "gpt-5.6-terra",
+        "settings_recommendation": "gpt-5.6-terra",
         "character": "gpt-5.6-terra",
         "storyboard": "gpt-5.6-terra",
         "qa": "gpt-5.6-luna",
@@ -173,6 +178,7 @@ PRESET_POLICIES: Dict[str, Dict[str, str]] = {
     "economy": {
         "story_analysis": "gpt-5.6-luna",
         "adaptation": "gpt-5.6-luna",
+        "settings_recommendation": "gpt-5.6-luna",
         "character": "gpt-5.6-luna",
         "storyboard": "gpt-5.6-luna",
         "qa": "gpt-5.6-luna",

@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能も実装、ローカル検証、GitHub CI、Render自動デプロイ、本番確認まで完了しています。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル検証済みです。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -66,13 +66,16 @@
 - `StorageService`とLocalFileStorageによる画像／Export保存の集約、Storage key保存、旧`file_path`の読み出し互換
 - 外部PostgreSQL／Object Storageの実接続・既存データ移行を行わずに、将来の移行設定・依存関係・テスト境界を準備
 - Projectごとの漫画言語（日本語／English）と、言語から自動決定するserver-sideの読み方向
+- Story Analysisを主sourceにした漫画化設定のAI推奨（ページ数、スタイル、色、テンポ、セリフ量、想定読者、理由、シーン別ページ配分）
+- `settings_recommendation`用Structured Outputs、Analysis複雑度ベースの決定論的fallback、Knowledge adaptation Scope参照
+- 推奨値の永続化、Analysis fingerprintによるstale検出、user override保護、再提案のpreview/apply/cancel
 - 言語別のPanel.order、グリッド視覚配置、吹き出し・ナレーション・SFX順、Previewナビゲーション、PDFコマ配置
 - Storyboard Structured Output、Panel Prompt、Knowledge-aware QAへProjectの言語・読順ルールを注入し、Knowledgeの逆方向指定を上書き
 - 旧`rtl`/`ltr`設定と0始まりのPanel orderを壊さずに移行する冪等な正規化、言語変更時の画像・本文保持
 
 ## 検証済み
 
-- `pytest`: 53 passed（既存テスト + 永続化境界・Storage key回帰確認 + 外部Storyboard Job回帰確認 + favicon/admin security回帰確認）
+- `pytest`: 68 passed（既存テスト + 永続化境界・Storage key回帰確認 + 外部Storyboard Job回帰確認 + favicon/admin security回帰確認 + AI漫画化設定推奨テスト）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
@@ -102,6 +105,8 @@
 - 言語・読順回帰検証: `pytest` 62 passed、Python compileall、JavaScript構文、`pip check`、`git diff --check`を確認
 - 言語・読順Production QA: 本番デモProjectでEnglish保存・Reload・`ltr`・Panel 1左列／Panel 2右列、続けて日本語保存・`rtl`・Panel 1右列／Panel 2左列／先頭吹き出し右側を確認。Previewページ送り表示、PDF/ZIP download link、成功後Processing Dialogのhidden cleanupも確認
 - 言語・読順Production smoke: `/api/health` 200、login/CSS/JavaScript 200、本番静的ファイルへ言語セレクタ・読順属性・Preview navigation・bubble sideを確認。今回のQAでは実AI／画像生成の追加実行なし
+- AI漫画化設定推奨のローカルBrowser QA: 短編Analysis後に中央Processing Dialog、推奨ページ数・理由・シーン別配分を確認。手動設定の保存・Reload保持、再提案のpreview、cancel、apply、言語による右→左表示を確認。実AIテキスト呼び出しは初回推奨と再提案の各1回、画像生成は追加実行なし
+- AI漫画化設定推奨の回帰検証: 短編・標準・複雑シナリオでページ数が増加すること、固定40ページでないこと、Structured Output検証、Knowledge参照、AI失敗fallback、stale/user override保護、`settings_recommendation_model`のプリセット解決を確認
 - 最終管理者確認コミット`43aa035`のGitHub Actions CI（run `34121680039`）とRender自動deploy（`dep-dafaq6eq1p3s73dofjj0`）がsuccess。直後の一時502回復後、最終Production smokeのhealth/login/CSS/JavaScriptが全項目HTTP 200
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 

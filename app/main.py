@@ -34,6 +34,7 @@ from .schemas import (
     ProjectKnowledgePatch,
     PanelPatch,
     ProjectPatch,
+    SettingsRecommendationRequest,
     normalize_analysis,
     normalize_characters,
     normalize_storyboard,
@@ -58,6 +59,12 @@ from .services.model_registry import (
     model_registry_view,
     resolve_model_settings,
     validate_model_settings,
+)
+from .services.settings_recommendation import (
+    enrich_recommendation,
+    fallback_recommendation,
+    normalize_settings_recommendation,
+    recommendation_is_stale,
 )
 from .services.storage import (
     StorageConfigurationError,
@@ -213,8 +220,15 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
     panels = [panel for page in pages for panel in page.get("panels", [])]
     generated = sum(1 for panel in panels if panel.get("generation_status") == "completed")
     failed = sum(1 for panel in panels if panel.get("generation_status") == "failed")
+    recommendation = project.get("manga_settings_recommendation")
+    if isinstance(recommendation, dict):
+        recommendation = dict(recommendation)
+        recommendation["stale"] = recommendation_is_stale(
+            recommendation, project.get("analysis") or {}
+        )
     return {
         **project,
+        "manga_settings_recommendation": recommendation,
         "status_label": STATUS_LABELS.get(project.get("status"), "下書き"),
         "page_count": len(pages),
         "panel_count": len(panels),
@@ -1026,6 +1040,84 @@ async def api_get_project(project_id: str, user=Depends(current_user)):
     return {"project": project_view(require_project(project_id, user["id"]))}
 
 
+@app.post("/api/projects/{project_id}/settings/recommendation")
+async def api_recommend_manga_settings(
+    project_id: str,
+    payload: SettingsRecommendationRequest,
+    user=Depends(current_user),
+):
+    """既存Story Analysisから漫画化設定の推奨値を取得する。"""
+
+    project = require_project(project_id, user["id"])
+    analysis = project.get("analysis")
+    if not analysis:
+        raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
+    existing = project.get("manga_settings_recommendation")
+    stale = recommendation_is_stale(existing, analysis)
+    if isinstance(existing, dict) and not payload.force and not stale:
+        view = project_view(project)
+        return {
+            "project": view,
+            "recommendation": view.get("manga_settings_recommendation"),
+            "mode": "cached",
+            "fallback": bool(existing.get("fallback")),
+        }
+    # Analysis更新後の初回表示では、既存設定を勝手に変えず再提案を案内する。
+    if isinstance(existing, dict) and stale and not payload.force:
+        view = project_view(project)
+        return {
+            "project": view,
+            "recommendation": view.get("manga_settings_recommendation"),
+            "mode": "stale",
+            "fallback": bool(existing.get("fallback")),
+        }
+
+    knowledge_context = retrieve_knowledge_context(
+        project_id,
+        user["id"],
+        "adaptation",
+        str(analysis),
+    )
+    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
+    used_fallback = False
+    try:
+        recommendation = provider.recommend_settings(
+            analysis,
+            project["settings"],
+            knowledge_context,
+        )
+        recommendation = normalize_settings_recommendation(
+            recommendation, analysis, project["settings"]
+        )
+    except AIProviderError:
+        # 推奨失敗で設定画面を塞がず、説明可能な決定論的フォールバックを保存する。
+        used_fallback = True
+        recommendation = fallback_recommendation(analysis, project["settings"])
+    previous_override = bool(existing.get("user_override")) if isinstance(existing, dict) else False
+    recommendation = enrich_recommendation(
+        recommendation,
+        analysis,
+        fallback=used_fallback,
+        user_override=previous_override,
+        metadata=getattr(provider, "last_generation_metadata", None),
+    )
+    saved = db.save_manga_settings_recommendation(
+        project_id, user["id"], recommendation
+    )
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Projectが見つかりません")
+    record_provider_generation(project_id, user["id"], provider)
+    refreshed = require_project(project_id, user["id"])
+    view = project_view(refreshed)
+    return {
+        "project": view,
+        "recommendation": view.get("manga_settings_recommendation"),
+        "mode": provider.provider_name,
+        "fallback": used_fallback,
+        "knowledge": knowledge_context,
+    }
+
+
 @app.get("/api/projects/{project_id}/knowledge")
 async def api_project_knowledge(project_id: str, user=Depends(current_user)):
     selections = db.list_project_knowledge(project_id, user["id"])
@@ -1112,6 +1204,10 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
         storyboard=storyboard,
         clear_quality_check=clear_quality_check,
     )
+    if payload.settings is not None:
+        updated = db.mark_manga_settings_recommendation_override(
+            project_id, user["id"]
+        ) or updated
     return {"project": project_view(updated or project)}
 
 
