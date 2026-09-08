@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。2026-09-08の全体最適化レビューでは、既存構成を維持しながら共有Demoの本番無効化、再起動時Job復旧、同時生成のDB一意保証、Project資産削除、抽出上限、security header、Jinja2 security patchを実装し、本番Browser QAで検出したモバイルテーマ操作の配置崩れも局所修正しました。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。2026-09-08の全体最適化レビューでは、既存構成を維持しながら共有Demoの本番無効化、再起動時Job復旧、同時生成のDB一意保証、Project資産削除、抽出上限、security header、Jinja2 security patchを実装し、本番Browser QAで検出したモバイルテーマ操作の配置崩れも局所修正しました。同日のStoryboard Job同期修正では、長時間生成の状態復元、失敗収束、stale回復、大規模ページ分割、atomic保存、次工程遷移を本番で確認しました。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -36,6 +36,8 @@
 - ページ・コマの追加、削除、並び替え、レイアウト変更
 - コマ単位の生成Job、状態表示、再試行、重複リクエスト抑止
 - 外部AIの長時間Storyboardを永続Jobへ登録し、HTTPタイムアウトを避けるバックグラウンド処理とUIポーリング
+- Storyboard Jobのheartbeat／stale recovery、保存と完了状態のatomic更新、reload時のserver state復元、失敗時Retry復帰
+- 9ページ以上のStoryboardを既定8ページ単位のStructured Outputへ分割し、最大120ページまでの応答切断リスクを抑制
 - デモPNG画像生成と、OpenAI画像APIへのサーバー側接続境界
 - OpenAI Responses APIのStructured OutputsによるStory Analysis、Character Bible、Storyboard、Knowledge-aware QA、パネルPrompt生成
 - OpenAIモデル能力レジストリ、Auto / Highest Quality / Balanced / Economyプリセット、工程別モデル選択、Global / Project overrideのサーバー側解決
@@ -75,7 +77,7 @@
 
 ## 検証済み
 
-- `pytest`: 74 passed（既存68件 + 本番Demo無効化、Job復旧、Storage cleanup、docx展開上限、モバイルsidebar等の回帰確認）
+- `pytest`: 86 passed（Storyboard Job成功・失敗・validation例外・重複防止・stale recovery・heartbeat・48ページ分割・RTL/LTR・frontend復元を含む）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
@@ -111,6 +113,8 @@
 - AI漫画化設定推奨の回帰検証: 短編・標準・複雑シナリオでページ数が増加すること、固定40ページでないこと、Structured Output検証、Knowledge参照、AI失敗fallback、stale/user override保護、`settings_recommendation_model`のプリセット解決を確認
 - AI漫画化設定推奨のProduction QA: 本番の既存合成Projectで初回推奨値・理由・シーン別配分・Processing Dialogを確認。再提案のProcessing Dialog、プレビュー、キャンセル、再読み込み後の8ページ／日本語RTL保持、推奨ボタンの完了後有効化、本番console error 0件を確認。画像生成は追加実行なし
 - 全体最適化レビューのProduction QA: health/login/CSS/JavaScript 200、共有`/demo` 404、未認証admin API 401、HSTS/no-store、新CSS配信を確認。実ブラウザで390px/1440px、Light/Dark、Dashboard、新規Project、Project工程、AI推奨設定、日本語RTL Preview、PDF/ZIP導線、Knowledge、AIモデル設定を確認し、console error/warningは0件。既存productionデータの生成・削除・再保存は行っていません。
+- Storyboard Job同期のローカルBrowser QA: 成功、強制失敗、processing中reload、完了後reload、Retry復帰、390px、Light/Darkを確認。完了後はネーム表示とボタン復帰、失敗後はエラーとRetryを表示し、console errorは0件
+- Storyboard Job同期のProduction QA: 短い合成Projectを実AIで1回だけ再生成し、processingからcompletedへの収束、8ページ保存・表示、`gpt-5.6-sol`実行表示、ボタン復帰、reload保持、コマ生成画面への次工程遷移、console error 0件を確認。画像生成は実行していません
 - 最新修正コミット`b889fe6`のGitHub Actions CI（run `34179819425`）がsuccess。CI通過後のRender自動デプロイを本番ページの修正反映（再提案ボタン有効化）で確認し、`/api/health`はHTTP 200、OpenAI provider表示も確認
 - 最終管理者確認コミット`43aa035`のGitHub Actions CI（run `34121680039`）とRender自動deploy（`dep-dafaq6eq1p3s73dofjj0`）がsuccess。直後の一時502回復後、最終Production smokeのhealth/login/CSS/JavaScriptが全項目HTTP 200
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
@@ -185,6 +189,8 @@
 - 言語・読順変更Render deployment: GitHub deployment `6318749467`（success）、environment URL `https://story-to-manga-b6bb.onrender.com`
 - 全体最適化レビューcommit: `e57594a`、GitHub Actions `34187009638`（success）、Render `dep-dafot767bikc73eh73m0`（success）
 - モバイルsidebar修正commit: `edb4db8`、GitHub Actions `34187418823`（success）、Render `dep-dafp0ebm8hqs73e86cb0`（success）
+- Storyboard Job lifecycle修正commit: `5b695c3`、GitHub Actions `34222760101`（success）、Render `dep-dafvd1h42hec73dnbgeg`（success）
+- Storyboard次工程遷移修正commit: `572c5a3`、GitHub Actions `34223384326`（success）、Render `dep-dafvgdss728c739cbc20`（success）
 
 ## 次回セッションの確認
 
