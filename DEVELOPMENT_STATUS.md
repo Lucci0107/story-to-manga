@@ -118,10 +118,17 @@
 - 最新修正コミット`b889fe6`のGitHub Actions CI（run `34179819425`）がsuccess。CI通過後のRender自動デプロイを本番ページの修正反映（再提案ボタン有効化）で確認し、`/api/health`はHTTP 200、OpenAI provider表示も確認
 - 最終管理者確認コミット`43aa035`のGitHub Actions CI（run `34121680039`）とRender自動deploy（`dep-dafaq6eq1p3s73dofjj0`）がsuccess。直後の一時502回復後、最終Production smokeのhealth/login/CSS/JavaScriptが全項目HTTP 200
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
+- Storyboard OpenAI timeout/resilience修正（`f4f216f`）: 既存のJob lifecycle・8ページbatch・重複Job防止は維持し、Storyboard専用の`240秒 / 1回` timeout・bounded retryを追加しました。認証、権限、model access、quota、rate limit、timeout、server、response validationをサーバー側で分類し、quota／認証等は無駄に再試行しません。
+- Storyboardのリクエストには同一試行系列を追跡できる`X-Client-Request-Id`を付与し、モデル・timeout・試行回数・入力文字数・所要時間などの秘密を含まない診断メタデータだけをログへ記録します。Story全文・Knowledge全文・API keyはログへ出力しません。
+- Storyboard batchの文脈を見直し、長文・複数batchでは原文全文を繰り返し送らず、階層化アウトライン、分析結果、必要な設定・キャラクター情報、言語／読順、限定Knowledgeを利用する構成にしました。batchサイズは実測で8ページを維持し、無条件の細分化は行っていません。
+- Storyboard timeout／quota分類、同一request id、task-specific timeout、長文batch context縮小の回帰テストを追加し、全体pytestは`90 passed`です。compileall、JavaScript syntax、pip check、diff check、secret scanも成功しました。
+- ローカル実AI検証: 短編Storyboard（3ページ）と9ページStoryboard（8+1ページbatch）を成功確認しました。画像生成は追加実行していません。
+- 最新Production QA: `https://story-to-manga-b6bb.onrender.com`で合成ProjectのStoryboardを実AIで1回だけ生成し、`processing → completed`、8ページ・34コマ表示、実行モデル`gpt-5.6-sol`、Processing Dialog終了、ボタン復帰、reload後のネーム保持、`コマ生成へ`の次工程遷移を確認しました。画像生成は実行していません。
+- `f4f216f`のGitHub Actions CI（run `34226922292`）はsuccess、Render自動deploy後の`/api/health`はHTTP 200、Production smokeのhealth/login/CSS/JavaScriptも全項目成功しました。
 
 ## In Progress
 
-- なし。全体最適化レビュー、回帰検証、GitHub CI、Render自動deploy、Production Browser/Smoke QAまで完了しました。
+- なし。Storyboard OpenAI timeout/resilience修正、回帰検証、GitHub CI、Render自動deploy、Production Browser/Smoke QAまで完了しました。
 
 ## 永続化移行準備
 
