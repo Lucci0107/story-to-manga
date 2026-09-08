@@ -216,6 +216,72 @@ def init_db() -> None:
         export_columns = conn.table_columns("exports")
         if "storage_key" not in export_columns:
             conn.execute("ALTER TABLE exports ADD COLUMN storage_key TEXT")
+        # Process再起動でBackgroundTasksは復元できないため、取り残したJobとPanelを
+        # 失敗状態へ揃え、UIから個別に再試行できるようにする。
+        interrupted_message = "処理が中断されました。再試行してください"
+        interrupted_jobs = conn.execute(
+            """
+            SELECT project_id, target_id, job_type
+            FROM generation_jobs
+            WHERE status IN ('queued', 'processing')
+            """
+        ).fetchall()
+        interrupted_by_project: Dict[str, List[Mapping[str, Any]]] = {}
+        for job in interrupted_jobs:
+            interrupted_by_project.setdefault(str(job["project_id"]), []).append(job)
+        for project_id, jobs in interrupted_by_project.items():
+            project_row = conn.execute(
+                "SELECT storyboard_json, current_step FROM projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+            if not project_row:
+                continue
+            storyboard = _loads(project_row["storyboard_json"], [])
+            panel_ids = {
+                str(job["target_id"])
+                for job in jobs
+                if job["job_type"] == "panel_artwork" and job["target_id"]
+            }
+            for page in storyboard if isinstance(storyboard, list) else []:
+                for panel in page.get("panels", []) if isinstance(page, dict) else []:
+                    if isinstance(panel, dict) and str(panel.get("id")) in panel_ids:
+                        panel["generation_status"] = "failed"
+                        panel["generation_error"] = interrupted_message
+            next_step = (
+                "storyboard"
+                if any(job["job_type"] == "storyboard" for job in jobs)
+                else project_row["current_step"]
+            )
+            conn.execute(
+                """
+                UPDATE projects
+                SET storyboard_json = ?, status = 'partially_failed', current_step = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_json(storyboard), next_step, utc_now(), project_id),
+            )
+        conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'failed', error = ?, completed_at = ?
+            WHERE status IN ('queued', 'processing')
+            """,
+            (interrupted_message, utc_now()),
+        )
+        # 同時リクエストでも同じ有料処理を二重登録できないようDBでも保証する。
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active_idempotency
+            ON generation_jobs(project_id, job_type, idempotency_key)
+            WHERE status IN ('queued', 'processing')
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exports_project ON exports(project_id, created_at DESC)"
+        )
         # 既存ProjectのJSONを壊さず、言語・方向とコマの読順だけを冪等に移行する。
         project_rows = conn.execute(
             "SELECT id, settings_json, storyboard_json FROM projects"
@@ -706,23 +772,40 @@ def create_generation_job(
         existing = conn.execute(
             """
             SELECT * FROM generation_jobs
-            WHERE idempotency_key = ? AND status IN ('queued', 'processing')
+            WHERE project_id = ? AND job_type = ? AND idempotency_key = ?
+              AND status IN ('queued', 'processing')
             ORDER BY created_at DESC LIMIT 1
             """,
-            (idempotency_key,),
+            (project_id, job_type, idempotency_key),
         ).fetchone()
         if existing:
             return dict(existing)
-        job_id = str(uuid.uuid4())
-        now = utc_now()
-        conn.execute(
-            """
-            INSERT INTO generation_jobs
-              (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
-            VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?)
-            """,
-            (job_id, project_id, target_id, job_type, idempotency_key, now),
-        )
+    job_id = str(uuid.uuid4())
+    now = utc_now()
+    try:
+        with connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO generation_jobs
+                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
+                VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?)
+                """,
+                (job_id, project_id, target_id, job_type, idempotency_key, now),
+            )
+    except Exception:  # DB固有の一意制約例外をRepository境界で吸収する。
+        with connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT * FROM generation_jobs
+                WHERE project_id = ? AND job_type = ? AND idempotency_key = ?
+                  AND status IN ('queued', 'processing')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (project_id, job_type, idempotency_key),
+            ).fetchone()
+        if existing:
+            return dict(existing)
+        raise
     return get_generation_job(job_id)
 
 
@@ -743,16 +826,32 @@ def create_async_generation_job(
         ).fetchone()
         if existing:
             return dict(existing), False
-        job_id = str(uuid.uuid4())
-        now = utc_now()
-        conn.execute(
-            """
-            INSERT INTO generation_jobs
-              (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
-            VALUES (?, ?, NULL, ?, 'queued', NULL, ?, ?)
-            """,
-            (job_id, project_id, job_type, idempotency_key, now),
-        )
+    job_id = str(uuid.uuid4())
+    now = utc_now()
+    try:
+        with connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO generation_jobs
+                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
+                VALUES (?, ?, NULL, ?, 'queued', NULL, ?, ?)
+                """,
+                (job_id, project_id, job_type, idempotency_key, now),
+            )
+    except Exception:  # DB固有の一意制約例外をRepository境界で吸収する。
+        with connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT * FROM generation_jobs
+                WHERE project_id = ? AND job_type = ? AND idempotency_key = ?
+                  AND status IN ('queued', 'processing')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (project_id, job_type, idempotency_key),
+            ).fetchone()
+        if existing:
+            return dict(existing), False
+        raise
     return get_generation_job(job_id), True
 
 

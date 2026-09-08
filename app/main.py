@@ -105,6 +105,18 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    settings = get_settings()
+    if settings.app_env == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    if (
+        request.url.path.startswith("/api/")
+        or request.url.path in {"/login", "/register", "/logout", "/demo"}
+        or (
+            SESSION_COOKIE in request.cookies
+            and not request.url.path.startswith("/static/")
+        )
+    ):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -569,7 +581,11 @@ async def root(request: Request):
 async def login_page(request: Request):
     if optional_user(request):
         return RedirectResponse("/dashboard", status_code=303)
-    return templates.TemplateResponse(request, "login.html", {"request": request})
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"request": request, "demo_enabled": get_settings().enable_demo_login},
+    )
 
 
 @app.post("/login")
@@ -579,7 +595,11 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"request": request, "error": "メールアドレスまたはパスワードを確認してください"},
+            {
+                "request": request,
+                "error": "メールアドレスまたはパスワードを確認してください",
+                "demo_enabled": get_settings().enable_demo_login,
+            },
             status_code=401,
         )
     return redirect_with_session("/dashboard", db.create_session(user["id"]))
@@ -603,6 +623,8 @@ async def register(email: str = Form(...), password: str = Form(...)):
 
 @app.get("/demo")
 async def demo_login():
+    if not get_settings().enable_demo_login:
+        raise HTTPException(status_code=404, detail="ページが見つかりません")
     user = db.get_user_by_email("demo@example.com")
     if not user:
         user_data = db.create_user("demo@example.com", secrets.token_urlsafe(24))
@@ -1216,6 +1238,11 @@ async def api_delete_project(project_id: str, user=Depends(current_user)):
     require_project(project_id, user["id"])
     if not db.delete_project(project_id, user["id"]):
         raise HTTPException(status_code=404, detail="Projectが見つかりません")
+    try:
+        get_storage().delete_project_objects(project_id)
+    except (StorageConfigurationError, StorageError):
+        # DB削除は完了しているため応答は成功とし、孤立ファイルだけを運用ログへ残す。
+        logger.warning("project storage cleanup failed: %s", project_id)
     return {"deleted": True, "project_id": project_id}
 
 

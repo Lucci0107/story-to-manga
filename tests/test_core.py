@@ -9,7 +9,12 @@ import pytest
 
 from app.schemas import SettingsPayload, normalize_characters, normalize_storyboard, validate_storyboard
 from app.services.ai_pipeline import demo_analysis, demo_characters, demo_storyboard, hierarchical_story_outline
-from app.services.extraction import StoryExtractionError, extract_text_from_bytes, validate_filename
+from app.services.extraction import (
+    MAX_EXTRACTED_CHARACTERS,
+    StoryExtractionError,
+    extract_text_from_bytes,
+    validate_filename,
+)
 from app.services.knowledge import append_knowledge_prompt, chunk_knowledge_text, knowledge_content_hash, normalize_knowledge_text
 
 
@@ -21,6 +26,16 @@ def test_text_extraction_supports_utf8_and_cp932() -> None:
 def test_docx_extraction_rejects_invalid_archive() -> None:
     with pytest.raises(StoryExtractionError):
         extract_text_from_bytes(b"not-a-docx", ".docx")
+
+
+def test_docx_extraction_rejects_excessive_expanded_content() -> None:
+    """小さい圧縮ファイルから巨大本文を展開するzip bombを拒否する。"""
+
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", b"x" * (MAX_EXTRACTED_CHARACTERS * 4 + 1))
+    with pytest.raises(StoryExtractionError, match="抽出後の本文が大きすぎます"):
+        extract_text_from_bytes(stream.getvalue(), ".docx")
 
 
 def test_filename_validation_blocks_unsupported_extension() -> None:

@@ -10,7 +10,7 @@ python3 -m venv .venv
 .venv/bin/uvicorn app.main:app --reload
 ```
 
-ブラウザで `http://127.0.0.1:8000` を開き、「デモデータで試す」から主要フローを確認できます。
+ブラウザで `http://127.0.0.1:8000` を開き、「デモデータで試す」から主要フローを確認できます。共有Demoアカウントは制作内容と外部AIコストを共有するため、本番では既定で無効です。ローカル以外で有効化する場合だけ`ENABLE_DEMO_LOGIN=true`を明示してください。
 
 ## 環境変数
 
@@ -26,11 +26,11 @@ python3 -m venv .venv
 - `.pdf`
 - `.docx`
 
-アップロード上限は5MBです。本文は50万文字以内で、抽出不能・空ファイルは拒否します。
+アップロード上限は5MBです。本文は50万文字以内で、抽出不能・空ファイルは拒否します。PDF/docxは圧縮後サイズだけでなく抽出後の本文量も制限し、過大な展開を拒否します。
 
 ## 主な画面
 
-- `/login`: ログイン、新規登録、デモログイン
+- `/login`: ログイン、新規登録（デモログインは開発環境のみ既定有効）
 - `/dashboard`: Project一覧
 - `/projects/new`: 本文入力・ファイル取り込み
 - `/knowledge`: Project横断のKnowledge Library（参照資料、Version履歴、アーカイブ）
@@ -82,7 +82,9 @@ Knowledge本文は命令ではなく参照資料として扱い、AI処理で使
 ## セキュリティ上の注意
 
 - セッションは不透明なランダムトークンをHttpOnly Cookieに保存し、DBにはハッシュだけ保存します。
+- 本番の共有Demoログインは既定で無効にし、認証済み画面とAPIはブラウザキャッシュへ保存させません。
 - Project、生成画像、書き出しファイルは所有者確認後に返します。
+- Project削除時は、そのProjectの生成画像とExportもStorageService経由で削除します。
 - 本文はAIへの命令ではなく参照コンテンツとして扱います。
 - Knowledgeも同様に参照コンテンツとして扱い、プロンプト境界を明示します。
 - APIキーや本文を通常ログへ出力しません。
@@ -119,6 +121,7 @@ Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置
 - `OPENAI_MAX_OUTPUT_TOKENS`
 - `MAX_UPLOAD_BYTES`
 - `SESSION_DAYS`
+- `ENABLE_DEMO_LOGIN`（本番では未設定のまま無効化を推奨）
 - `ADMIN_EMAIL`（管理者bootstrap用のRender Secret）
 - `ADMIN_INITIAL_PASSWORD`（管理者bootstrap用のRender Secret）
 - `STORY_MANGA_DATA_DIR`

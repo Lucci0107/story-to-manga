@@ -54,6 +54,13 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     """実行時設定を一箇所に集約する。"""
@@ -70,6 +77,7 @@ class Settings:
     storage_secret_access_key: str = field(repr=False)
     max_upload_bytes: int
     session_days: int
+    enable_demo_login: bool
     ai_provider: str
     image_provider: str
     openai_api_key: str = field(repr=False)
@@ -108,8 +116,9 @@ def get_settings() -> Settings:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     configured_ai_provider = os.getenv("AI_PROVIDER")
     configured_image_provider = os.getenv("IMAGE_PROVIDER")
+    app_env = os.getenv("APP_ENV", "development").strip().lower() or "development"
     return Settings(
-        app_env=os.getenv("APP_ENV", "development"),
+        app_env=app_env,
         data_dir=data_dir,
         database_url=database_url,
         database_connect_timeout_seconds=max(1, min(60, _int_env("DATABASE_CONNECT_TIMEOUT_SECONDS", 10))),
@@ -121,6 +130,8 @@ def get_settings() -> Settings:
         storage_secret_access_key=os.getenv("STORAGE_SECRET_ACCESS_KEY", "").strip(),
         max_upload_bytes=_int_env("MAX_UPLOAD_BYTES", 5 * 1024 * 1024),
         session_days=max(1, _int_env("SESSION_DAYS", 14)),
+        # 共有Demoアカウントは制作内容とAPIコストを共有するため、本番では明示許可時だけ有効化する。
+        enable_demo_login=_bool_env("ENABLE_DEMO_LOGIN", app_env != "production"),
         ai_provider=(configured_ai_provider or ("openai" if api_key else "demo")).lower(),
         image_provider=(configured_image_provider or ("openai" if api_key else "demo")).lower(),
         openai_api_key=api_key,

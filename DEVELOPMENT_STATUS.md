@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。最新の修正コミット`b889fe6`では、推奨取得完了後に再提案ボタンを確実に再有効化するUI状態更新を追加しました。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。2026-09-08の全体最適化レビューでは、既存構成を維持しながら共有Demoの本番無効化、再起動時Job復旧、同時生成のDB一意保証、Project資産削除、抽出上限、security header、Jinja2 security patchをローカル検証済みです。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -75,11 +75,13 @@
 
 ## 検証済み
 
-- `pytest`: 68 passed（既存テスト + 永続化境界・Storage key回帰確認 + 外部Storyboard Job回帰確認 + favicon/admin security回帰確認 + AI漫画化設定推奨テスト）
+- `pytest`: 73 passed（既存68件 + 本番Demo無効化、Job復旧、Storage cleanup、docx展開上限等の回帰確認）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`
 - `pip check`
+- 全体最適化レビュー後の隔離production設定HTTP smokeでhealth/login/CSS/JavaScript 200、`/demo` 404、HSTS/no-storeを確認
+- 追跡ソースのsecret scanでactual secret検出なし
 - 永続化変更後のAPIテストで、画像取得、PDF／ZIP生成・ダウンロード、ExportのStorage key保存を確認
 - 永続化境界変更後、隔離SQLite領域で`production_smoke.py`を実行し、health、ログイン画面、CSS、JavaScriptのHTTP到達性を確認（全項目OK）
 - APIキー文字列のソース混入チェック（検出なし）
@@ -114,7 +116,7 @@
 
 ## In Progress
 
-- なし。`ADMIN_INITIAL_PASSWORD`のRender Secret削除は任意の運用ハードニングであり、アプリの完了条件には影響しません。
+- 全体最適化レビューのローカル検証は完了。GitHub CI、Render自動deploy、Production Browser/Smoke QAを継続中です。
 
 ## 永続化移行準備
 

@@ -41,8 +41,10 @@
       </div>
       <button class="primary-button button-wide" type="submit">ログイン</button>
     </form>
+    {% if demo_enabled %}
     <div class="auth-divider"><span>または</span></div>
     <a class="secondary-button button-wide button-center" href="/demo">デモデータで試す</a>
+    {% endif %}
     <p class="auth-switch">アカウントをお持ちでない方は、<button type="button" data-auth-register>新規登録</button></p>
     <form class="auth-form register-form" method="post" action="/register" hidden>
       <div class="form-field">

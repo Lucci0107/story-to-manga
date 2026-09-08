@@ -13,6 +13,7 @@ from app import db
 from app.main import app
 from app.services.ai_pipeline import DemoAIProvider
 from app.services.knowledge import retrieve_knowledge_context
+from app.services.storage import get_storage
 
 
 def client_for(tmp_path: Path) -> TestClient:
@@ -149,6 +150,29 @@ def test_project_ownership_is_enforced(tmp_path: Path) -> None:
     client.post("/logout", follow_redirects=False)
     client.post("/register", data={"email": "other@example.com", "password": "long-password"}, follow_redirects=False)
     assert client.get(f"/api/projects/{project_id}").status_code == 404
+
+
+def test_project_delete_cleans_owned_storage_objects(tmp_path: Path) -> None:
+    client = client_for(tmp_path)
+    client.post(
+        "/register",
+        data={"email": "storage-cleanup@example.com", "password": "long-password"},
+        follow_redirects=False,
+    )
+    first = client.post("/api/projects", data={"title": "削除対象", "story_text": "本文"}).json()["project"]
+    second = client.post("/api/projects", data={"title": "保持対象", "story_text": "本文"}).json()["project"]
+    storage = get_storage()
+    first_asset = storage.asset_key(first["id"], "panel.png")
+    first_export = storage.export_key(first["id"], "export", "pdf")
+    second_asset = storage.asset_key(second["id"], "panel.png")
+    for key in (first_asset, first_export, second_asset):
+        storage.put_bytes(key, b"data")
+
+    deleted = client.delete(f"/api/projects/{first['id']}")
+    assert deleted.status_code == 200
+    assert not storage.exists(first_asset)
+    assert not storage.exists(first_export)
+    assert storage.exists(second_asset)
 
 
 def test_invalid_upload_is_rejected(tmp_path: Path) -> None:

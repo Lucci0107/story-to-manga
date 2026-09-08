@@ -16,6 +16,7 @@ from ..config import get_settings
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
 TEXT_MIME_TYPES = {"text/plain", "text/markdown", "text/x-markdown", "application/x-markdown"}
+MAX_EXTRACTED_CHARACTERS = 1_000_000
 
 
 class StoryExtractionError(ValueError):
@@ -78,15 +79,29 @@ def extract_text_from_bytes(content: bytes, suffix: str) -> str:
             from pypdf import PdfReader
 
             reader = PdfReader(io.BytesIO(content))
-            pages = [page.extract_text() or "" for page in reader.pages]
+            pages = []
+            extracted_characters = 0
+            for page in reader.pages:
+                page_text = page.extract_text() or ""
+                extracted_characters += len(page_text)
+                if extracted_characters > MAX_EXTRACTED_CHARACTERS:
+                    raise StoryExtractionError("抽出後の本文が大きすぎます")
+                pages.append(page_text)
+        except StoryExtractionError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise StoryExtractionError("PDF本文を読み取れませんでした") from exc
         return "\n\n".join(pages).strip()
     if normalized_suffix == "docx":
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                xml_content = archive.read("word/document.xml")
+                document_info = archive.getinfo("word/document.xml")
+                if document_info.file_size > MAX_EXTRACTED_CHARACTERS * 4:
+                    raise StoryExtractionError("抽出後の本文が大きすぎます")
+                xml_content = archive.read(document_info)
             root = ElementTree.fromstring(xml_content)
+        except StoryExtractionError:
+            raise
         except (KeyError, zipfile.BadZipFile, ElementTree.ParseError) as exc:
             raise StoryExtractionError("docx本文を読み取れませんでした") from exc
         paragraphs = []
@@ -97,7 +112,10 @@ def extract_text_from_bytes(content: bytes, suffix: str) -> str:
             ]
             if chunks:
                 paragraphs.append(unescape("".join(chunks)))
-        return "\n\n".join(paragraphs).strip()
+        result = "\n\n".join(paragraphs).strip()
+        if len(result) > MAX_EXTRACTED_CHARACTERS:
+            raise StoryExtractionError("抽出後の本文が大きすぎます")
+        return result
     raise StoryExtractionError("対応していないファイル形式です")
 
 

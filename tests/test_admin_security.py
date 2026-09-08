@@ -156,3 +156,25 @@ def test_favicon_assets_and_template_links_are_reachable(tmp_path: Path, monkeyp
     api_key = os.getenv("OPENAI_API_KEY", "")
     if api_key:
         assert api_key not in login_page.text
+
+
+def test_production_disables_shared_demo_login_and_sets_security_headers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """共有Demoへの匿名ログインと認証情報のキャッシュを本番で許可しない。"""
+
+    clear_admin_environment(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("ENABLE_DEMO_LOGIN", raising=False)
+    client = client_for(tmp_path, monkeypatch)
+
+    login_page = client.get("/login")
+    assert login_page.status_code == 200
+    assert "/demo" not in login_page.text
+    assert login_page.headers["cache-control"] == "no-store"
+    assert login_page.headers["strict-transport-security"] == "max-age=31536000"
+    assert client.get("/demo").status_code == 404
+
+    static_asset = client.get("/static/icons/favicon-32x32.png")
+    assert static_asset.status_code == 200
+    assert "no-store" not in static_asset.headers.get("cache-control", "")

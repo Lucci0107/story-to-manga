@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Optional, Protocol
@@ -53,6 +54,9 @@ class StorageService(Protocol):
         ...
 
     def exists(self, key: str) -> bool:
+        ...
+
+    def delete_project_objects(self, project_id: str) -> int:
         ...
 
 
@@ -134,6 +138,25 @@ class LocalFileStorage:
             return self._path_for_key(self._key_for_reference(key)).is_file()
         except (StorageError, StorageObjectNotFound):
             return False
+
+    def delete_project_objects(self, project_id: str) -> int:
+        """Project所有の画像とExportだけを削除し、他Projectへ影響させない。"""
+
+        safe_project = _safe_component(project_id, "project")
+        deleted = 0
+        asset_directory = self._path_for_key(f"assets/{safe_project}")
+        try:
+            if asset_directory.is_dir():
+                deleted += sum(1 for item in asset_directory.rglob("*") if item.is_file())
+                shutil.rmtree(asset_directory)
+            export_directory = self._path_for_key("exports")
+            for item in export_directory.glob(f"{safe_project}-*"):
+                if item.is_file():
+                    item.unlink()
+                    deleted += 1
+        except OSError as exc:
+            raise StorageError("Projectの保存データを削除できませんでした") from exc
+        return deleted
 
 
 def get_storage(settings: Optional[Settings] = None) -> StorageService:

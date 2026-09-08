@@ -129,6 +129,73 @@ def test_local_storage_round_trip_and_key_safety(tmp_path: Path) -> None:
         storage.get_bytes("../outside.txt")
 
 
+def test_local_storage_deletes_only_selected_project_objects(tmp_path: Path) -> None:
+    storage = LocalFileStorage(tmp_path)
+    own_asset = storage.asset_key("project-one", "panel.png")
+    own_export = storage.export_key("project-one", "export-one", "pdf")
+    other_asset = storage.asset_key("project-two", "panel.png")
+    other_export = storage.export_key("project-two", "export-two", "zip")
+    for key in (own_asset, own_export, other_asset, other_export):
+        storage.put_bytes(key, b"data")
+
+    assert storage.delete_project_objects("project-one") == 2
+    assert not storage.exists(own_asset)
+    assert not storage.exists(own_export)
+    assert storage.exists(other_asset)
+    assert storage.exists(other_export)
+
+
+def test_interrupted_jobs_become_retryable_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("STORY_MANGA_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    db.init_db()
+    user = db.create_user("job-recovery@example.com", "long-password")
+    project = db.create_project(user["id"], "再起動", "本文")
+    db.update_project(
+        project["id"],
+        user["id"],
+        storyboard=[
+            {
+                "id": "page-1",
+                "page_number": 1,
+                "layout": "hero",
+                "panels": [
+                    {
+                        "id": "panel-1",
+                        "order": 1,
+                        "generation_status": "processing",
+                    }
+                ],
+            }
+        ],
+        status="processing",
+        current_step="generate",
+    )
+
+    first = db.create_generation_job(project["id"], "panel-1", "same-request")
+    duplicate = db.create_generation_job(project["id"], "panel-1", "same-request")
+    assert first is not None and duplicate is not None
+    assert duplicate["id"] == first["id"]
+
+    db.init_db()
+    interrupted = db.get_generation_job(first["id"])
+    assert interrupted is not None
+    assert interrupted["status"] == "failed"
+    assert "再試行" in interrupted["error"]
+    recovered_project = db.get_project(project["id"], user["id"])
+    assert recovered_project is not None
+    assert recovered_project["status"] == "partially_failed"
+    recovered_panel = recovered_project["storyboard"][0]["panels"][0]
+    assert recovered_panel["generation_status"] == "failed"
+    assert "再試行" in recovered_panel["generation_error"]
+
+    retry = db.create_generation_job(project["id"], "panel-1", "same-request")
+    assert retry is not None
+    assert retry["id"] != first["id"]
+
+
 def test_storage_factory_rejects_unimplemented_external_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
