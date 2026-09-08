@@ -623,7 +623,7 @@
       } finally {
         recommendationLoading = false;
         hideProcessingDialog();
-        if (activeStep === "settings" && !state.manga_settings_recommendation) render();
+        if (activeStep === "settings") render();
       }
     }
 
