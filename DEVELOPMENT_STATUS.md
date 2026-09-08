@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル検証済みです。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。最新の修正コミット`b889fe6`では、推奨取得完了後に再提案ボタンを確実に再有効化するUI状態更新を追加しました。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -107,6 +107,8 @@
 - 言語・読順Production smoke: `/api/health` 200、login/CSS/JavaScript 200、本番静的ファイルへ言語セレクタ・読順属性・Preview navigation・bubble sideを確認。今回のQAでは実AI／画像生成の追加実行なし
 - AI漫画化設定推奨のローカルBrowser QA: 短編Analysis後に中央Processing Dialog、推奨ページ数・理由・シーン別配分を確認。手動設定の保存・Reload保持、再提案のpreview、cancel、apply、言語による右→左表示を確認。実AIテキスト呼び出しは初回推奨と再提案の各1回、画像生成は追加実行なし
 - AI漫画化設定推奨の回帰検証: 短編・標準・複雑シナリオでページ数が増加すること、固定40ページでないこと、Structured Output検証、Knowledge参照、AI失敗fallback、stale/user override保護、`settings_recommendation_model`のプリセット解決を確認
+- AI漫画化設定推奨のProduction QA: 本番の既存合成Projectで初回推奨値・理由・シーン別配分・Processing Dialogを確認。再提案のProcessing Dialog、プレビュー、キャンセル、再読み込み後の8ページ／日本語RTL保持、推奨ボタンの完了後有効化、本番console error 0件を確認。画像生成は追加実行なし
+- 最新修正コミット`b889fe6`のGitHub Actions CI（run `34179819425`）がsuccess。CI通過後のRender自動デプロイを本番ページの修正反映（再提案ボタン有効化）で確認し、`/api/health`はHTTP 200、OpenAI provider表示も確認
 - 最終管理者確認コミット`43aa035`のGitHub Actions CI（run `34121680039`）とRender自動deploy（`dep-dafaq6eq1p3s73dofjj0`）がsuccess。直後の一時502回復後、最終Production smokeのhealth/login/CSS/JavaScriptが全項目HTTP 200
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 
