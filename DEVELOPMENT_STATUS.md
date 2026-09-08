@@ -134,10 +134,12 @@
 - Panel生成のProduction UX: 390px viewportでactive JobのDialog復元とコマ進捗表示を確認し、横overflowなし（body scroll width 375px / viewport client width 375px）、Production console error 0件を確認しました。`/api/health`はHTTP 200、OpenAI/image provider表示、最新`app.css?v=8`／`app.js?v=9`配信も確認済みです。
 - Panel生成の最新コミット`daeefec`（GitHub Actions run `34239836516`）はsuccess、CI通過後のRender自動deployで変更済みassetが本番へ反映されました。
 - Panel Job状態不明修正のローカル回帰：`pytest` 96 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。隔離Demo環境で16コマの一括生成について、中央Dialog、実際のgenerating/waiting集計、terminal cleanup、reload後の生成済み保持、Dark theme、孤児Panelのserver-side Retry可能化を確認しました。実AI／追加画像生成は行っていません。
+- Panel Job状態不明修正の初回本番検証：GitHub Actions run `34266695670`、Render deployment `dep-dag5o6gae00c738g456g`がsuccess。Production smokeのhealth/login/CSS/JavaScriptは全項目HTTP 200で、更新済み`app.js`の状態不明・再確認導線が本番配信されていることを確認しました。
+- Panel Job状態不明修正のProduction Browser QA：既存の本番Project（31コマ、生成済み2枚）を変更・追加生成せずに、生成画面の表示、Dark theme、reload後の31コマ／2枚保持、Dialog非表示、画像revision保持を確認しました。追加の画像生成は行っていません。
 
 ## In Progress
 
-- なし。Panel生成の全体Processing Dialog、active Jobのreload復元、実進捗表示、terminal state cleanup、個別再生成、Production QAまで完了しています。
+- なし。Panel生成の全体Processing Dialog、active Jobのreload復元、実進捗表示、状態不明時のbounded recovery、terminal state cleanup、個別再生成、Production QAまで完了しています。
 
 ## 永続化移行準備
 
@@ -207,6 +209,9 @@
 - モバイルsidebar修正commit: `edb4db8`、GitHub Actions `34187418823`（success）、Render `dep-dafp0ebm8hqs73e86cb0`（success）
 - Storyboard Job lifecycle修正commit: `5b695c3`、GitHub Actions `34222760101`（success）、Render `dep-dafvd1h42hec73dnbgeg`（success）
 - Storyboard次工程遷移修正commit: `572c5a3`、GitHub Actions `34223384326`（success）、Render `dep-dafvgdss728c739cbc20`（success）
+
+- Panel Job状態不明修正コミット: `b013bde`、GitHub Actions `34266695670`（success）、Render `dep-dag5o6gae00c738g456g`（success）
+- Panel Job状態不明修正後のProduction smokeはhealth/login/CSS/JavaScript全項目HTTP 200。既存本番Projectの31コマ／生成済み2枚はreload後も保持され、追加の画像生成は行っていません。
 
 ## 次回セッションの確認
 
