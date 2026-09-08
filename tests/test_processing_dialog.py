@@ -73,3 +73,10 @@ def test_processing_dialog_blocks_escape_and_reduces_motion() -> None:
     assert '@media (prefers-reduced-motion: reduce)' in APP_STYLES
     assert ".processing-dialog-root[hidden] { display: none; }" in APP_STYLES
     assert "place-items: center" in APP_STYLES
+
+
+def test_mobile_global_theme_control_remains_compact_and_in_header() -> None:
+    """狭い画面でテーマ操作が縦に潰れず、header右端へ留まることを確認する。"""
+
+    assert ".sidebar-bottom { display: flex; grid-column: 2; grid-row: 1;" in APP_STYLES
+    assert ".sidebar-bottom .theme-nav { width: 36px; overflow: hidden; padding: 0; font-size: 0; }" in APP_STYLES

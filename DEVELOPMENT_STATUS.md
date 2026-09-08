@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。2026-09-08の全体最適化レビューでは、既存構成を維持しながら共有Demoの本番無効化、再起動時Job復旧、同時生成のDB一意保証、Project資産削除、抽出上限、security header、Jinja2 security patchをローカル検証済みです。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。2026-09-08の全体最適化レビューでは、既存構成を維持しながら共有Demoの本番無効化、再起動時Job復旧、同時生成のDB一意保証、Project資産削除、抽出上限、security header、Jinja2 security patchを実装し、本番Browser QAで検出したモバイルテーマ操作の配置崩れも局所修正しました。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -75,7 +75,7 @@
 
 ## 検証済み
 
-- `pytest`: 73 passed（既存68件 + 本番Demo無効化、Job復旧、Storage cleanup、docx展開上限等の回帰確認）
+- `pytest`: 74 passed（既存68件 + 本番Demo無効化、Job復旧、Storage cleanup、docx展開上限、モバイルsidebar等の回帰確認）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
 - `node --check static/js/app.js`
 - `PYTHONPYCACHEPREFIX=/tmp/... python -m compileall app`

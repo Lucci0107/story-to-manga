@@ -580,9 +580,8 @@ body.processing-dialog-open { overflow: hidden; }
   .global-nav { display: flex; grid-column: 1 / -1; gap: 4px; margin: 0; overflow-x: auto; }
   .global-nav .nav-item { width: auto; min-height: 36px; flex: 0 0 auto; padding: 0 10px; }
   .global-nav .nav-glyph { width: auto; }
-  .sidebar-bottom { display: flex; align-items: center; gap: 7px; margin: 0; }
-  .sidebar-bottom .theme-nav { width: 36px; padding: 0; }
-  .sidebar-bottom .theme-nav:not(:has(.nav-glyph)) { font-size: 0; }
+  .sidebar-bottom { display: flex; grid-column: 2; grid-row: 1; align-items: center; align-self: start; justify-self: end; gap: 7px; margin: 0; }
+  .sidebar-bottom .theme-nav { width: 36px; overflow: hidden; padding: 0; font-size: 0; }
   .sidebar-bottom .theme-nav .nav-glyph { width: 100%; }
   .sidebar-bottom .user-chip, .sidebar-bottom .logout-link { display: none; }
   .dashboard-main { padding: 37px 17px 35px; }

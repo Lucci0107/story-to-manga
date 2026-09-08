@@ -90,7 +90,7 @@ def main() -> int:
     checks = {
         "health": run_check(base_url, "/api/health", parse_health),
         "login": run_check(base_url, "/login", parse_asset),
-        "css": run_check(base_url, "/static/css/app.css?v=6", parse_asset),
+        "css": run_check(base_url, "/static/css/app.css?v=7", parse_asset),
         "javascript": run_check(base_url, "/static/js/app.js?v=8", parse_asset),
     }
     result = {"ok": all(check["ok"] for check in checks.values()), "checks": checks}

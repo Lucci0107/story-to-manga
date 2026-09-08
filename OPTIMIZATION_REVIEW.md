@@ -33,6 +33,7 @@
 - Session失効削除とExport参照に対応する索引がなく、データ増加時に不要な全走査が起き得た。
 - 認証済みHTML/APIに明示的な`no-store`がなく、production HSTSもアプリ側では付与していなかった。
 - Jinja2 3.1.5はsandboxの`|attr` filterを迂回できる既知問題の修正前で、互換性を保つ3.1.6へ更新可能だった。
+- 390pxの実ブラウザ表示でglobal sidebarのテーマボタンが独立した行へ落ち、ラベルが約36px幅で縦に潰れていた。
 
 ### Optional
 
@@ -49,6 +50,7 @@
 - PDF/docxの抽出後上限とdocx展開前のサイズ検証を追加。
 - Session/Export索引、production HSTS、認証済み画面/APIの`Cache-Control: no-store`を追加。
 - Jinja2だけを3.1.5からsecurity patch releaseの3.1.6へ更新。その他の依存関係は根拠のない一括更新をしていない。
+- モバイルglobal sidebarのテーマ操作をheader右端へ固定し、視覚上は36px icon button、アクセシブル名は従来どおり保持するCSSへ修正。CSS cache keyを更新。
 
 ## Changes Intentionally Not Implemented
 
@@ -60,7 +62,7 @@
 
 - 変更前baseline: `pytest 68 passed`。
 - 変更後targeted tests: `40 passed`。
-- 変更後full regression: `73 passed`。
+- 変更後full regression: `74 passed`。
 - Python compileall、JavaScript syntax、`pip check`、`git diff --check`: success。
 - 追跡ソースのsecret scan: actual secret検出なし（`.env.example`の空欄とテスト用検査文字列のみ）。
 - 本番設定相当の隔離SQLite HTTP smoke: health/login/CSS/JavaScript 200、`/demo` 404、HSTS/no-storeを確認。
