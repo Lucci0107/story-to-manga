@@ -56,6 +56,7 @@ from .services.knowledge import (
 from .services.model_registry import (
     DEFAULT_AI_MODEL_SETTINGS,
     get_model_availability,
+    model_for_task,
     model_registry_view,
     resolve_model_settings,
     validate_model_settings,
@@ -488,12 +489,43 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
     job = db.get_generation_job(job_id)
     if not job:
         return
-    db.update_generation_job(job_id, "processing")
+    started = time.monotonic()
+    requested_pages = 0
+    requested_model = "unknown"
     try:
+        db.update_generation_job(job_id, "processing")
         project = db.get_project(project_id, user_id)
         if not project or not project.get("analysis"):
             raise AIProviderError("先に物語解析を生成してください", retryable=False)
-        provider = get_ai_provider(project_ai_model_settings(project, user_id))
+        model_settings = project_ai_model_settings(project, user_id)
+        provider = get_ai_provider(model_settings)
+        requested_pages = int((project.get("settings") or {}).get("target_page_count", 0))
+        requested_model = model_for_task(model_settings, "storyboard")
+        logger.info(
+            "storyboard job started project_id=%s job_id=%s requested_pages=%s requested_model=%s",
+            project_id,
+            job_id,
+            requested_pages,
+            requested_model,
+        )
+        def heartbeat(
+            batch_index: int,
+            batch_total: int,
+            page_start: int,
+            page_end: int,
+        ) -> None:
+            db.touch_generation_job(job_id)
+            logger.info(
+                "storyboard job progress project_id=%s job_id=%s batch=%s/%s page_start=%s page_end=%s",
+                project_id,
+                job_id,
+                batch_index,
+                batch_total,
+                page_start,
+                page_end,
+            )
+
+        setattr(provider, "storyboard_progress_callback", heartbeat)
         knowledge_context = retrieve_knowledge_context(
             project_id,
             user_id,
@@ -512,34 +544,55 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
         )
         characters = normalize_characters(characters)
         storyboard = normalize_storyboard(storyboard)
+        valid, validation_message = validate_storyboard(storyboard)
+        if not storyboard or not valid:
+            raise AIProviderError(
+                validation_message or "Storyboardのページを生成できませんでした",
+                retryable=False,
+            )
         if not project.get("characters"):
             record_provider_generation(project_id, user_id, provider)
         record_provider_generation(project_id, user_id, provider)
         for page in storyboard:
             for panel in page.get("panels", []):
                 panel["knowledge_refs"] = knowledge_context.get("references", [])
-        db.update_project(
+        if not db.complete_storyboard_job(
+            job_id, project_id, user_id, characters, storyboard
+        ):
+            raise RuntimeError("Storyboard Jobを完了状態へ更新できませんでした")
+        metadata = getattr(provider, "last_generation_metadata", None) or {}
+        panel_count = sum(len(page.get("panels", [])) for page in storyboard)
+        logger.info(
+            "storyboard job completed project_id=%s job_id=%s pages=%s panels=%s requested_model=%s actual_model=%s duration_seconds=%.2f",
             project_id,
-            user_id,
-            characters=characters,
-            storyboard=storyboard,
-            status="storyboard_ready",
-            current_step="storyboard",
-            clear_quality_check=True,
+            job_id,
+            len(storyboard),
+            panel_count,
+            requested_model,
+            metadata.get("actual_model", requested_model),
+            time.monotonic() - started,
         )
-        db.update_generation_job(job_id, "completed")
     except Exception as exc:  # noqa: BLE001
         message = safe_job_error(exc)
-        logger.error("storyboard generation failed: %s", message)
-        project = db.get_project(project_id, user_id)
-        if project:
-            db.update_project(
+        logger.error(
+            "storyboard job failed project_id=%s job_id=%s requested_pages=%s requested_model=%s error_category=%s duration_seconds=%.2f message=%s",
+            project_id,
+            job_id,
+            requested_pages,
+            requested_model,
+            type(exc).__name__,
+            time.monotonic() - started,
+            message,
+        )
+        try:
+            db.fail_storyboard_job(job_id, project_id, user_id, message)
+        except Exception as state_exc:  # noqa: BLE001
+            logger.error(
+                "storyboard job terminal-state update failed project_id=%s job_id=%s error_category=%s",
                 project_id,
-                user_id,
-                status="partially_failed",
-                current_step="storyboard",
+                job_id,
+                type(state_exc).__name__,
             )
-        db.update_generation_job(job_id, "failed", message)
 
 
 def demo_story() -> str:
@@ -1470,6 +1523,33 @@ async def api_retry_panel(
 @app.get("/api/projects/{project_id}/generation/status")
 async def api_generation_status(project_id: str, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
+    recovered = db.recover_stale_storyboard_jobs(
+        project_id,
+        user["id"],
+        get_settings().storyboard_job_stale_seconds,
+    )
+    if recovered:
+        logger.warning(
+            "stale storyboard jobs recovered project_id=%s job_count=%s",
+            project_id,
+            len(recovered),
+        )
+        project = require_project(project_id, user["id"])
+    storyboard_job = db.latest_generation_job(project_id, "storyboard")
+    # 旧実装でStoryboard保存後のJob更新だけが失敗したProjectを安全に整合させる。
+    if (
+        storyboard_job
+        and storyboard_job.get("status") == "completed"
+        and project.get("storyboard")
+        and project.get("current_step") == "storyboard"
+        and project.get("status") in {"processing", "partially_failed"}
+    ):
+        project = db.update_project(
+            project_id,
+            user["id"],
+            status="storyboard_ready",
+            current_step="storyboard",
+        ) or project
     panels = []
     for page, panel in all_panels(project):
         panels.append(
@@ -1484,7 +1564,12 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
                 "generation_metadata": panel.get("generation_metadata"),
             }
         )
-    return {"project_status": project.get("status"), "panels": panels, "jobs": db.list_generation_jobs(project_id)}
+    return {
+        "project_status": project.get("status"),
+        "panels": panels,
+        "jobs": db.list_generation_jobs(project_id),
+        "storyboard_job": storyboard_job,
+    }
 
 
 @app.post("/api/projects/{project_id}/export")

@@ -34,6 +34,10 @@ services:
         value: "1"
       - key: OPENAI_MAX_OUTPUT_TOKENS
         value: "12000"
+      - key: STORYBOARD_JOB_STALE_SECONDS
+        value: "900"
+      - key: STORYBOARD_BATCH_PAGES
+        value: "8"
       - key: MAX_UPLOAD_BYTES
         value: "5242880"
       - key: SESSION_DAYS

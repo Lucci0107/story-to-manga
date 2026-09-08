@@ -7,6 +7,7 @@ APIキーがない環境でも、制作フローを検証できるデモプロ�
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from typing import Any, Callable, Dict, List, Optional
@@ -27,6 +28,9 @@ from .settings_recommendation import (
     fallback_recommendation,
     normalize_settings_recommendation,
 )
+
+
+logger = logging.getLogger("story_to_manga.ai")
 
 
 class AIProviderError(RuntimeError):
@@ -564,6 +568,9 @@ class DemoAIProvider:
     def __init__(self, model_settings: Optional[Dict[str, Any]] = None) -> None:
         self.model_settings = model_settings or {}
         self.last_generation_metadata: Optional[Dict[str, Any]] = None
+        self.storyboard_progress_callback: Optional[
+            Callable[[int, int, int, int], None]
+        ] = None
 
     def _record_demo(self, task: str) -> None:
         """デモ処理も実行履歴の形をそろえる（外部APIは呼ばない）。"""
@@ -868,39 +875,105 @@ class OpenAIProvider(DemoAIProvider):
             "languageとreading_directionは入力されたProjectルールをそのまま返し、AIの判断で変更しないでください。"
         )
         story_reference: Any = text if len(text) <= 24_000 else hierarchical_story_outline(text)
-        user = json.dumps(
-            {
-                "analysis": analysis,
-                "settings": settings,
-                "language": order_context["language"],
-                "reading_direction": order_context["reading_direction"],
-                "panel_reading_order": order_context["panel_reading_order"],
-                "bubble_reading_order": order_context["bubble_reading_order"],
-                "characters": characters,
-                "story_reference": story_reference,
-            },
-            ensure_ascii=False,
-        )
-        user = (
-            user
-            + "\npagesキーにpage_number, layout, title, panelsを持つ配列を返してください。"
-            "各ページには少なくとも1コマを置き、target_page_countを超えないでください。"
-            "pages内のpanels配列は実際の読者の論理読順（1始まり）で並べてください。"
-            + _language_reference(settings)
-            + _knowledge_reference(knowledge_context)
-        )
-        return self._validated_call(
-            system,
-            user,
-            schema_name="manga_storyboard",
-            schema=STORYBOARD_SCHEMA,
-            task_key="storyboard",
-            normalizer=lambda value: compose_prompts(
-                normalize_storyboard(value.get("pages")), characters, settings
-            ),
-            validator=lambda value: isinstance(value, list)
-            and bool(value)
-            and all(page.get("panels") for page in value),
+        base_context = {
+            "analysis": analysis,
+            "settings": settings,
+            "language": order_context["language"],
+            "reading_direction": order_context["reading_direction"],
+            "panel_reading_order": order_context["panel_reading_order"],
+            "bubble_reading_order": order_context["bubble_reading_order"],
+            "characters": characters,
+            "story_reference": story_reference,
+        }
+        target_pages = max(1, min(120, int(settings.get("target_page_count", 8))))
+        batch_size = getattr(get_settings(), "storyboard_batch_pages", 8)
+        ranges = [
+            (start, min(target_pages, start + batch_size - 1))
+            for start in range(1, target_pages + 1, batch_size)
+        ]
+        # 小さな既存Projectは従来どおり1回で生成し、可変ページ数が大きい場合だけ
+        # Structured Outputを分割してtoken切断とHTTP timeoutを避ける。
+        exact_page_count = len(ranges) > 1
+        generated_pages: List[Dict[str, Any]] = []
+        for batch_index, (page_start, page_end) in enumerate(ranges, start=1):
+            batch_count = page_end - page_start + 1
+            schema = json.loads(json.dumps(STORYBOARD_SCHEMA))
+            if exact_page_count:
+                pages_schema = schema["properties"]["pages"]
+                pages_schema["minItems"] = batch_count
+                pages_schema["maxItems"] = batch_count
+            previous_context = [
+                {
+                    "page_number": page.get("page_number"),
+                    "title": page.get("title"),
+                    "ending": (page.get("panels") or [{}])[-1].get("description", ""),
+                }
+                for page in generated_pages[-2:]
+            ]
+            batch_context = {
+                **base_context,
+                "page_range": {
+                    "start": page_start,
+                    "end": page_end,
+                    "total": target_pages,
+                },
+                "previous_batch_context": previous_context,
+            }
+            user = json.dumps(batch_context, ensure_ascii=False)
+            if exact_page_count:
+                page_instruction = (
+                    f"全{target_pages}ページのうち{page_start}〜{page_end}ページを、"
+                    f"欠番なくちょうど{batch_count}ページ返してください。"
+                )
+            else:
+                page_instruction = "target_page_countを超えない範囲で必要なページを返してください。"
+            user = (
+                user
+                + "\npagesキーにpage_number, layout, title, panelsを持つ配列を返してください。"
+                + page_instruction
+                + "各ページには少なくとも1コマを置いてください。"
+                "pages内のpanels配列は実際の読者の論理読順（1始まり）で並べてください。"
+                + _language_reference(settings)
+                + _knowledge_reference(knowledge_context)
+            )
+            logger.info(
+                "storyboard batch started batch=%s/%s page_start=%s page_end=%s",
+                batch_index,
+                len(ranges),
+                page_start,
+                page_end,
+            )
+            if callable(self.storyboard_progress_callback):
+                self.storyboard_progress_callback(
+                    batch_index, len(ranges), page_start, page_end
+                )
+            batch_pages = self._validated_call(
+                system,
+                user,
+                schema_name=(
+                    f"manga_storyboard_{page_start}_{page_end}"
+                    if exact_page_count
+                    else "manga_storyboard"
+                ),
+                schema=schema,
+                task_key="storyboard",
+                normalizer=lambda value: normalize_storyboard(value.get("pages")),
+                validator=lambda value: isinstance(value, list)
+                and bool(value)
+                and all(page.get("panels") for page in value)
+                and (not exact_page_count or len(value) == batch_count),
+            )
+            if exact_page_count and len(batch_pages) != batch_count:
+                raise AIProviderError("Storyboardのページ範囲を検証できませんでした")
+            for page_offset, page in enumerate(batch_pages):
+                page["page_number"] = page_start + page_offset
+            generated_pages.extend(batch_pages)
+            if callable(self.storyboard_progress_callback):
+                self.storyboard_progress_callback(
+                    batch_index, len(ranges), page_start, page_end
+                )
+        return compose_prompts(
+            normalize_storyboard(generated_pages), characters, settings
         )
 
     def recommend_settings(

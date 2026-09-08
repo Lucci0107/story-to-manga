@@ -91,6 +91,8 @@ class Settings:
     openai_timeout_seconds: float
     openai_max_retries: int
     openai_max_output_tokens: int
+    storyboard_job_stale_seconds: int
+    storyboard_batch_pages: int
 
     @property
     def database_path(self) -> Path:
@@ -163,6 +165,14 @@ def get_settings() -> Settings:
         openai_timeout_seconds=max(5.0, min(300.0, _float_env("OPENAI_TIMEOUT_SECONDS", 90.0))),
         openai_max_retries=max(0, min(2, _int_env("OPENAI_MAX_RETRIES", 1))),
         openai_max_output_tokens=max(512, min(32_000, _int_env("OPENAI_MAX_OUTPUT_TOKENS", 12_000))),
+        # Responses APIの限定再試行より十分長く、永久processingは残さない。
+        storyboard_job_stale_seconds=max(
+            300, min(3_600, _int_env("STORYBOARD_JOB_STALE_SECONDS", 900))
+        ),
+        # 大きなStoryboardを単一Structured Outputへ詰め込まないための上限。
+        storyboard_batch_pages=max(
+            2, min(16, _int_env("STORYBOARD_BATCH_PAGES", 8))
+        ),
     )
 
 

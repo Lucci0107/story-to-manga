@@ -459,7 +459,7 @@ def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
         return []
     list_fields = {"characters", "dialogue", "narration", "sfx"}
     normalized_pages: List[Dict[str, Any]] = []
-    for page_index, item in enumerate(value[:64]):
+    for page_index, item in enumerate(value[:120]):
         if not isinstance(item, dict):
             continue
         layout = str(item.get("layout", "classic"))

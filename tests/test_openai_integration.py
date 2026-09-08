@@ -42,6 +42,7 @@ def runtime_settings() -> SimpleNamespace:
         openai_timeout_seconds=5.0,
         openai_max_retries=0,
         openai_max_output_tokens=2_000,
+        storyboard_batch_pages=8,
     )
 
 
@@ -325,6 +326,69 @@ def test_characters_storyboard_and_quality_use_structured_responses(
         "manga_storyboard",
         "quality_review",
     ]
+
+
+def test_large_storyboard_is_split_into_bounded_page_ranges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大きな可変ページ数を1レスポンスへ集中させない。"""
+
+    requests: list[dict] = []
+
+    def raw_page(number: int) -> dict:
+        return {
+            "page_number": number,
+            "title": f"ページ {number}",
+            "layout": "classic",
+            "panels": [
+                {
+                    "description": f"場面 {number}",
+                    "shot_type": "遠景",
+                    "characters": ["蒼"],
+                    "action": "進む",
+                    "expression": "決意",
+                    "background": "灯台",
+                    "dialogue": [],
+                    "narration": [],
+                    "sfx": [],
+                }
+            ],
+        }
+
+    responses = iter(
+        [
+            response_with_json({"pages": [raw_page(number) for number in range(1, 9)]}),
+            response_with_json({"pages": [raw_page(number) for number in range(9, 17)]}),
+            response_with_json({"pages": [raw_page(number) for number in range(17, 19)]}),
+        ]
+    )
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(next(responses))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIProvider()
+
+    storyboard = provider.storyboard(
+        "蒼は灯台へ向かった。",
+        valid_analysis(),
+        {"target_page_count": 18, "language": "ja"},
+        [valid_character()],
+    )
+
+    assert len(storyboard) == 18
+    assert [page["page_number"] for page in storyboard] == list(range(1, 19))
+    assert [request["text"]["format"]["name"] for request in requests] == [
+        "manga_storyboard_1_8",
+        "manga_storyboard_9_16",
+        "manga_storyboard_17_18",
+    ]
+    assert [
+        request["text"]["format"]["schema"]["properties"]["pages"]["maxItems"]
+        for request in requests
+    ] == [8, 8, 2]
 
 
 def test_openai_image_base64_is_validated_and_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

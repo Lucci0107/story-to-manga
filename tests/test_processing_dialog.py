@@ -53,6 +53,22 @@ def test_processing_dialog_covers_long_operations_and_cleans_up() -> None:
     assert 'document.body.classList.remove("processing-dialog-open")' in APP_SCRIPT
 
 
+def test_storyboard_job_ui_restores_terminal_and_reload_states() -> None:
+    """Storyboard Jobはserver stateを復元し、成功・失敗とも操作可能状態へ戻る。"""
+
+    assert "function restoreStoryboardJobState()" in APP_SCRIPT
+    assert "data.storyboard_job" in APP_SCRIPT
+    assert 'job.status === "completed"' in APP_SCRIPT
+    assert 'job.status === "failed"' in APP_SCRIPT
+    assert 'job.status !== "queued" && job.status !== "processing"' in APP_SCRIPT
+    assert 'storyboardPolling = false;' in APP_SCRIPT
+    assert '"ネームを再試行"' in APP_SCRIPT
+    assert '"処理状態を再確認"' in APP_SCRIPT
+    assert "maximumPollingMs = 16 * 60 * 1000" in APP_SCRIPT
+    assert "consecutiveNetworkErrors >= 4" in APP_SCRIPT
+    assert "restoreStoryboardJobState();" in APP_SCRIPT
+
+
 def test_generation_progress_uses_job_state_and_preserves_selective_retry() -> None:
     """パネル進捗がJob状態由来で、対象コマだけを追跡することを確認する。"""
 

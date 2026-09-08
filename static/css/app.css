@@ -259,6 +259,7 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .selected-file { min-height: 16px; color: var(--accent-deep); font-size: 11px; }
 .form-notice { display: flex; gap: 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 15px 0; color: var(--muted); font-size: 11px; }
 .form-notice p { margin: 0; }
+.form-notice.error-notice { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
 .notice-mark { display: grid; width: 19px; height: 19px; flex: 0 0 19px; place-items: center; border: 1px solid var(--accent); border-radius: 50%; color: var(--accent-deep); font-family: serif; font-size: 12px; }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 

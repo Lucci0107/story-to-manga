@@ -111,6 +111,7 @@ def init_db() -> None:
                 error TEXT,
                 idempotency_key TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
                 completed_at TEXT
             );
 
@@ -216,6 +217,12 @@ def init_db() -> None:
         export_columns = conn.table_columns("exports")
         if "storage_key" not in export_columns:
             conn.execute("ALTER TABLE exports ADD COLUMN storage_key TEXT")
+        job_columns = conn.table_columns("generation_jobs")
+        if "updated_at" not in job_columns:
+            conn.execute("ALTER TABLE generation_jobs ADD COLUMN updated_at TEXT")
+            conn.execute(
+                "UPDATE generation_jobs SET updated_at = COALESCE(completed_at, created_at)"
+            )
         # Process再起動でBackgroundTasksは復元できないため、取り残したJobとPanelを
         # 失敗状態へ揃え、UIから個別に再試行できるようにする。
         interrupted_message = "処理が中断されました。再試行してください"
@@ -263,10 +270,10 @@ def init_db() -> None:
         conn.execute(
             """
             UPDATE generation_jobs
-            SET status = 'failed', error = ?, completed_at = ?
+            SET status = 'failed', error = ?, completed_at = ?, updated_at = ?
             WHERE status IN ('queued', 'processing')
             """,
-            (interrupted_message, utc_now()),
+            (interrupted_message, utc_now(), utc_now()),
         )
         # 同時リクエストでも同じ有料処理を二重登録できないようDBでも保証する。
         conn.execute(
@@ -787,10 +794,10 @@ def create_generation_job(
             conn.execute(
                 """
                 INSERT INTO generation_jobs
-                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
-                VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?)
+                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?, ?)
                 """,
-                (job_id, project_id, target_id, job_type, idempotency_key, now),
+                (job_id, project_id, target_id, job_type, idempotency_key, now, now),
             )
     except Exception:  # DB固有の一意制約例外をRepository境界で吸収する。
         with connection() as conn:
@@ -833,10 +840,10 @@ def create_async_generation_job(
             conn.execute(
                 """
                 INSERT INTO generation_jobs
-                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at)
-                VALUES (?, ?, NULL, ?, 'queued', NULL, ?, ?)
+                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at, updated_at)
+                VALUES (?, ?, NULL, ?, 'queued', NULL, ?, ?, ?)
                 """,
-                (job_id, project_id, job_type, idempotency_key, now),
+                (job_id, project_id, job_type, idempotency_key, now, now),
             )
     except Exception:  # DB固有の一意制約例外をRepository境界で吸収する。
         with connection() as conn:
@@ -881,13 +888,167 @@ def get_generation_job(job_id: str) -> Optional[Dict[str, Any]]:
 def update_generation_job(
     job_id: str, status: str, error: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
-    completed_at = utc_now() if status in {"completed", "failed"} else None
+    now = utc_now()
+    completed_at = now if status in {"completed", "failed"} else None
     with connection() as conn:
         conn.execute(
-            "UPDATE generation_jobs SET status = ?, error = ?, completed_at = ? WHERE id = ?",
-            (status, error, completed_at, job_id),
+            "UPDATE generation_jobs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+            (status, error, completed_at, now, job_id),
         )
     return get_generation_job(job_id)
+
+
+def touch_generation_job(job_id: str) -> None:
+    """長い分割処理の生存時刻だけを更新する。"""
+
+    with connection() as conn:
+        conn.execute(
+            """
+            UPDATE generation_jobs SET updated_at = ?
+            WHERE id = ? AND status IN ('queued', 'processing')
+            """,
+            (utc_now(), job_id),
+        )
+
+
+def latest_generation_job(project_id: str, job_type: str) -> Optional[Dict[str, Any]]:
+    """画面同期に使う、指定工程の最新Jobを返す。"""
+
+    with connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM generation_jobs
+            WHERE project_id = ? AND job_type = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (project_id, job_type),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def complete_storyboard_job(
+    job_id: str,
+    project_id: str,
+    user_id: str,
+    characters: List[Dict[str, Any]],
+    storyboard: List[Dict[str, Any]],
+) -> bool:
+    """Storyboard保存とJob完了を同一transactionで確定する。"""
+
+    now = utc_now()
+    with connection() as conn:
+        job = conn.execute(
+            """
+            SELECT status FROM generation_jobs
+            WHERE id = ? AND project_id = ? AND job_type = 'storyboard'
+            """,
+            (job_id, project_id),
+        ).fetchone()
+        if not job or job["status"] not in {"queued", "processing"}:
+            return bool(job and job["status"] == "completed")
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not project:
+            raise ValueError("Projectが見つかりません")
+        conn.execute(
+            """
+            UPDATE projects
+            SET characters_json = ?, storyboard_json = ?, status = 'storyboard_ready',
+                current_step = 'storyboard', quality_check_json = NULL, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_json(characters), _json(storyboard), now, project_id, user_id),
+        )
+        conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'completed', error = NULL, completed_at = ?, updated_at = ?
+            WHERE id = ? AND project_id = ?
+            """,
+            (now, now, job_id, project_id),
+        )
+    return True
+
+
+def fail_storyboard_job(
+    job_id: str, project_id: str, user_id: str, error: str
+) -> bool:
+    """失敗Jobだけをterminal stateへ進め、成功済みJobは降格させない。"""
+
+    now = utc_now()
+    with connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'failed', error = ?, completed_at = ?, updated_at = ?
+            WHERE id = ? AND project_id = ? AND job_type = 'storyboard'
+              AND status IN ('queued', 'processing')
+            """,
+            (error, now, now, job_id, project_id),
+        )
+        if cursor.rowcount == 0:
+            return False
+        conn.execute(
+            """
+            UPDATE projects
+            SET status = 'partially_failed', current_step = 'storyboard', updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, project_id, user_id),
+        )
+    return True
+
+
+def recover_stale_storyboard_jobs(
+    project_id: str, user_id: str, stale_after_seconds: int
+) -> List[str]:
+    """長時間更新されないStoryboard Jobをfailedへ収束させる。"""
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=max(1, stale_after_seconds))
+    ).isoformat()
+    message = "Storyboard処理がタイムアウトしました。再試行してください"
+    recovered: List[str] = []
+    now = utc_now()
+    with connection() as conn:
+        owner = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not owner:
+            return recovered
+        rows = conn.execute(
+            """
+            SELECT id FROM generation_jobs
+            WHERE project_id = ? AND job_type = 'storyboard'
+              AND status IN ('queued', 'processing')
+              AND COALESCE(updated_at, created_at) < ?
+            ORDER BY created_at
+            """,
+            (project_id, cutoff),
+        ).fetchall()
+        recovered = [str(row["id"]) for row in rows]
+        for recovered_id in recovered:
+            conn.execute(
+                """
+                UPDATE generation_jobs
+                SET status = 'failed', error = ?, completed_at = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'processing')
+                """,
+                (message, now, now, recovered_id),
+            )
+        if recovered:
+            conn.execute(
+                """
+                UPDATE projects
+                SET status = 'partially_failed', current_step = 'storyboard', updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, project_id, user_id),
+            )
+    return recovered
 
 
 def list_generation_jobs(project_id: str) -> List[Dict[str, Any]]:

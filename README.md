@@ -119,6 +119,8 @@ Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置
 - `OPENAI_TIMEOUT_SECONDS`
 - `OPENAI_MAX_RETRIES`
 - `OPENAI_MAX_OUTPUT_TOKENS`
+- `STORYBOARD_JOB_STALE_SECONDS`（既定900秒。中断Jobを再試行可能に戻す判定時間）
+- `STORYBOARD_BATCH_PAGES`（既定8ページ。大きなネームのStructured Output分割単位）
 - `MAX_UPLOAD_BYTES`
 - `SESSION_DAYS`
 - `ENABLE_DEMO_LOGIN`（本番では未設定のまま無効化を推奨）

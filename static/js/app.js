@@ -451,6 +451,9 @@
     let selectedPanelId = null;
     let saveTimer = null;
     let polling = false;
+    let storyboardPolling = false;
+    let storyboardJobState = null;
+    let storyboardPollRun = 0;
     let knowledgeRequestId = 0;
     let recommendationLoading = false;
     let recommendationAttempted = false;
@@ -919,12 +922,29 @@
 
     function renderStoryboard() {
       const pages = state.storyboard || [];
+      const jobStatus = storyboardJobState?.status;
+      const jobActive = jobStatus === "queued" || jobStatus === "processing";
+      const actionLabel = storyboardPolling && jobActive
+        ? "ネームを作成中…"
+        : jobActive
+          ? "処理状態を再確認"
+          : jobStatus === "failed"
+            ? "ネームを再試行"
+            : pages.length
+              ? "ネームを作り直す"
+              : "ネームを生成する";
+      const actionDisabled = storyboardPolling && jobActive ? " disabled" : "";
+      const jobNotice = jobStatus === "failed"
+        ? '<div class="form-notice error-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(storyboardJobState.error || "Storyboardの生成に失敗しました。再試行できます。") + '</p></div>'
+        : jobActive
+          ? '<div class="form-notice" role="status"><span class="notice-mark">…</span><p>Storyboardを生成しています。再読み込み後もサーバーのJob状態から復元します。</p></div>'
+          : "";
       const pageMarkup = pages.map(function (page, pageIndex) {
         const panels = (page.panels || []).map(function (panel, panelIndex) { return panelTemplate(page.id, panel, panelIndex); }).join("");
         const layoutOptions = [{value:"hero", label:"Hero"}, {value:"classic", label:"Classic"}, {value:"grid", label:"Grid"}, {value:"wide", label:"Wide"}].map(function (option) { return '<option value="' + option.value + '"' + (option.value === (page.layout || "classic") ? " selected" : "") + '>' + option.label + '</option>'; }).join("");
         return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + String(pageIndex + 1).padStart(2, "0") + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header><div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
       }).join("");
-      const body = pages.length ? '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard>ネームを作り直す</button></div>' + nextButton("generate", "コマ生成へ") : '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard>ネームを生成する</button></section>';
+      const body = pages.length ? jobNotice + '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : jobNotice + '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
       content.innerHTML = heading("ネームを編集する", "ページをまたぐ展開と、コマごとの視線の流れを確認します。") + orderNote + body;
       bindStoryboardEvents();
@@ -969,32 +989,100 @@
       saveProject({ storyboard: storyboard, current_step: "storyboard" }, message, true);
     }
 
-    async function pollStoryboardJob(jobId, operationMessage, button) {
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        await new Promise(function (resolve) { window.setTimeout(resolve, 2000); });
+    async function pollStoryboardJob(jobId, operationMessage) {
+      const runId = ++storyboardPollRun;
+      const startedAt = Date.now();
+      const maximumPollingMs = 16 * 60 * 1000;
+      let consecutiveNetworkErrors = 0;
+      storyboardPolling = true;
+      if (activeStep === "storyboard") render();
+      try {
+        while (Date.now() - startedAt < maximumPollingMs) {
+          const interval = Date.now() - startedAt < 60 * 1000 ? 2000 : 5000;
+          await new Promise(function (resolve) { window.setTimeout(resolve, interval); });
+          if (runId !== storyboardPollRun) return;
+          let data;
+          try {
+            data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+            consecutiveNetworkErrors = 0;
+          } catch (error) {
+            consecutiveNetworkErrors += 1;
+            if (consecutiveNetworkErrors >= 4) throw error;
+            updateProcessingDialog({
+              message: operationMessage,
+              progress: "通信を再確認しています",
+              submessage: "Jobはサーバー側で継続します。状態の取得を再試行しています。"
+            });
+            continue;
+          }
+          const job = data.storyboard_job || (data.jobs || []).find(function (item) { return item.id === jobId; });
+          if (!job || job.id !== jobId) throw new Error("Storyboardの処理状態を取得できませんでした");
+          storyboardJobState = job;
+          if (data.project_status) state.status = data.project_status;
+          if (job.status === "completed") {
+            await fetchProject(false);
+            showToast("ページとコマの構成を作成しました");
+            return;
+          }
+          if (job.status === "failed") {
+            await fetchProject(false).catch(function () {});
+            throw new Error(job.error || "Storyboardの生成に失敗しました");
+          }
+          if (job.status !== "queued" && job.status !== "processing") {
+            throw new Error("Storyboardの処理が予期しない状態で終了しました");
+          }
+          updateProcessingDialog({
+            message: operationMessage,
+            progress: job.status === "queued" ? "生成キューで順番を待っています" : "AIがページとコマの構成を作成しています",
+            submessage: "完了後に生成結果を保存します。画面を閉じても処理は継続します。"
+          });
+        }
+        throw new Error("Storyboardの処理状況を確認できる時間を超えました。処理状態を再確認してください");
+      } finally {
+        if (runId === storyboardPollRun) {
+          storyboardPolling = false;
+          if (activeStep === "storyboard") render();
+        }
+      }
+    }
+
+    async function restoreStoryboardJobState() {
+      try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
-        const job = (data.jobs || []).find(function (item) { return item.id === jobId; });
-        if (!job) throw new Error("Storyboardの処理状態を取得できませんでした");
-        if (job.status === "completed") {
+        storyboardJobState = data.storyboard_job || null;
+        if (data.project_status) state.status = data.project_status;
+        if (!storyboardJobState) return;
+        if (storyboardJobState.status === "completed") {
           await fetchProject(false);
           render();
-          showToast("ページとコマの構成を作成しました");
           return;
         }
-        if (job.status === "failed") {
-          throw new Error(job.error || "Storyboardの生成に失敗しました");
+        if (storyboardJobState.status === "failed") {
+          await fetchProject(false).catch(function () {});
+          render();
+          return;
         }
-        updateProcessingDialog({
-          message: operationMessage,
-          progress: job.status === "queued" ? "生成キューで順番を待っています" : "AIがページとコマの構成を作成しています",
-          submessage: "完了後に生成結果を保存します。画面を閉じても処理は継続します。"
+        if (!["queued", "processing"].includes(storyboardJobState.status)) return;
+        showProcessingDialog({
+          message: "ストーリーボードを生成しています…",
+          progress: "サーバー上の処理状態を復元しています",
+          submessage: "再読み込み前に開始したJobを引き続き確認します。"
         });
+        try {
+          await pollStoryboardJob(storyboardJobState.id, "ストーリーボードを生成しています…");
+        } catch (error) {
+          showToast(error.message, "error");
+        } finally {
+          hideProcessingDialog();
+        }
+      } catch (_error) {
+        // 状態確認だけが失敗しても編集画面を利用不能にはしない。
       }
-      throw new Error("Storyboardの処理状況の確認がタイムアウトしました。しばらくしてから再読み込みしてください");
     }
 
     async function generateStoryboard() {
       if (!state.analysis) { showToast("先に物語解析を生成してください", "error"); return; }
+      if (storyboardPolling) return;
       const button = content.querySelector("[data-generate-storyboard]");
       if (button) { button.disabled = true; button.textContent = "ネームを作成中…"; }
       showProcessingDialog({
@@ -1006,18 +1094,31 @@
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/storyboard", { method: "POST", body: "{}" });
         state = data.project;
         if (data.accepted && data.job?.id) {
+          storyboardJobState = data.job;
           updateProcessingDialog({
             message: "ストーリーボードを生成しています…",
             progress: "生成キューへ登録しました",
             submessage: "Render上のバックグラウンド処理でネームを作成しています。"
           });
-          await pollStoryboardJob(data.job.id, "ストーリーボードを生成しています…", button);
+          await pollStoryboardJob(data.job.id, "ストーリーボードを生成しています…");
           return;
         }
+        storyboardJobState = null;
         showToast("ページとコマの構成を作成しました");
         render();
-      } catch (error) { showToast(error.message, "error"); if (button) button.disabled = false; }
-      finally { hideProcessingDialog(); }
+      } catch (error) {
+        showToast(error.message, "error");
+        try {
+          const status = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+          storyboardJobState = status.storyboard_job || storyboardJobState;
+          if (status.project_status) state.status = status.project_status;
+          await fetchProject(false).catch(function () {});
+        } catch (_statusError) {}
+      } finally {
+        storyboardPolling = false;
+        hideProcessingDialog();
+        if (activeStep === "storyboard") render();
+      }
     }
 
     function renderGenerationRows() {
@@ -1290,5 +1391,6 @@
     }
 
     render();
+    restoreStoryboardJobState();
   }
 })();
