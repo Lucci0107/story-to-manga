@@ -66,10 +66,14 @@
 - Python compileall、JavaScript syntax、`pip check`、`git diff --check`: success。
 - 追跡ソースのsecret scan: actual secret検出なし（`.env.example`の空欄とテスト用検査文字列のみ）。
 - 本番設定相当の隔離SQLite HTTP smoke: health/login/CSS/JavaScript 200、`/demo` 404、HSTS/no-storeを確認。
-- Browser QA、GitHub CI、Render deploy、Production QAは最終デプロイ確認後に追記する。
+- Production Browser QA: 390px/1440px、Light/Dark、Dashboard、新規Project、Project工程、AI推奨設定、Knowledge、AIモデル設定、日本語RTL Preview、PDF/ZIP導線を確認。console error/warning 0件。
+- GitHub Actions: `34187009638`（production hardening）と`34187418823`（mobile fix）がsuccess。
+- Render: `dep-dafot767bikc73eh73m0`と`dep-dafp0ebm8hqs73e86cb0`がsuccess。
+- Production HTTP: health/login/CSS/JavaScript 200、`/demo` 404、未認証admin API 401、HSTS/no-store、新CSS配信を確認。
 
 ## Production State
 
 - Review開始時: commit `bc0c715`、Git working tree clean、production health HTTP 200。
+- 実装commit: `e57594a`。本番Browser QAで検出したmobile fix: `edb4db8`。
 - Render Persistent Diskは公式仕様どおり単一service instanceに限定され、zero-downtime deploy不可。現行SQLite/Local Storageではデータ耐久性のため維持する。
-- 最終commit、GitHub CI、Render deployment、Production QAはデプロイ完了後に追記する。
+- GitHub CI・Render自動deploy・Production QAまで完了。既存productionデータや画像を再生成・削除していない。

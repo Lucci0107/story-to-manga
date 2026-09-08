@@ -110,13 +110,14 @@
 - AI漫画化設定推奨のローカルBrowser QA: 短編Analysis後に中央Processing Dialog、推奨ページ数・理由・シーン別配分を確認。手動設定の保存・Reload保持、再提案のpreview、cancel、apply、言語による右→左表示を確認。実AIテキスト呼び出しは初回推奨と再提案の各1回、画像生成は追加実行なし
 - AI漫画化設定推奨の回帰検証: 短編・標準・複雑シナリオでページ数が増加すること、固定40ページでないこと、Structured Output検証、Knowledge参照、AI失敗fallback、stale/user override保護、`settings_recommendation_model`のプリセット解決を確認
 - AI漫画化設定推奨のProduction QA: 本番の既存合成Projectで初回推奨値・理由・シーン別配分・Processing Dialogを確認。再提案のProcessing Dialog、プレビュー、キャンセル、再読み込み後の8ページ／日本語RTL保持、推奨ボタンの完了後有効化、本番console error 0件を確認。画像生成は追加実行なし
+- 全体最適化レビューのProduction QA: health/login/CSS/JavaScript 200、共有`/demo` 404、未認証admin API 401、HSTS/no-store、新CSS配信を確認。実ブラウザで390px/1440px、Light/Dark、Dashboard、新規Project、Project工程、AI推奨設定、日本語RTL Preview、PDF/ZIP導線、Knowledge、AIモデル設定を確認し、console error/warningは0件。既存productionデータの生成・削除・再保存は行っていません。
 - 最新修正コミット`b889fe6`のGitHub Actions CI（run `34179819425`）がsuccess。CI通過後のRender自動デプロイを本番ページの修正反映（再提案ボタン有効化）で確認し、`/api/health`はHTTP 200、OpenAI provider表示も確認
 - 最終管理者確認コミット`43aa035`のGitHub Actions CI（run `34121680039`）とRender自動deploy（`dep-dafaq6eq1p3s73dofjj0`）がsuccess。直後の一時502回復後、最終Production smokeのhealth/login/CSS/JavaScriptが全項目HTTP 200
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 
 ## In Progress
 
-- 全体最適化レビューのローカル検証は完了。GitHub CI、Render自動deploy、Production Browser/Smoke QAを継続中です。
+- なし。全体最適化レビュー、回帰検証、GitHub CI、Render自動deploy、Production Browser/Smoke QAまで完了しました。
 
 ## 永続化移行準備
 
@@ -182,6 +183,8 @@
 - 言語・読順変更コミット: `21a9297`
 - 言語・読順変更CI: workflow run `34176030782`（success）
 - 言語・読順変更Render deployment: GitHub deployment `6318749467`（success）、environment URL `https://story-to-manga-b6bb.onrender.com`
+- 全体最適化レビューcommit: `e57594a`、GitHub Actions `34187009638`（success）、Render `dep-dafot767bikc73eh73m0`（success）
+- モバイルsidebar修正commit: `edb4db8`、GitHub Actions `34187418823`（success）、Render `dep-dafp0ebm8hqs73e86cb0`（success）
 
 ## 次回セッションの確認
 
