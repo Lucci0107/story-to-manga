@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能も実装とローカル検証を完了し、現在はCI成功後のRender反映と本番確認を待っています。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能も実装、ローカル検証、GitHub CI、Render自動デプロイ、本番確認まで完了しています。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -100,13 +100,14 @@
 - 本番管理者QA: 管理者ログイン、ログアウト、再ログイン、ダッシュボード表示、認証済み`/api/admin/status` 200を確認（認証Cookieは読み出し・記録していません）
 - 言語・読順ローカルQA: 日本語の右→左（右列先頭）、Englishの左→右（左列先頭）、1始まりのPanel order、吹き出し順、Previewのページ送り、設定保存・Reload、言語変更時の非翻訳・非再生成、Light/Dark、Desktopを確認
 - 言語・読順回帰検証: `pytest` 62 passed、Python compileall、JavaScript構文、`pip check`、`git diff --check`を確認
+- 言語・読順Production QA: 本番デモProjectでEnglish保存・Reload・`ltr`・Panel 1左列／Panel 2右列、続けて日本語保存・`rtl`・Panel 1右列／Panel 2左列／先頭吹き出し右側を確認。Previewページ送り表示、PDF/ZIP download link、成功後Processing Dialogのhidden cleanupも確認
+- 言語・読順Production smoke: `/api/health` 200、login/CSS/JavaScript 200、本番静的ファイルへ言語セレクタ・読順属性・Preview navigation・bubble sideを確認。今回のQAでは実AI／画像生成の追加実行なし
 - 最終管理者確認コミット`43aa035`のGitHub Actions CI（run `34121680039`）とRender自動deploy（`dep-dafaq6eq1p3s73dofjj0`）がsuccess。直後の一時502回復後、最終Production smokeのhealth/login/CSS/JavaScriptが全項目HTTP 200
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 
 ## In Progress
 
-- 言語・読順ロック機能のcommit後にGitHub Actions CI、Render自動デプロイ、Production QAを実施します。既存の本番機能やAI画像生成は再実行せず、設定・Preview・Exportの低負荷確認に限定します。
-- `ADMIN_INITIAL_PASSWORD`のRender Secret削除は任意の運用ハードニングであり、アプリの完了条件には影響しません。
+- なし。`ADMIN_INITIAL_PASSWORD`のRender Secret削除は任意の運用ハードニングであり、アプリの完了条件には影響しません。
 
 ## 永続化移行準備
 
@@ -169,10 +170,13 @@
 - Render自動デプロイ成功: `dep-dafa6tvavr4c73bs9ba0`（GitHub deployment `6307945250`）
 - Production URL: `https://story-to-manga-b6bb.onrender.com`
 - Render Secret設定後の自動デプロイ成功: `dep-dafaej740ujc73adsi70`（GitHub deployment `6308205978`）。状態記録更新コミット後のCI/自動deployもsuccess。最新Production smokeはhealth/login/CSS/JS 200、匿名`/api/admin/status` 401。
+- 言語・読順変更コミット: `21a9297`
+- 言語・読順変更CI: workflow run `34176030782`（success）
+- 言語・読順変更Render deployment: GitHub deployment `6318749467`（success）、environment URL `https://story-to-manga-b6bb.onrender.com`
 
 ## 次回セッションの確認
 
 1. `git status --short --branch`で作業ツリーと`origin/main`を確認する
-2. 本番変更がある場合だけ、影響範囲のpytestと`.venv/bin/python scripts/production_smoke.py --url https://story-to-manga-b6bb.onrender.com`を実行する
-3. 通常のデプロイは`main`へpushし、GitHub Actions成功後のRender自動デプロイを確認する
+2. 通常のデプロイは`main`へpushし、GitHub Actions成功後のRender自動デプロイを確認する
+3. 本番変更がある場合だけ、影響範囲のpytestと`.venv/bin/python scripts/production_smoke.py --url https://story-to-manga-b6bb.onrender.com`を実行する
 4. 外部PostgreSQL／S3互換Storageへの移行は、別タスクとしてデータバックフィル計画を作成してから行う
