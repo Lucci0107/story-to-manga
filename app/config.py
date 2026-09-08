@@ -89,7 +89,9 @@ class Settings:
     openai_model: str
     openai_image_model: str
     openai_timeout_seconds: float
+    openai_storyboard_timeout_seconds: float
     openai_max_retries: int
+    openai_storyboard_max_retries: int
     openai_max_output_tokens: int
     storyboard_job_stale_seconds: int
     storyboard_batch_pages: int
@@ -163,7 +165,22 @@ def get_settings() -> Settings:
         ),
         openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"),
         openai_timeout_seconds=max(5.0, min(300.0, _float_env("OPENAI_TIMEOUT_SECONDS", 90.0))),
+        # StoryboardはStructured Outputが大きいため、短いテキスト処理と分離する。
+        openai_storyboard_timeout_seconds=max(
+            30.0,
+            min(
+                600.0,
+                _float_env(
+                    "OPENAI_STORYBOARD_TIMEOUT_SECONDS",
+                    240.0,
+                ),
+            ),
+        ),
         openai_max_retries=max(0, min(2, _int_env("OPENAI_MAX_RETRIES", 1))),
+        openai_storyboard_max_retries=max(
+            0,
+            min(2, _int_env("OPENAI_STORYBOARD_MAX_RETRIES", 1)),
+        ),
         openai_max_output_tokens=max(512, min(32_000, _int_env("OPENAI_MAX_OUTPUT_TOKENS", 12_000))),
         # Responses APIの限定再試行より十分長く、永久processingは残さない。
         storyboard_job_stale_seconds=max(

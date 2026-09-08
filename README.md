@@ -16,7 +16,7 @@ python3 -m venv .venv
 
 `.env.example` を参照してください。`OPENAI_API_KEY` が未設定の場合はデモAIとデモアートが動作します。実AIを利用する場合は、サーバー側の環境変数またはプロジェクト直下の`.env`だけにキーを設定し、`AI_PROVIDER=openai` と `IMAGE_PROVIDER=openai` を指定してください。キーはクライアントへ渡しません。
 
-テキスト処理はOpenAI Responses APIのStructured Outputs（JSON Schema）を使い、`OPENAI_TEXT_MODEL`でモデルを変更できます。パネル画像はOpenAI Images APIを使い、`OPENAI_IMAGE_MODEL`で変更できます。既定値はそれぞれ`gpt-5.6-luna`と`gpt-image-2`です。タイムアウト、再試行回数、最大出力トークンも環境変数で制限しています。
+テキスト処理はOpenAI Responses APIのStructured Outputs（JSON Schema）を使い、`OPENAI_TEXT_MODEL`でモデルを変更できます。パネル画像はOpenAI Images APIを使い、`OPENAI_IMAGE_MODEL`で変更できます。既定値はそれぞれ`gpt-5.6-luna`と`gpt-image-2`です。通常のテキスト処理とは別に、Storyboardは`OPENAI_STORYBOARD_TIMEOUT_SECONDS`（既定240秒）と`OPENAI_STORYBOARD_MAX_RETRIES`（既定1回）で大きなStructured Outputへ対応します。すべての再試行回数と最大出力トークンには上限があります。
 
 ## 対応形式
 
@@ -118,6 +118,8 @@ Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置
 - `OPENAI_IMAGE_MODEL`
 - `OPENAI_TIMEOUT_SECONDS`
 - `OPENAI_MAX_RETRIES`
+- `OPENAI_STORYBOARD_TIMEOUT_SECONDS`
+- `OPENAI_STORYBOARD_MAX_RETRIES`
 - `OPENAI_MAX_OUTPUT_TOKENS`
 - `STORYBOARD_JOB_STALE_SECONDS`（既定900秒。中断Jobを再試行可能に戻す判定時間）
 - `STORYBOARD_BATCH_PAGES`（既定8ページ。大きなネームのStructured Output分割単位）

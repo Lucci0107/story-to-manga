@@ -580,7 +580,7 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             job_id,
             requested_pages,
             requested_model,
-            type(exc).__name__,
+            getattr(exc, "error_category", None) or type(exc).__name__,
             time.monotonic() - started,
             message,
         )

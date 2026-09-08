@@ -8,9 +8,11 @@ APIキーや本文をログへ出さないこと、再試行回数を限定す�
 from __future__ import annotations
 
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any, Dict, Mapping, Optional
 
 
@@ -25,23 +27,71 @@ class OpenAIRequestError(RuntimeError):
         retryable: bool = False,
         error_code: Optional[str] = None,
         error_type: Optional[str] = None,
+        category: str = "unknown",
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retryable = retryable
         self.error_code = error_code
         self.error_type = error_type
+        self.category = category
 
 
 def _retryable_status(status_code: int) -> bool:
     return status_code in {408, 409, 429, 500, 502, 503, 504}
 
 
-def _status_message(status_code: int) -> str:
-    if status_code in {401, 403}:
-        return "OpenAI APIキーまたはProject権限を確認してください"
+def _http_error_category(
+    status_code: int,
+    error_code: Optional[str] = None,
+    error_type: Optional[str] = None,
+) -> str:
+    """HTTP応答を再試行可否の判断に使える安全な分類へ変換する。"""
+
+    code = str(error_code or "").lower()
+    error_kind = str(error_type or "").lower()
+    if status_code == 401:
+        return "authentication"
+    if status_code == 403 and ("model" in code or "model" in error_kind):
+        return "model_access"
+    if status_code == 403:
+        return "permission"
+    if status_code == 404 and (
+        "model" in code or "model" in error_kind
+    ):
+        return "model_access"
+    if status_code == 404:
+        return "request"
+    if status_code == 408:
+        return "timeout"
+    if status_code == 409:
+        return "conflict"
     if status_code == 429:
-        return "OpenAI APIの利用上限またはレート制限に達しました"
+        if code in {"insufficient_quota", "quota_exceeded", "billing_hard_limit_reached"}:
+            return "quota"
+        return "rate_limit"
+    if status_code >= 500:
+        return "server"
+    if status_code == 400:
+        return "request"
+    return "api"
+
+
+def _status_message(status_code: int, category: str) -> str:
+    if category == "authentication":
+        return "OpenAI APIキーまたはProject権限を確認してください"
+    if category == "permission":
+        return "OpenAI Projectまたはモデルへのアクセス権限を確認してください"
+    if category == "model_access":
+        return "選択したOpenAIモデルをこのアカウントでは利用できません"
+    if category == "quota":
+        return "OpenAI APIの利用上限を確認してください"
+    if category == "rate_limit":
+        return "OpenAI APIが一時的に混雑しています。しばらくして再試行してください"
+    if category == "timeout":
+        return "OpenAI APIの応答がタイムアウトしました。しばらくして再試行してください"
+    if category == "conflict":
+        return "OpenAI APIのリクエストが競合しました。しばらくして再試行してください"
     if status_code in {400, 404}:
         return "OpenAI APIへのリクエスト設定を確認してください"
     if status_code >= 500:
@@ -75,6 +125,7 @@ def request_bytes(
     payload: Optional[Mapping[str, Any]] = None,
     timeout: float = 90.0,
     max_retries: int = 1,
+    client_request_id: Optional[str] = None,
 ) -> bytes:
     """JSON POSTまたはGETを実行し、レスポンスbytesを返す。
 
@@ -83,10 +134,16 @@ def request_bytes(
     """
 
     if payload is not None and not api_key:
-        raise OpenAIRequestError("OpenAI APIキーが設定されていません")
+        raise OpenAIRequestError(
+            "OpenAI APIキーが設定されていません",
+            category="authentication",
+        )
     attempts = max(1, min(int(max_retries) + 1, 3))
     request_body = None
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    # OpenAI側の到達確認とサポート調査に使える相関ID。秘密や本文は含めない。
+    request_id = client_request_id or str(uuid.uuid4())
+    headers["X-Client-Request-Id"] = request_id
     method = "GET"
     if payload is not None:
         request_body = json.dumps(dict(payload), ensure_ascii=False).encode("utf-8")
@@ -104,28 +161,40 @@ def request_bytes(
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
-            retryable = _retryable_status(exc.code)
+            error_code, error_type = _safe_error_fields(exc)
+            category = _http_error_category(exc.code, error_code, error_type)
+            # quota枯渇は再試行しても回復しないため、課金APIを余分に呼ばない。
+            retryable = _retryable_status(exc.code) and category != "quota"
             if retryable and attempt < attempts - 1:
                 time.sleep(min(2.0, 0.4 * (2**attempt)))
                 continue
-            error_code, error_type = _safe_error_fields(exc)
             raise OpenAIRequestError(
-                _status_message(exc.code),
+                _status_message(exc.code, category),
                 status_code=exc.code,
                 retryable=retryable,
                 error_code=error_code,
                 error_type=error_type,
+                category=category,
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if attempt < attempts - 1:
                 time.sleep(min(2.0, 0.4 * (2**attempt)))
                 continue
+            reason = getattr(exc, "reason", None)
+            timeout_error = isinstance(exc, (TimeoutError, socket.timeout)) or isinstance(
+                reason, (TimeoutError, socket.timeout)
+            ) or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
             raise OpenAIRequestError(
-                "OpenAI APIへの接続がタイムアウトまたは失敗しました",
+                (
+                    "OpenAI APIの応答がタイムアウトしました。しばらくして再試行してください"
+                    if timeout_error
+                    else "OpenAI APIへ接続できませんでした。ネットワークを確認して再試行してください"
+                ),
                 retryable=True,
+                category="timeout" if timeout_error else "connection",
             ) from exc
 
-    raise OpenAIRequestError("OpenAI APIリクエストに失敗しました")
+    raise OpenAIRequestError("OpenAI APIリクエストに失敗しました", category="unknown")
 
 
 def request_json(
@@ -135,6 +204,7 @@ def request_json(
     payload: Optional[Mapping[str, Any]] = None,
     timeout: float = 90.0,
     max_retries: int = 1,
+    client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """JSON APIを呼び出し、オブジェクト形式のレスポンスを返す。"""
 
@@ -145,14 +215,18 @@ def request_json(
             payload=payload,
             timeout=timeout,
             max_retries=max_retries,
+            client_request_id=client_request_id,
         )
         body = json.loads(raw.decode("utf-8"))
     except OpenAIRequestError:
         raise
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
-        raise OpenAIRequestError("OpenAI APIのレスポンスをJSONとして読めませんでした") from exc
+        raise OpenAIRequestError(
+            "OpenAI APIのレスポンスをJSONとして読めませんでした",
+            category="response",
+        ) from exc
     if not isinstance(body, dict):
-        raise OpenAIRequestError("OpenAI APIのレスポンス形式が不正です")
+        raise OpenAIRequestError("OpenAI APIのレスポンス形式が不正です", category="response")
     return body
 
 
@@ -196,7 +270,13 @@ def parse_json_text(text: str) -> Dict[str, Any]:
     try:
         parsed = json.loads(candidate)
     except (json.JSONDecodeError, TypeError) as exc:
-        raise OpenAIRequestError("AIから受け取ったJSONを検証できませんでした") from exc
+        raise OpenAIRequestError(
+            "AIから受け取ったJSONを検証できませんでした",
+            category="response",
+        ) from exc
     if not isinstance(parsed, dict):
-        raise OpenAIRequestError("AIから受け取ったJSONオブジェクトが不正です")
+        raise OpenAIRequestError(
+            "AIから受け取ったJSONオブジェクトが不正です",
+            category="response",
+        )
     return parsed

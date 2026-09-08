@@ -32,6 +32,10 @@ services:
         value: "90"
       - key: OPENAI_MAX_RETRIES
         value: "1"
+      - key: OPENAI_STORYBOARD_TIMEOUT_SECONDS
+        value: "240"
+      - key: OPENAI_STORYBOARD_MAX_RETRIES
+        value: "1"
       - key: OPENAI_MAX_OUTPUT_TOKENS
         value: "12000"
       - key: STORYBOARD_JOB_STALE_SECONDS

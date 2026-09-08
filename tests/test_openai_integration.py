@@ -7,12 +7,14 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 from PIL import Image
 
 from app.services.ai_pipeline import OpenAIProvider
 from app.services.artwork import ArtworkGenerationError, save_openai_image
+from app.services.openai_client import OpenAIRequestError, request_json
 from app.services.storage import LocalFileStorage
 
 
@@ -40,7 +42,9 @@ def runtime_settings() -> SimpleNamespace:
         openai_text_model="gpt-5.6-luna",
         openai_image_model="gpt-image-2",
         openai_timeout_seconds=5.0,
+        openai_storyboard_timeout_seconds=240.0,
         openai_max_retries=0,
+        openai_storyboard_max_retries=1,
         openai_max_output_tokens=2_000,
         storyboard_batch_pages=8,
     )
@@ -389,6 +393,184 @@ def test_large_storyboard_is_split_into_bounded_page_ranges(
         request["text"]["format"]["schema"]["properties"]["pages"]["maxItems"]
         for request in requests
     ] == [8, 8, 2]
+
+
+def test_transport_timeout_is_classified_and_retried_within_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """通信タイムアウトは分類し、設定回数を超えて再試行しない。"""
+
+    calls: list[float] = []
+    request_ids: list[str | None] = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(timeout)
+        request_ids.append(request.get_header("X-client-request-id"))
+        raise TimeoutError("simulated timeout")
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.services.openai_client.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(OpenAIRequestError) as raised:
+        request_json(
+            "https://api.openai.com/v1/responses",
+            api_key="test-key",
+            payload={"model": "gpt-5.6-sol"},
+            timeout=240.0,
+            max_retries=1,
+        )
+
+    assert raised.value.category == "timeout"
+    assert raised.value.retryable is True
+    assert calls == [240.0, 240.0]
+    assert request_ids[0] and request_ids[0] == request_ids[1]
+
+
+def test_quota_failure_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """残高・利用上限エラーで課金APIを無駄に繰り返さない。"""
+
+    calls = 0
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        raise HTTPError(
+            request.full_url,
+            429,
+            "quota",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {"error": {"code": "insufficient_quota", "type": "quota"}}
+                ).encode()
+            ),
+        )
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(OpenAIRequestError) as raised:
+        request_json(
+            "https://api.openai.com/v1/responses",
+            api_key="test-key",
+            payload={"model": "gpt-5.6-sol"},
+            timeout=240.0,
+            max_retries=2,
+        )
+
+    assert calls == 1
+    assert raised.value.category == "quota"
+    assert raised.value.retryable is False
+    assert "利用上限" in str(raised.value)
+
+
+def test_storyboard_uses_task_specific_timeout_after_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Storyboardだけが長いtimeoutを使い、通信retry後に成功できる。"""
+
+    calls: list[float] = []
+
+    page = {
+        "page_number": 1,
+        "title": "霧の入口",
+        "layout": "classic",
+        "panels": [
+            {
+                "description": "蒼が灯台を見る",
+                "shot_type": "遠景",
+                "characters": ["蒼"],
+                "action": "立ち止まる",
+                "expression": "迷い",
+                "background": "霧の町",
+                "dialogue": [],
+                "narration": [],
+                "sfx": [],
+            }
+        ],
+    }
+    responses = iter([TimeoutError("simulated timeout"), response_with_json({"pages": [page]})])
+
+    def fake_urlopen(_request, timeout):
+        calls.append(timeout)
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return FakeHTTPResponse(response)
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.services.openai_client.time.sleep", lambda _seconds: None)
+
+    result = OpenAIProvider().storyboard(
+        "蒼は灯台へ向かった。",
+        valid_analysis(),
+        {"target_page_count": 1, "language": "ja"},
+        [valid_character()],
+    )
+
+    assert len(result) == 1
+    assert calls == [240.0, 240.0]
+
+
+def test_storyboard_batches_do_not_repeat_long_story_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """9ページ以上の各batchへ原文全文を繰り返し送らない。"""
+
+    requests: list[dict] = []
+
+    def raw_page(number: int) -> dict:
+        return {
+            "page_number": number,
+            "title": f"ページ {number}",
+            "layout": "classic",
+            "panels": [
+                {
+                    "description": f"場面 {number}",
+                    "shot_type": "遠景",
+                    "characters": ["蒼"],
+                    "action": "進む",
+                    "expression": "決意",
+                    "background": "灯台",
+                    "dialogue": [],
+                    "narration": [],
+                    "sfx": [],
+                }
+            ],
+        }
+
+    responses = iter(
+        [
+            response_with_json({"pages": [raw_page(number) for number in range(1, 9)]}),
+            response_with_json({"pages": [raw_page(number) for number in range(9, 11)]}),
+        ]
+    )
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(next(responses))
+
+    long_story = (
+        "冒頭の固有場面。"
+        + ("前半の出来事。" * 1_000)
+        + "本文の中間固有語。"
+        + ("後半の出来事。" * 1_000)
+        + "結末の固有場面。"
+    )
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+
+    result = OpenAIProvider().storyboard(
+        long_story,
+        valid_analysis(),
+        {"target_page_count": 10, "language": "ja"},
+        [valid_character()],
+    )
+
+    assert len(result) == 10
+    assert len(requests) == 2
+    assert all("本文の中間固有語。" not in request["input"] for request in requests)
+    assert all(len(request["input"]) < len(long_story) for request in requests)
 
 
 def test_openai_image_base64_is_validated_and_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
