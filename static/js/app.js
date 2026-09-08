@@ -956,6 +956,7 @@
 
     function bindStoryboardEvents() {
       content.querySelector("[data-generate-storyboard]")?.addEventListener("click", generateStoryboard);
+      content.querySelector("[data-next-step]")?.addEventListener("click", function () { goToStep("generate"); });
       content.querySelector("[data-add-page]")?.addEventListener("click", function () {
         const pages = [...(state.storyboard || [])];
         pages.push({ id: uuid("page"), page_number: pages.length + 1, title: "追加ページ", layout: "classic", panels: [newPanel(1)] });

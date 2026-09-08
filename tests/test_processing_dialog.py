@@ -67,6 +67,7 @@ def test_storyboard_job_ui_restores_terminal_and_reload_states() -> None:
     assert "maximumPollingMs = 16 * 60 * 1000" in APP_SCRIPT
     assert "consecutiveNetworkErrors >= 4" in APP_SCRIPT
     assert "restoreStoryboardJobState();" in APP_SCRIPT
+    assert 'goToStep("generate")' in APP_SCRIPT
 
 
 def test_generation_progress_uses_job_state_and_preserves_selective_retry() -> None:
