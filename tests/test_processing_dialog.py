@@ -22,6 +22,7 @@ def test_processing_dialog_is_shared_and_accessible() -> None:
     assert 'id="processing-dialog-message" aria-live="polite"' in BASE_TEMPLATE
     assert 'id="processing-dialog-progress" aria-live="polite"' in BASE_TEMPLATE
     assert 'class="processing-spinner"' in BASE_TEMPLATE
+    assert 'id="processing-dialog-action"' in BASE_TEMPLATE
 
 
 def test_processing_dialog_covers_long_operations_and_cleans_up() -> None:
@@ -77,8 +78,12 @@ def test_generation_progress_uses_job_state_and_preserves_selective_retry() -> N
     assert "const targetIds = new Set(targetPanelIds || [])" in APP_SCRIPT
     assert 'panel.status === "completed"' in APP_SCRIPT
     assert 'panel.status === "failed"' in APP_SCRIPT
-    assert '"コマ中 " + current + "コマ目を生成しています"' in APP_SCRIPT
-    assert '"失敗したコマは生成画面から再試行できます。"' in APP_SCRIPT
+    assert 'data.panel_generation' in APP_SCRIPT
+    assert 'function restorePanelGenerationState()' in APP_SCRIPT
+    assert 'waiting' in APP_SCRIPT
+    assert '"状態不明"' in APP_SCRIPT
+    assert '30 * 60 * 1000' in APP_SCRIPT
+    assert '"失敗したコマは生成画面から再試行できます。"' not in APP_SCRIPT
     assert "queueGeneration([button.dataset.retryPanel], true, true)" in APP_SCRIPT
 
 

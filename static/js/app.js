@@ -34,10 +34,12 @@
     title: document.getElementById("processing-dialog-title"),
     message: document.getElementById("processing-dialog-message"),
     progress: document.getElementById("processing-dialog-progress"),
-    submessage: document.getElementById("processing-dialog-submessage")
+    submessage: document.getElementById("processing-dialog-submessage"),
+    action: document.getElementById("processing-dialog-action")
   };
   let processingDialogOpen = false;
   let processingDialogPreviousFocus = null;
+  let processingDialogAction = null;
 
   function updateProcessingDialog(options) {
     const values = options || {};
@@ -50,6 +52,14 @@
       processingDialogElements.progress.hidden = !progress;
     }
     if (values.submessage != null && processingDialogElements.submessage) processingDialogElements.submessage.textContent = values.submessage;
+    if (Object.prototype.hasOwnProperty.call(values, "actionLabel") && processingDialogElements.action) {
+      const label = String(values.actionLabel || "").trim();
+      processingDialogElements.action.textContent = label;
+      processingDialogElements.action.hidden = !label;
+    }
+    if (Object.prototype.hasOwnProperty.call(values, "action")) {
+      processingDialogAction = typeof values.action === "function" ? values.action : null;
+    }
   }
 
   function showProcessingDialog(options) {
@@ -67,6 +77,8 @@
       message: "処理を開始しています…",
       progress: "",
       submessage: "完了するまでお待ちください",
+      actionLabel: "",
+      action: null,
       ...(options || {})
     });
     const focusDialog = function () {
@@ -78,6 +90,8 @@
   function hideProcessingDialog() {
     if (!processingDialogElements.root || !processingDialogOpen) return;
     processingDialogOpen = false;
+    processingDialogAction = null;
+    if (processingDialogElements.action) processingDialogElements.action.hidden = true;
     processingDialogElements.root.hidden = true;
     processingDialogElements.root.setAttribute("aria-hidden", "true");
     processingDialogElements.root.setAttribute("aria-busy", "false");
@@ -91,8 +105,15 @@
     if (!processingDialogOpen) return;
     if (event.key === "Escape" || event.key === "Tab") {
       event.preventDefault();
-      processingDialogElements.dialog?.focus();
+      if (event.key === "Tab" && processingDialogElements.action && !processingDialogElements.action.hidden && document.activeElement !== processingDialogElements.action) {
+        processingDialogElements.action.focus();
+      } else {
+        processingDialogElements.dialog?.focus();
+      }
     }
+  });
+  processingDialogElements.action?.addEventListener("click", function () {
+    if (processingDialogAction) processingDialogAction();
   });
 
   function applyTheme(theme) {
@@ -451,6 +472,7 @@
     let selectedPanelId = null;
     let saveTimer = null;
     let polling = false;
+    let panelGenerationState = null;
     let storyboardPolling = false;
     let storyboardJobState = null;
     let storyboardPollRun = 0;
@@ -641,6 +663,7 @@
       activeStep = step;
       await saveProject({ current_step: step }, null, false).catch(function () {});
       render();
+      if (step === "generate") restorePanelGenerationState();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1122,11 +1145,107 @@
       }
     }
 
+    function applyGenerationStatus(data) {
+      if (!data) return;
+      const byId = Object.fromEntries((data.panels || []).map(function (panel) { return [panel.id, panel]; }));
+      (state.storyboard || []).forEach(function (page) {
+        (page.panels || []).forEach(function (panel) {
+          const update = byId[panel.id];
+          if (!update) return;
+          panel.generation_status = update.status;
+          panel.generation_error = update.error;
+          panel.image_url = update.image_url;
+          panel.revision = update.revision;
+          panel.generation_metadata = update.generation_metadata;
+        });
+      });
+      if (data.project_status) state.status = data.project_status;
+      panelGenerationState = data.panel_generation || null;
+    }
+
+    function panelProgress(data, targetIds) {
+      const panels = Array.isArray(data?.panels) ? data.panels : [];
+      const snapshot = data?.panel_generation || {};
+      const tracked = targetIds && targetIds.size
+        ? panels.filter(function (panel) { return targetIds.has(panel.id); })
+        : snapshot.batch_panel_ids?.length
+          ? panels.filter(function (panel) { return snapshot.batch_panel_ids.includes(panel.id); })
+          : panels;
+      const counts = {
+        completed: tracked.filter(function (panel) { return panel.status === "completed"; }).length,
+        generating: tracked.filter(function (panel) { return panel.status === "processing"; }).length,
+        waiting: tracked.filter(function (panel) { return panel.status === "queued"; }).length,
+        failed: tracked.filter(function (panel) { return panel.status === "failed"; }).length
+      };
+      const current = tracked.find(function (panel) { return panel.status === "processing"; }) || tracked.find(function (panel) { return panel.status === "queued"; });
+      return {
+        tracked: tracked,
+        current: current,
+        total: targetIds && targetIds.size ? targetIds.size : Number(snapshot.total || tracked.length),
+        ...counts
+      };
+    }
+
+    function panelDialogOptions(operationMessage, data, progress) {
+      const snapshot = data?.panel_generation || {};
+      const current = progress.current;
+      const currentPage = snapshot.current_page || current?.page_number;
+      const currentPanel = snapshot.current_panel || current?.order;
+      let message = operationMessage || "漫画画像を生成しています…";
+      let submessage = "生成済みのコマは保存されています。状態はサーバーへ保存されます。";
+      if (progress.generating) {
+        if (currentPage && currentPanel) message = "ページ" + currentPage + "・コマ" + currentPanel + "を生成しています…";
+        else if (progress.generating > 1) message = progress.generating + "コマを生成しています…";
+        submessage = "画像生成には数分かかる場合があります。生成済みのコマは保存されています。";
+      } else if (progress.waiting) {
+        message = "画像生成の順番を待っています";
+        submessage = progress.waiting + "コマが待機中です。Jobはサーバー側で継続します。";
+      }
+      const parts = [progress.completed + " / " + progress.total + " 完了"];
+      if (progress.generating) parts.push("生成中 " + progress.generating);
+      if (progress.waiting) parts.push("待機 " + progress.waiting);
+      if (progress.failed) parts.push("失敗 " + progress.failed);
+      return { message: message, progress: parts.join(" ・ "), submessage: submessage, actionLabel: "", action: null };
+    }
+
+    function showPanelStatusUnknown() {
+      updateProcessingDialog({
+        message: "処理状況を確認できません。",
+        progress: "状態不明",
+        submessage: "サーバーとの接続を再確認しています。Jobを勝手に停止せず、必要なら再読み込みしてください。",
+        actionLabel: "再読み込み",
+        action: function () { window.location.reload(); }
+      });
+    }
+
+    async function restorePanelGenerationState() {
+      if (activeStep !== "generate" || polling) return;
+      try {
+        const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+        applyGenerationStatus(data);
+        render();
+        const snapshot = data.panel_generation || {};
+        if (!snapshot.active) return;
+        const targetIds = snapshot.batch_panel_ids || snapshot.active_panel_ids || [];
+        const operationMessage = targetIds.length === 1 ? "コマを再生成しています…" : "漫画画像を生成しています…";
+        showProcessingDialog({
+          message: operationMessage,
+          progress: "サーバー上の生成状態を復元しています",
+          submessage: "再読み込み前に開始したJobを引き続き確認します。"
+        });
+        await pollGeneration(targetIds, operationMessage);
+      } catch (_error) {
+        // 初回の状態確認に失敗しても、編集画面を利用不能にはしない。
+      }
+    }
+
     function renderGenerationRows() {
+      const panelBusy = Boolean(panelGenerationState?.active || polling);
       return allPanels().map(function (item) {
         const panel = item.panel;
         const status = panel.generation_status || "not_started";
-        const action = status === "failed" ? '<button type="button" class="text-button" data-retry-panel="' + escapeAttr(panel.id) + '">再試行</button>' : status === "completed" ? '<button type="button" class="text-button" data-regenerate-panel="' + escapeAttr(panel.id) + '">再生成</button>' : "";
+        const disabled = panelBusy ? " disabled" : "";
+        const action = status === "failed" ? '<button type="button" class="text-button" data-retry-panel="' + escapeAttr(panel.id) + '"' + disabled + '>再試行</button>' : status === "completed" ? '<button type="button" class="text-button" data-regenerate-panel="' + escapeAttr(panel.id) + '"' + disabled + '>再生成</button>' : "";
         const thumb = panel.image_url ? '<img src="' + escapeAttr(panel.image_url) + '" alt="">' : '<span>' + escapeHtml(String((item.page.page_number || 1) + " / " + (panel.order || (item.page.panels || []).indexOf(panel) + 1))) + '</span>';
         const referenceLabel = (panel.knowledge_refs || []).map(function (ref) { return (ref.title || "Knowledge") + " v" + (ref.version_number || "?"); }).join(", ");
         const generationModel = panel.generation_metadata?.actual_model ? " / 実行モデル: " + escapeHtml(panel.generation_metadata.actual_model) + (panel.generation_metadata.fallback ? "（Astraからフォールバック）" : "") : "";
@@ -1139,7 +1258,12 @@
       const panels = allPanels();
       const generated = panels.filter(function (item) { return item.panel.generation_status === "completed"; }).length;
       const failed = panels.filter(function (item) { return item.panel.generation_status === "failed"; }).length;
-      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding"><div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all>未生成をまとめて生成</button></div></div><div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary"><div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
+      const snapshot = panelGenerationState || {};
+      const panelBusy = Boolean(snapshot.active || polling);
+      const aggregate = snapshot.active && snapshot.total ? snapshot : { total: panels.length, completed: generated, generating: 0, waiting: 0, failed: failed };
+      const globalStatus = snapshot.active ? '<div class="generation-global-status" role="status" aria-live="polite"><strong>' + aggregate.completed + ' / ' + aggregate.total + ' 完了</strong><span>' + (aggregate.generating ? '生成中 ' + aggregate.generating + ' ・ ' : '') + (aggregate.waiting ? '待機 ' + aggregate.waiting + ' ・ ' : '') + (aggregate.failed ? '失敗 ' + aggregate.failed : '処理を継続しています') + '</span>' + (snapshot.current_page && snapshot.current_panel ? '<span>現在：ページ' + escapeHtml(snapshot.current_page) + '・コマ' + escapeHtml(snapshot.current_panel) + '</span>' : '') + '</div>' : '';
+      const disabled = panelBusy ? " disabled" : "";
+      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding"><div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all' + disabled + '>未生成をまとめて生成</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary"><div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
       content.querySelector("[data-generate-all]")?.addEventListener("click", function () { queueGeneration([], false, false); });
       content.querySelector("[data-retry-failed]")?.addEventListener("click", function () { queueGeneration([], true, false); });
       content.querySelectorAll("[data-retry-panel]").forEach(function (button) { button.addEventListener("click", function () { queueGeneration([button.dataset.retryPanel], true, true); }); });
@@ -1149,6 +1273,7 @@
     }
 
     async function queueGeneration(panelIds, retryFailed, force) {
+      if (polling || panelGenerationState?.active) return;
       const buttons = content.querySelectorAll("[data-generate-all], [data-retry-failed], [data-retry-panel], [data-regenerate-panel]");
       buttons.forEach(function (button) { button.disabled = true; });
       const operationMessage = force && panelIds.length === 1 ? "漫画画像を再生成しています…" : "漫画画像を生成しています…";
@@ -1161,16 +1286,35 @@
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generate", { method: "POST", body: JSON.stringify({ panel_ids: panelIds, retry_failed: retryFailed, force: force }) });
         const queuedPanelIds = Array.isArray(data.queued_panel_ids) ? data.queued_panel_ids.filter(Boolean) : [];
         if (!queuedPanelIds.length) {
-          hideProcessingDialog();
-          showToast("生成対象はありません。完了済みのコマは再利用されます");
-          await fetchProject(true);
+          const status = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+          applyGenerationStatus(status);
+          if (status.panel_generation?.active) {
+            const activeIds = status.panel_generation.batch_panel_ids || status.panel_generation.active_panel_ids || [];
+            await pollGeneration(activeIds, operationMessage);
+          } else {
+            hideProcessingDialog();
+            showToast("生成対象はありません。完了済みのコマは再利用されます");
+            await fetchProject(true);
+          }
           return;
         }
         showToast(queuedPanelIds.length + "コマを生成キューに追加しました");
         updateProcessingDialog({ progress: queuedPanelIds.length + "コマを順番に生成します" });
+        const initialStatus = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+        applyGenerationStatus(initialStatus);
         await fetchProject(true);
         await pollGeneration(queuedPanelIds, operationMessage);
       } catch (error) {
+        // POST応答だけが失われた場合、再送せずserver stateを確認する。
+        try {
+          const status = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+          applyGenerationStatus(status);
+          if (status.panel_generation?.active) {
+            const activeIds = status.panel_generation.batch_panel_ids || status.panel_generation.active_panel_ids || panelIds;
+            await pollGeneration(activeIds, operationMessage);
+            return;
+          }
+        } catch (_statusError) {}
         hideProcessingDialog();
         showToast(error.message, "error");
         render();
@@ -1182,44 +1326,60 @@
       polling = true;
       const targetIds = new Set(targetPanelIds || []);
       let finished = false;
+      const startedAt = Date.now();
+      const maximumPollingMs = 30 * 60 * 1000;
+      let consecutiveNetworkErrors = 0;
       try {
-        for (let attempt = 0; attempt < 40; attempt += 1) {
-          await new Promise(function (resolve) { window.setTimeout(resolve, 500); });
-          const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
-          const byId = Object.fromEntries(data.panels.map(function (panel) { return [panel.id, panel]; }));
-          (state.storyboard || []).forEach(function (page) { (page.panels || []).forEach(function (panel) { const update = byId[panel.id]; if (update) { panel.generation_status = update.status; panel.generation_error = update.error; panel.image_url = update.image_url; panel.revision = update.revision; panel.generation_metadata = update.generation_metadata; } }); });
-          const active = data.panels.some(function (panel) { return panel.status === "queued" || panel.status === "processing"; });
-          const tracked = targetIds.size ? data.panels.filter(function (panel) { return targetIds.has(panel.id); }) : data.panels;
-          const completed = tracked.filter(function (panel) { return panel.status === "completed"; }).length;
-          const failed = tracked.filter(function (panel) { return panel.status === "failed"; }).length;
-          const currentPanel = tracked.find(function (panel) { return panel.status === "queued" || panel.status === "processing"; });
-          if (!active || !currentPanel) {
+        while (Date.now() - startedAt < maximumPollingMs) {
+          const interval = Date.now() - startedAt < 60 * 1000 ? 1500 : 5000;
+          await new Promise(function (resolve) { window.setTimeout(resolve, interval); });
+          let data;
+          try {
+            data = await api("/api/projects/" + encodeURIComponent(state.id) + "/generation/status");
+            consecutiveNetworkErrors = 0;
+          } catch (_error) {
+            consecutiveNetworkErrors += 1;
+            if (consecutiveNetworkErrors >= 4) showPanelStatusUnknown();
+            else updateProcessingDialog({
+              message: operationMessage || "漫画画像を生成しています…",
+              progress: "進行状況を確認しています…",
+              submessage: "一時的な通信エラーです。Jobはサーバー側で継続します。",
+              actionLabel: "",
+              action: null
+            });
+            continue;
+          }
+          applyGenerationStatus(data);
+          const progress = panelProgress(data, targetIds);
+          const snapshot = data.panel_generation || {};
+          const active = targetIds.size
+            ? progress.tracked.some(function (panel) { return panel.status === "queued" || panel.status === "processing"; })
+            : Boolean(snapshot.active);
+          if (!active) {
             finished = true;
-            await fetchProject(false);
+            await fetchProject(false).catch(function () {});
+            polling = false;
             render();
-            if (failed) {
-              updateProcessingDialog({ message: "一部の漫画画像を生成できませんでした", progress: completed + "コマ完了 / " + failed + "コマ失敗", submessage: "失敗したコマは生成画面から再試行できます。" });
-              showToast(failed + "コマの生成に失敗しました。再試行できます", "error");
+            if (progress.failed) {
+              showToast(progress.failed + "コマの生成に失敗しました。再試行できます", "error");
             } else {
-              updateProcessingDialog({ message: "漫画画像の生成が完了しました", progress: completed + "コマを保存しました", submessage: "生成結果を確認できます。" });
+              showToast("漫画画像の生成が完了しました");
             }
             break;
           }
-          const total = targetIds.size || tracked.length;
-          const current = Math.min(completed + 1, Math.max(1, total));
-          updateProcessingDialog({
-            message: operationMessage || "漫画画像を生成しています…",
-            progress: total + "コマ中 " + current + "コマ目を生成しています",
-            submessage: currentPanel.status === "queued" ? "生成キューで順番を待っています。" : "画像を生成し、保存しています。"
-          });
+          updateProcessingDialog(panelDialogOptions(operationMessage, data, progress));
           if (activeStep === "generate") render();
         }
-        if (!finished) showToast("生成状況の確認がタイムアウトしました。しばらくしてから再読み込みしてください", "error");
+        if (!finished) {
+          showPanelStatusUnknown();
+          showToast("生成状況の確認に時間がかかっています。再読み込みで状態を確認できます", "error");
+        }
       } catch (error) {
-        showToast(error.message, "error");
+        showPanelStatusUnknown();
+        showToast(error.message || "生成状況を確認できません", "error");
       } finally {
         polling = false;
-        hideProcessingDialog();
+        if (finished) hideProcessingDialog();
       }
     }
 
@@ -1393,5 +1553,6 @@
 
     render();
     restoreStoryboardJobState();
+    if (activeStep === "generate") restorePanelGenerationState();
   }
 })();

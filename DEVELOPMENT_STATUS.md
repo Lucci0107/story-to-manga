@@ -124,11 +124,14 @@
 - Storyboard timeout／quota分類、同一request id、task-specific timeout、長文batch context縮小の回帰テストを追加し、全体pytestは`90 passed`です。compileall、JavaScript syntax、pip check、diff check、secret scanも成功しました。
 - ローカル実AI検証: 短編Storyboard（3ページ）と9ページStoryboard（8+1ページbatch）を成功確認しました。画像生成は追加実行していません。
 - 最新Production QA: `https://story-to-manga-b6bb.onrender.com`で合成ProjectのStoryboardを実AIで1回だけ生成し、`processing → completed`、8ページ・34コマ表示、実行モデル`gpt-5.6-sol`、Processing Dialog終了、ボタン復帰、reload後のネーム保持、`コマ生成へ`の次工程遷移を確認しました。画像生成は実行していません。
+- Panel生成の全体進捗UXを追加：既存Processing Dialogへ、同一生成リクエスト単位の`batch_id`に基づく`completed / generating / waiting / failed`件数、現在のページ・コマ、heartbeat時刻を接続しました。active JobがwaitingだけでもDialogを維持し、個別再生成では対象コマだけを集計します。
+- Panel生成のreload・画面遷移復元と通信耐性を追加：server-sideのactive Jobを再取得してDialogとpollingを復元し、一時的なpolling失敗ではJobを停止せず、連続失敗・長時間未収束時は「状態不明」と再読み込み操作を表示します。既存のstale recovery、duplicate防止、個別Retryを維持しています。
+- Panel Jobの完了・失敗をProject保存と同一transactionで確定し、stale失敗Jobを遅いBackgroundTaskが再開・completedへ戻さないRepository境界を追加しました。ローカルdemoの一括生成、waiting/generating表示、reload復元、完了後のDialog終了と操作復帰を実ブラウザで確認しました。
 - `f4f216f`のGitHub Actions CI（run `34226922292`）はsuccess、Render自動deploy後の`/api/health`はHTTP 200、Production smokeのhealth/login/CSS/JavaScriptも全項目成功しました。
 
 ## In Progress
 
-- なし。Storyboard OpenAI timeout/resilience修正、回帰検証、GitHub CI、Render自動deploy、Production Browser/Smoke QAまで完了しました。
+- Panel生成のProduction QAとRender自動デプロイは、今回の変更をmainへpushした後に実施します。Storyboard lifecycle・AI・画像生成の既存実装は再構築しません。
 
 ## 永続化移行準備
 

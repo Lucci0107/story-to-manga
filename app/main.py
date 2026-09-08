@@ -294,6 +294,132 @@ def all_panels(project: Dict[str, Any]) -> Iterable[Tuple[Dict[str, Any], Dict[s
             yield page, panel
 
 
+def panel_generation_snapshot(
+    project: Dict[str, Any],
+    jobs: List[Dict[str, Any]],
+    recovered_job_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Panel生成Jobと保存済みPanelから、画面用の実進捗を集約する。"""
+
+    panel_entries = list(all_panels(project))
+    panel_by_id = {
+        str(panel.get("id")): (page, panel)
+        for page, panel in panel_entries
+        if panel.get("id")
+    }
+    panel_jobs = [job for job in jobs if job.get("job_type") == "panel_artwork"]
+    active_jobs = [
+        job for job in panel_jobs if job.get("status") in {"queued", "processing"}
+    ]
+    active_panel_ids = {
+        str(job["target_id"])
+        for job in active_jobs
+        if job.get("target_id") and str(job["target_id"]) in panel_by_id
+    }
+    panel_active_ids = {
+        panel_id
+        for panel_id, (_page, panel) in panel_by_id.items()
+        if panel.get("generation_status") in {"queued", "processing"}
+    }
+    active = bool(active_jobs or panel_active_ids)
+    batch_jobs: List[Dict[str, Any]] = []
+    if active_jobs:
+        active_batch_ids = {
+            str(job.get("batch_id"))
+            for job in active_jobs
+            if job.get("batch_id")
+        }
+        if active_batch_ids:
+            batch_jobs = [
+                job for job in panel_jobs if str(job.get("batch_id")) in active_batch_ids
+            ]
+        else:
+            # batch_id導入前のJobは、同一生成要求の作成時刻を近接範囲で補う。
+            batch_start = min(str(job.get("created_at") or "") for job in active_jobs)
+            batch_jobs = [
+                job
+                for job in panel_jobs
+                if str(job.get("created_at") or "") >= batch_start
+            ]
+    batch_panel_ids = {
+        str(job["target_id"])
+        for job in batch_jobs
+        if job.get("target_id") and str(job["target_id"]) in panel_by_id
+    }
+    if active and not batch_panel_ids:
+        batch_panel_ids = active_panel_ids
+    if active:
+        batch_panel_ids.update(active_panel_ids)
+
+    status_by_id = {
+        panel_id: str(panel.get("generation_status") or "not_started")
+        for panel_id, (_page, panel) in panel_by_id.items()
+    }
+    job_status_by_id = {
+        str(job["target_id"]): str(job.get("status"))
+        for job in batch_jobs
+        if job.get("target_id")
+    }
+    counts = {"completed": 0, "generating": 0, "waiting": 0, "failed": 0, "not_started": 0}
+    for panel_id in batch_panel_ids:
+        status = status_by_id.get(panel_id, "not_started")
+        if status not in counts:
+            status = job_status_by_id.get(panel_id, status)
+        if status == "processing":
+            counts["generating"] += 1
+        elif status == "queued":
+            counts["waiting"] += 1
+        elif status == "completed":
+            counts["completed"] += 1
+        elif status == "failed":
+            counts["failed"] += 1
+        else:
+            counts["not_started"] += 1
+
+    active_sorted = sorted(
+        active_jobs,
+        key=lambda job: (
+            0 if job.get("status") == "processing" else 1,
+            str(job.get("created_at") or ""),
+        ),
+    )
+    current_job = active_sorted[0] if active_sorted else None
+    current_panel_id = str(current_job["target_id"]) if current_job and current_job.get("target_id") else None
+    current_page = None
+    current_panel = None
+    if current_panel_id and current_panel_id in panel_by_id:
+        page, panel = panel_by_id[current_panel_id]
+        current_page = page.get("page_number")
+        current_panel = panel.get("order")
+    updated_values = [
+        str(job.get("updated_at") or job.get("created_at") or "")
+        for job in active_jobs
+    ]
+    latest_job = panel_jobs[0] if panel_jobs else None
+    return {
+        "active": active,
+        "status": (
+            "processing"
+            if counts["generating"]
+            else "queued"
+            if active
+            else (latest_job.get("status") if latest_job else None)
+        ),
+        "total": len(batch_panel_ids),
+        **counts,
+        "active_panel_ids": sorted(active_panel_ids),
+        "batch_panel_ids": sorted(batch_panel_ids),
+        "active_job_ids": [str(job["id"]) for job in active_jobs],
+        "current_panel_id": current_panel_id,
+        "current_page": current_page,
+        "current_panel": current_panel,
+        "heartbeat_at": current_job.get("updated_at") if current_job else None,
+        "updated_at": max(updated_values) if updated_values else (latest_job.get("updated_at") if latest_job else None),
+        "stalled": bool(recovered_job_ids),
+        "recovered_job_ids": recovered_job_ids or [],
+    }
+
+
 def find_panel(project: Dict[str, Any], panel_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     for page, panel in all_panels(project):
         if panel.get("id") == panel_id:
@@ -376,11 +502,17 @@ def queue_panels(
             raise HTTPException(status_code=404, detail="指定されたコマが見つかりません")
 
     jobs: List[Dict[str, Any]] = []
+    batch_id = secrets.token_hex(12) if candidates else None
     for panel in candidates:
         revision = int(panel.get("revision", 0))
         suffix = secrets.token_hex(4) if force else str(revision)
         idempotency_key = f"panel:{project['id']}:{panel['id']}:{suffix}"
-        job = db.create_generation_job(project["id"], str(panel["id"]), idempotency_key)
+        job = db.create_generation_job(
+            project["id"],
+            str(panel["id"]),
+            idempotency_key,
+            batch_id=batch_id,
+        )
         if job and job.get("status") in {"queued", "processing"}:
             jobs.append(job)
 
@@ -404,7 +536,10 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
         job = db.get_generation_job(job_id)
         if not job:
             continue
-        db.update_generation_job(job_id, "processing")
+        if job.get("status") not in {"queued", "processing"}:
+            continue
+        if not db.start_generation_job(job_id):
+            continue
         project = db.get_project(project_id, user_id)
         if not project:
             db.update_generation_job(job_id, "failed", "Projectが見つかりません")
@@ -413,6 +548,7 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             _page, panel = find_panel(project, str(job["target_id"]))
             panel["generation_status"] = "processing"
             db.update_project(project_id, user_id, storyboard=project["storyboard"], clear_quality_check=True)
+            db.touch_generation_job(job_id)
             time.sleep(0.18)
             latest = db.get_project(project_id, user_id) or project
             _latest_page, latest_panel = find_panel(latest, str(job["target_id"]))
@@ -448,6 +584,8 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
             latest_panel["generation_prompt"] = append_knowledge_prompt(base_prompt, knowledge_context)
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
+            # 外部画像APIの待機中も、Jobが生きていることを記録する。
+            db.touch_generation_job(job_id)
             storage_key = save_panel_artwork(
                 latest["id"], latest_panel, latest["settings"], model_settings
             )
@@ -459,21 +597,43 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             latest_panel["image_url"] = asset_url(latest["id"], storage_key)
             latest_panel["generation_status"] = "completed"
             latest_panel["generation_error"] = None
-            db.update_project(project_id, user_id, storyboard=latest["storyboard"], clear_quality_check=True)
-            db.update_generation_job(job_id, "completed")
+            # stale復旧で先にfailedへ進んだJobを遅いWorkerが復活させない。
+            if not db.complete_panel_generation_job(
+                job_id,
+                project_id,
+                user_id,
+                latest["storyboard"],
+            ):
+                logger.warning(
+                    "panel generation completion ignored for inactive job project_id=%s job_id=%s",
+                    project_id,
+                    job_id,
+                )
         except Exception as exc:  # noqa: BLE001
             message = safe_job_error(exc)
-            logger.exception("panel generation failed")
+            logger.exception(
+                "panel generation failed project_id=%s job_id=%s target_id=%s",
+                project_id,
+                job_id,
+                job.get("target_id"),
+            )
             fallback = db.get_project(project_id, user_id)
             if fallback:
                 try:
                     _page, failed_panel = find_panel(fallback, str(job["target_id"]))
                     failed_panel["generation_status"] = "failed"
                     failed_panel["generation_error"] = message
-                    db.update_project(project_id, user_id, storyboard=fallback["storyboard"], status="partially_failed", clear_quality_check=True)
+                    db.fail_panel_generation_job(
+                        job_id,
+                        project_id,
+                        user_id,
+                        fallback["storyboard"],
+                        message,
+                    )
                 except HTTPException:
                     pass
-            db.update_generation_job(job_id, "failed", message)
+            else:
+                db.update_generation_job(job_id, "failed", message)
     finished = db.get_project(project_id, user_id)
     if finished:
         panels = [panel for _page, panel in all_panels(finished)]
@@ -481,6 +641,14 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             db.update_project(project_id, user_id, status="completed", current_step="edit")
         elif any(panel.get("generation_status") == "failed" for panel in panels):
             db.update_project(project_id, user_id, status="partially_failed")
+        else:
+            # 一部のコマだけを生成した場合も、Job終了後に「生成中」を残さない。
+            db.update_project(
+                project_id,
+                user_id,
+                status="storyboard_ready",
+                current_step="generate",
+            )
 
 
 def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
@@ -1523,16 +1691,23 @@ async def api_retry_panel(
 @app.get("/api/projects/{project_id}/generation/status")
 async def api_generation_status(project_id: str, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
-    recovered = db.recover_stale_storyboard_jobs(
+    recovered_panel = db.recover_stale_panel_jobs(
         project_id,
         user["id"],
         get_settings().storyboard_job_stale_seconds,
     )
+    recovered_storyboard = db.recover_stale_storyboard_jobs(
+        project_id,
+        user["id"],
+        get_settings().storyboard_job_stale_seconds,
+    )
+    recovered = recovered_panel + recovered_storyboard
     if recovered:
         logger.warning(
-            "stale storyboard jobs recovered project_id=%s job_count=%s",
+            "stale generation jobs recovered project_id=%s panel_count=%s storyboard_count=%s",
             project_id,
-            len(recovered),
+            len(recovered_panel),
+            len(recovered_storyboard),
         )
         project = require_project(project_id, user["id"])
     storyboard_job = db.latest_generation_job(project_id, "storyboard")
@@ -1564,11 +1739,13 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
                 "generation_metadata": panel.get("generation_metadata"),
             }
         )
+    jobs = db.list_generation_jobs(project_id)
     return {
         "project_status": project.get("status"),
         "panels": panels,
-        "jobs": db.list_generation_jobs(project_id),
+        "jobs": jobs,
         "storyboard_job": storyboard_job,
+        "panel_generation": panel_generation_snapshot(project, jobs, recovered_panel),
     }
 
 

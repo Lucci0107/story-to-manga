@@ -110,6 +110,7 @@ def init_db() -> None:
                 status TEXT NOT NULL,
                 error TEXT,
                 idempotency_key TEXT NOT NULL,
+                batch_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT
@@ -218,6 +219,8 @@ def init_db() -> None:
         if "storage_key" not in export_columns:
             conn.execute("ALTER TABLE exports ADD COLUMN storage_key TEXT")
         job_columns = conn.table_columns("generation_jobs")
+        if "batch_id" not in job_columns:
+            conn.execute("ALTER TABLE generation_jobs ADD COLUMN batch_id TEXT")
         if "updated_at" not in job_columns:
             conn.execute("ALTER TABLE generation_jobs ADD COLUMN updated_at TEXT")
             conn.execute(
@@ -772,6 +775,7 @@ def create_generation_job(
     target_id: Optional[str],
     idempotency_key: str,
     job_type: str = "panel_artwork",
+    batch_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """同じ処理が実行中なら新規Jobを作らない。"""
 
@@ -794,10 +798,10 @@ def create_generation_job(
             conn.execute(
                 """
                 INSERT INTO generation_jobs
-                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?, ?)
+                  (id, project_id, target_id, job_type, status, error, idempotency_key, batch_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?)
                 """,
-                (job_id, project_id, target_id, job_type, idempotency_key, now, now),
+                (job_id, project_id, target_id, job_type, idempotency_key, batch_id, now, now),
             )
     except Exception:  # DB固有の一意制約例外をRepository境界で吸収する。
         with connection() as conn:
@@ -898,6 +902,25 @@ def update_generation_job(
     return get_generation_job(job_id)
 
 
+def start_generation_job(job_id: str) -> bool:
+    """queued Jobだけをprocessingへ進め、stale失敗Jobの復活を防ぐ。"""
+
+    now = utc_now()
+    with connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'processing', updated_at = ?
+            WHERE id = ? AND status = 'queued'
+            """,
+            (now, job_id),
+        )
+        if cursor.rowcount:
+            return True
+    current = get_generation_job(job_id)
+    return bool(current and current.get("status") == "processing")
+
+
 def touch_generation_job(job_id: str) -> None:
     """長い分割処理の生存時刻だけを更新する。"""
 
@@ -909,6 +932,103 @@ def touch_generation_job(job_id: str) -> None:
             """,
             (utc_now(), job_id),
         )
+
+
+def complete_panel_generation_job(
+    job_id: str,
+    project_id: str,
+    user_id: str,
+    storyboard: List[Dict[str, Any]],
+) -> bool:
+    """Panel保存とJob完了を同一transactionで確定する。
+
+    stale復旧や再起動復旧で先に失敗へ進んだJobを、遅れて戻った
+    BackgroundTaskがcompletedへ戻さないよう、active状態だけを更新する。
+    """
+
+    now = utc_now()
+    with connection() as conn:
+        job = conn.execute(
+            """
+            SELECT status FROM generation_jobs
+            WHERE id = ? AND project_id = ? AND job_type = 'panel_artwork'
+            """,
+            (job_id, project_id),
+        ).fetchone()
+        if not job or job["status"] not in {"queued", "processing"}:
+            return bool(job and job["status"] == "completed")
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not project:
+            return False
+        conn.execute(
+            """
+            UPDATE projects
+            SET storyboard_json = ?, status = 'processing', current_step = 'generate',
+                quality_check_json = NULL, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_json(storyboard), now, project_id, user_id),
+        )
+        conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'completed', error = NULL, completed_at = ?, updated_at = ?
+            WHERE id = ? AND project_id = ? AND job_type = 'panel_artwork'
+              AND status IN ('queued', 'processing')
+            """,
+            (now, now, job_id, project_id),
+        )
+    return True
+
+
+def fail_panel_generation_job(
+    job_id: str,
+    project_id: str,
+    user_id: str,
+    storyboard: List[Dict[str, Any]],
+    error: str,
+) -> bool:
+    """Panel保存とJob失敗を同一transactionで確定する。"""
+
+    now = utc_now()
+    with connection() as conn:
+        job = conn.execute(
+            """
+            SELECT status FROM generation_jobs
+            WHERE id = ? AND project_id = ? AND job_type = 'panel_artwork'
+            """,
+            (job_id, project_id),
+        ).fetchone()
+        if not job or job["status"] not in {"queued", "processing"}:
+            return bool(job and job["status"] == "failed")
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not project:
+            return False
+        conn.execute(
+            """
+            UPDATE projects
+            SET storyboard_json = ?, status = 'partially_failed', current_step = 'generate',
+                quality_check_json = NULL, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_json(storyboard), now, project_id, user_id),
+        )
+        conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'failed', error = ?, completed_at = ?, updated_at = ?
+            WHERE id = ? AND project_id = ? AND job_type = 'panel_artwork'
+              AND status IN ('queued', 'processing')
+            """,
+            (error, now, now, job_id, project_id),
+        )
+    return True
 
 
 def latest_generation_job(project_id: str, job_type: str) -> Optional[Dict[str, Any]]:
@@ -1047,6 +1167,68 @@ def recover_stale_storyboard_jobs(
                 WHERE id = ? AND user_id = ?
                 """,
                 (now, project_id, user_id),
+            )
+    return recovered
+
+
+def recover_stale_panel_jobs(
+    project_id: str, user_id: str, stale_after_seconds: int
+) -> List[str]:
+    """heartbeatが止まったPanel Jobを失敗・再試行可能へ収束させる。"""
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=max(1, stale_after_seconds))
+    ).isoformat()
+    message = "画像生成処理が中断された可能性があります。再試行してください"
+    recovered: List[str] = []
+    now = utc_now()
+    with connection() as conn:
+        owner = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not owner:
+            return recovered
+        rows = conn.execute(
+            """
+            SELECT id, target_id FROM generation_jobs
+            WHERE project_id = ? AND job_type = 'panel_artwork'
+              AND status IN ('queued', 'processing')
+              AND COALESCE(updated_at, created_at) < ?
+            ORDER BY created_at
+            """,
+            (project_id, cutoff),
+        ).fetchall()
+        if not rows:
+            return recovered
+        project_row = conn.execute(
+            "SELECT storyboard_json FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        storyboard = _loads(project_row["storyboard_json"], []) if project_row else []
+        target_ids = {str(row["target_id"]) for row in rows if row["target_id"]}
+        for page in storyboard if isinstance(storyboard, list) else []:
+            for panel in page.get("panels", []) if isinstance(page, dict) else []:
+                if isinstance(panel, dict) and str(panel.get("id")) in target_ids:
+                    panel["generation_status"] = "failed"
+                    panel["generation_error"] = message
+        recovered = [str(row["id"]) for row in rows]
+        conn.execute(
+            """
+            UPDATE projects
+            SET storyboard_json = ?, status = 'partially_failed', current_step = 'generate', updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_json(storyboard), now, project_id, user_id),
+        )
+        for recovered_id in recovered:
+            conn.execute(
+                """
+                UPDATE generation_jobs
+                SET status = 'failed', error = ?, completed_at = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'processing')
+                """,
+                (message, now, now, recovered_id),
             )
     return recovered
 

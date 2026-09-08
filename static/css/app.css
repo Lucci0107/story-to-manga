@@ -356,6 +356,9 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .generate-rail { display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 18px; align-items: start; }
 .generation-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 11px; margin-bottom: 16px; }
 .generation-toolbar p { margin: 0; color: var(--muted); font-size: 11px; }
+.generation-global-status { display: grid; gap: 5px; margin: -4px 0 16px; border-left: 2px solid var(--accent); background: var(--accent-soft); padding: 10px 12px; color: var(--muted); font-size: 10px; }
+.generation-global-status strong { color: var(--accent-deep); font-size: 12px; }
+.generation-global-status span { line-height: 1.55; }
 .generation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .panel-status-list { display: grid; gap: 8px; }
 .generation-panel-row { display: grid; grid-template-columns: 37px minmax(0, 1fr) auto; gap: 11px; align-items: center; border-bottom: 1px solid var(--line); padding: 11px 0; }
@@ -538,6 +541,7 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .processing-dialog-message { margin: 0 auto; color: var(--ink-soft); font-size: 14px; font-weight: 700; line-height: 1.65; }
 .processing-dialog-progress { margin: 10px auto 0; border-radius: 999px; background: var(--accent-soft); color: var(--accent-deep); padding: 6px 10px; font-family: monospace; font-size: 10px; line-height: 1.5; }
 .processing-dialog-submessage { margin: 15px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.processing-dialog-action { margin-top: 17px; }
 .processing-spinner { display: inline-flex; width: 42px; height: 42px; align-items: center; justify-content: center; gap: 5px; margin-bottom: 18px; }
 .processing-spinner span { display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: processing-bounce 1s ease-in-out infinite; }
 .processing-spinner span:nth-child(2) { animation-delay: .14s; }
@@ -645,6 +649,7 @@ body.processing-dialog-open { overflow: hidden; }
   .generation-panel-row { grid-template-columns: 33px minmax(0, 1fr); }
   .generation-panel-row .panel-status { grid-column: 2; width: fit-content; }
   .generation-panel-row .text-button { grid-column: 2; justify-self: start; padding-left: 0; }
+  .generation-global-status { margin-top: 0; }
   .preview-layout { grid-template-columns: 1fr; }
   .page-picker { display: flex; overflow-x: auto; }
   .page-picker-button { min-width: 105px; flex: 0 0 auto; }
