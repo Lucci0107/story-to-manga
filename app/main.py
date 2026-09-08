@@ -475,7 +475,7 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             str(project["analysis"]),
         )
         characters = project.get("characters") or provider.characters(
-            project["original_text"], project["analysis"], knowledge_context
+            project["original_text"], project["analysis"], knowledge_context, project["settings"]
         )
         storyboard = provider.storyboard(
             project["original_text"],
@@ -1080,7 +1080,10 @@ async def api_quality_check(project_id: str, user=Depends(current_user)):
 @app.patch("/api/projects/{project_id}")
 async def api_update_project(project_id: str, payload: ProjectPatch, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
-    settings = validate_settings(payload.settings.model_dump()) if payload.settings else None
+    settings = None
+    if payload.settings:
+        submitted_settings = payload.settings.model_dump(exclude_unset=True)
+        settings = validate_settings({**(project.get("settings") or {}), **submitted_settings})
     if payload.original_text is not None and not payload.original_text.strip():
         raise HTTPException(status_code=422, detail="本文を空にすることはできません")
     characters = normalize_characters(payload.characters) if payload.characters is not None else None
@@ -1129,7 +1132,7 @@ async def api_generate_analysis(project_id: str, user=Depends(current_user)):
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     try:
         analysis = provider.analyze(
-            project["original_text"], project["title"], knowledge_context
+            project["original_text"], project["title"], knowledge_context, project["settings"]
         )
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1166,7 +1169,7 @@ async def api_generate_characters(project_id: str, user=Depends(current_user)):
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     try:
         characters = provider.characters(
-            project["original_text"], project["analysis"], knowledge_context
+            project["original_text"], project["analysis"], knowledge_context, project["settings"]
         )
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1241,7 +1244,7 @@ async def api_generate_storyboard(
     )
     try:
         characters = project.get("characters") or provider.characters(
-            project["original_text"], project["analysis"], knowledge_context
+            project["original_text"], project["analysis"], knowledge_context, project["settings"]
         )
         storyboard = provider.storyboard(
             project["original_text"],

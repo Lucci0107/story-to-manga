@@ -17,6 +17,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 from .artwork import render_panel_image
+from .reading_order import bubble_side, panel_visual_position
 from .storage import StorageError, StorageObjectNotFound, StorageService, get_storage
 
 
@@ -29,7 +30,12 @@ except Exception:  # noqa: BLE001
     PDF_FONT = "Helvetica"
 
 
-def _page_panel_boxes(page: Dict[str, Any], width: float, height: float) -> List[tuple[float, float, float, float]]:
+def _page_panel_boxes(
+    page: Dict[str, Any],
+    width: float,
+    height: float,
+    settings: Optional[Dict[str, Any]] = None,
+) -> List[tuple[float, float, float, float]]:
     panels = page.get("panels", [])
     count = max(1, len(panels))
     margin = 42
@@ -47,8 +53,9 @@ def _page_panel_boxes(page: Dict[str, Any], width: float, height: float) -> List
     box_width = (available_width - gap) / columns
     box_height = (available_height - gap * (rows - 1)) / rows
     for index in range(count):
-        row = index // columns
-        col = index % columns
+        position = panel_visual_position(index, count, settings)
+        row = position["row"] - 1
+        col = position["column"] - 1
         x = margin + col * (box_width + gap)
         y = 72 + (rows - 1 - row) * (box_height + gap)
         boxes.append((x, y, box_width, box_height))
@@ -139,7 +146,10 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
         c.drawString(42, height - 58, str(project.get("title", "Story to Manga")))
         c.setFont(PDF_FONT, 9)
         c.drawRightString(width - 42, height - 56, f"PAGE {page.get('page_number', '')}")
-        for panel, box in zip(page.get("panels", []), _page_panel_boxes(page, width, height)):
+        for panel, box in zip(
+            page.get("panels", []),
+            _page_panel_boxes(page, width, height, project.get("settings") or {}),
+        ):
             x, y, box_width, box_height = box
             asset = _panel_asset(project, panel, box_width, box_height, storage)
             c.saveState()
@@ -155,24 +165,39 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
             c.setStrokeColorRGB(0.18, 0.19, 0.18)
             c.setLineWidth(1.5)
             c.roundRect(x, y, box_width, box_height, 8, stroke=1, fill=0)
-            dialogue = "\n".join(str(item) for item in panel.get("dialogue", []) if str(item).strip())
-            narration = " / ".join(str(item) for item in panel.get("narration", []) if str(item).strip())
-            sfx = " ".join(str(item) for item in panel.get("sfx", []) if str(item).strip())
-            if dialogue:
-                bubble_width = min(box_width * 0.78, 210)
-                bubble_height = 46
+            dialogues = [str(item).strip() for item in panel.get("dialogue", []) if str(item).strip()]
+            narrations = [str(item).strip() for item in panel.get("narration", []) if str(item).strip()]
+            sfx_items = [str(item).strip() for item in panel.get("sfx", []) if str(item).strip()]
+            bubble_width = min(box_width * 0.68, 190)
+            bubble_height = 42
+            for bubble_index, text in enumerate(dialogues[:6]):
+                side = bubble_side(bubble_index, project.get("settings") or {})
+                bubble_x = x + 16 if side == "left" else x + box_width - bubble_width - 16
+                bubble_row = bubble_index // 2
+                bubble_y = max(
+                    y + 12,
+                    y + box_height - bubble_height - 16 - bubble_row * (bubble_height + 7),
+                )
                 c.setFillColorRGB(0.98, 0.97, 0.94)
-                c.roundRect(x + 16, y + box_height - bubble_height - 16, bubble_width, bubble_height, 12, stroke=0, fill=1)
+                c.roundRect(bubble_x, bubble_y, bubble_width, bubble_height, 12, stroke=0, fill=1)
                 c.setFillColorRGB(0.12, 0.12, 0.11)
-                _draw_wrapped(c, dialogue, x + 26, y + box_height - 34, bubble_width - 20, 9, 12, 3)
-            if narration:
+                _draw_wrapped(c, text, bubble_x + 10, bubble_y + bubble_height - 17, bubble_width - 20, 9, 12, 3)
+            for narration_index, text in enumerate(narrations[:4]):
+                side = bubble_side(narration_index, project.get("settings") or {})
+                narration_width = min(box_width * 0.58, 170)
+                narration_x = x + 10 if side == "left" else x + box_width - narration_width - 10
+                narration_y = y + 10 + narration_index * 22
                 c.setFillColorRGB(0.98, 0.97, 0.94)
-                c.rect(x + 16, y + 16, min(box_width * 0.82, 240), 24, stroke=0, fill=1)
+                c.rect(narration_x, narration_y, narration_width, 18, stroke=0, fill=1)
                 c.setFillColorRGB(0.12, 0.12, 0.11)
-                _draw_wrapped(c, narration, x + 24, y + 29, box_width - 48, 7, 9, 2)
-            if sfx:
+                _draw_wrapped(c, text, narration_x + 6, narration_y + 12, narration_width - 12, 7, 9, 1)
+            for sfx_index, text in enumerate(sfx_items[:4]):
+                side = bubble_side(sfx_index, project.get("settings") or {})
+                sfx_width = min(94, box_width * 0.24)
+                sfx_x = x + 10 if side == "left" else x + box_width - sfx_width - 10
+                sfx_y = y + box_height - 28 - sfx_index * 18
                 c.setFillColorRGB(0.90, 0.43, 0.27)
-                _draw_wrapped(c, sfx, x + box_width - min(110, box_width * 0.28), y + box_height - 30, min(94, box_width * 0.24), 11, 12, 2)
+                _draw_wrapped(c, text, sfx_x, sfx_y, sfx_width, 11, 12, 2)
         c.showPage()
     if not project.get("storyboard"):
         c.setFillColorRGB(0.12, 0.12, 0.11)

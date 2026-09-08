@@ -5,11 +5,17 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .services.reading_order import (
+    ALLOWED_LANGUAGES,
+    LEGACY_DIRECTION_ALIASES,
+    canonicalize_settings,
+)
 
 
 ALLOWED_STEPS = {"story", "knowledge", "analysis", "settings", "characters", "storyboard", "generate", "edit", "qa", "preview", "export"}
-ALLOWED_DIRECTIONS = {"rtl", "ltr"}
+ALLOWED_DIRECTIONS = set(LEGACY_DIRECTION_ALIASES)
 ALLOWED_COLOR_MODES = {"bw", "color"}
 ALLOWED_STYLES = {"dynamic", "elegant", "cinematic", "comedy", "minimal", "webtoon"}
 ALLOWED_PACING = {"fast", "balanced", "slow"}
@@ -55,19 +61,45 @@ class SettingsPayload(BaseModel):
     """漫画化設定。"""
 
     target_page_count: int = Field(default=8, ge=1, le=64)
-    reading_direction: str = "rtl"
+    language: Optional[str] = None
+    reading_direction: Optional[str] = None
     color_mode: str = "bw"
     visual_style: str = "cinematic"
     target_audience: str = Field(default="一般読者", max_length=80)
     pacing: str = "balanced"
     dialogue_density: str = "medium"
 
+    @field_validator("language")
+    @classmethod
+    def valid_language(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in ALLOWED_LANGUAGES:
+            raise ValueError("languageが不正です。jaまたはenを指定してください")
+        return value
+
     @field_validator("reading_direction")
     @classmethod
-    def valid_direction(cls, value: str) -> str:
-        if value not in ALLOWED_DIRECTIONS:
+    def valid_direction(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in ALLOWED_DIRECTIONS:
             raise ValueError("reading_directionが不正です")
         return value
+
+    @model_validator(mode="after")
+    def lock_language_direction(self) -> "SettingsPayload":
+        """言語をSource of Truthにして、矛盾した方向を正規化する。"""
+
+        explicitly_set = set(self.model_fields_set)
+        canonical = canonicalize_settings(
+            {"language": self.language, "reading_direction": self.reading_direction}
+        )
+        self.language = canonical["language"]
+        self.reading_direction = canonical["reading_direction"]
+        # 部分更新では、言語か旧方向のどちらかが指定されたときだけ、正規化した
+        # 両方を送信値として扱う。何も指定されていない場合は既存設定を維持する。
+        if explicitly_set & {"language", "reading_direction"}:
+            self.model_fields_set.update({"language", "reading_direction"})
+        else:
+            self.model_fields_set.difference_update({"language", "reading_direction"})
+        return self
 
     @field_validator("color_mode")
     @classmethod
@@ -439,7 +471,7 @@ def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
                 crop_mode = "fit"
             panel: Dict[str, Any] = {
                 "id": str(raw_panel.get("id") or f"panel-{page_index + 1}-{panel_index + 1}-{uuid.uuid4().hex[:6]}"),
-                "order": panel_index,
+                "order": panel_index + 1,
                 "description": str(raw_panel.get("description", ""))[:2_000],
                 "shot_type": str(raw_panel.get("shot_type", ""))[:80],
                 "action": str(raw_panel.get("action", ""))[:500],
@@ -460,6 +492,10 @@ def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
                 if isinstance(source, str):
                     source = [line.strip() for line in source.splitlines() if line.strip()]
                 panel[field] = [str(entry)[:500] for entry in source[:16] if str(entry).strip()] if isinstance(source, list) else []
+            # 配列自体が読順のSource of Truth。テキストは翻訳せず順序メタデータだけ再計算する。
+            panel["bubble_order"] = list(range(1, len(panel["dialogue"]) + 1))
+            panel["narration_order"] = list(range(1, len(panel["narration"]) + 1))
+            panel["sfx_order"] = list(range(1, len(panel["sfx"]) + 1))
             panels.append(panel)
         normalized_pages.append(
             {

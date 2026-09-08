@@ -1,10 +1,10 @@
 # Story to Manga 開発状況
 
-更新日: 2026-09-07
+更新日: 2026-09-08
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。今回の言語・読順ロック機能も実装とローカル検証を完了し、現在はCI成功後のRender反映と本番確認を待っています。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -65,6 +65,10 @@
 - `DATABASE_URL`でSQLite／PostgreSQL backendを切り替えるDatabase serviceと、DB-API差分を隠すRepository接続境界
 - `StorageService`とLocalFileStorageによる画像／Export保存の集約、Storage key保存、旧`file_path`の読み出し互換
 - 外部PostgreSQL／Object Storageの実接続・既存データ移行を行わずに、将来の移行設定・依存関係・テスト境界を準備
+- Projectごとの漫画言語（日本語／English）と、言語から自動決定するserver-sideの読み方向
+- 言語別のPanel.order、グリッド視覚配置、吹き出し・ナレーション・SFX順、Previewナビゲーション、PDFコマ配置
+- Storyboard Structured Output、Panel Prompt、Knowledge-aware QAへProjectの言語・読順ルールを注入し、Knowledgeの逆方向指定を上書き
+- 旧`rtl`/`ltr`設定と0始まりのPanel orderを壊さずに移行する冪等な正規化、言語変更時の画像・本文保持
 
 ## 検証済み
 
@@ -94,12 +98,15 @@
 - 本番実AI画像生成: `gpt-image-2`で先頭コマを1枚だけ生成し、`completed` / `revision 1` / 画像取得 / リロード後の保持を確認（再生成なし）
 - 本番デプロイ後QA: login HTMLのfavicon 5参照、favicon各形式HTTP 200、health 200、匿名admin API 401、秘密名/キー非露出、Productionの390px・Dark theme・console errorなしを確認
 - 本番管理者QA: 管理者ログイン、ログアウト、再ログイン、ダッシュボード表示、認証済み`/api/admin/status` 200を確認（認証Cookieは読み出し・記録していません）
+- 言語・読順ローカルQA: 日本語の右→左（右列先頭）、Englishの左→右（左列先頭）、1始まりのPanel order、吹き出し順、Previewのページ送り、設定保存・Reload、言語変更時の非翻訳・非再生成、Light/Dark、Desktopを確認
+- 言語・読順回帰検証: `pytest` 62 passed、Python compileall、JavaScript構文、`pip check`、`git diff --check`を確認
 - 最終管理者確認コミット`43aa035`のGitHub Actions CI（run `34121680039`）とRender自動deploy（`dep-dafaq6eq1p3s73dofjj0`）がsuccess。直後の一時502回復後、最終Production smokeのhealth/login/CSS/JavaScriptが全項目HTTP 200
 - 本番検証用Projectは合成データのため削除せず保持しています。ユーザー操作なしの本番データ削除は行っていません。
 
 ## In Progress
 
-- なし。管理者認証を含むProduction QAは完了しています。`ADMIN_INITIAL_PASSWORD`のRender Secret削除は任意の運用ハードニングであり、アプリの完了条件には影響しません。
+- 言語・読順ロック機能のcommit後にGitHub Actions CI、Render自動デプロイ、Production QAを実施します。既存の本番機能やAI画像生成は再実行せず、設定・Preview・Exportの低負荷確認に限定します。
+- `ADMIN_INITIAL_PASSWORD`のRender Secret削除は任意の運用ハードニングであり、アプリの完了条件には影響しません。
 
 ## 永続化移行準備
 

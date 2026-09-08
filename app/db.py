@@ -19,11 +19,16 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from .config import get_settings
 from .services.database import DatabaseConnection, connection as database_connection
 from .services.model_registry import DEFAULT_AI_MODEL_SETTINGS
+from .services.reading_order import (
+    canonicalize_stored_settings,
+    canonicalize_storyboard_panel_orders,
+)
 
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "target_page_count": 8,
-    "reading_direction": "rtl",
+    "language": "ja",
+    "reading_direction": "right_to_left",
     "color_mode": "bw",
     "visual_style": "cinematic",
     "target_audience": "一般読者",
@@ -208,6 +213,20 @@ def init_db() -> None:
         export_columns = conn.table_columns("exports")
         if "storage_key" not in export_columns:
             conn.execute("ALTER TABLE exports ADD COLUMN storage_key TEXT")
+        # 既存ProjectのJSONを壊さず、言語・方向とコマの読順だけを冪等に移行する。
+        project_rows = conn.execute(
+            "SELECT id, settings_json, storyboard_json FROM projects"
+        ).fetchall()
+        for row in project_rows:
+            stored_settings = _loads(row["settings_json"], dict(DEFAULT_SETTINGS))
+            next_settings = canonicalize_stored_settings(stored_settings)
+            stored_storyboard = _loads(row["storyboard_json"], [])
+            next_storyboard = canonicalize_storyboard_panel_orders(stored_storyboard)
+            if next_settings != stored_settings or next_storyboard != stored_storyboard:
+                conn.execute(
+                    "UPDATE projects SET settings_json = ?, storyboard_json = ? WHERE id = ?",
+                    (_json(next_settings), _json(next_storyboard), row["id"]),
+                )
     # 環境変数が揃っている場合だけ初期管理者を作成し、未設定でも起動を妨げない。
     bootstrap_admin()
 
@@ -418,10 +437,14 @@ def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
         "original_text": row["original_text"],
         "status": row["status"],
         "current_step": row["current_step"],
-        "settings": _loads(row["settings_json"], dict(DEFAULT_SETTINGS)),
+        "settings": canonicalize_stored_settings(
+            _loads(row["settings_json"], dict(DEFAULT_SETTINGS))
+        ),
         "analysis": _loads(row["analysis_json"], None),
         "characters": _loads(row["characters_json"], []),
-        "storyboard": _loads(row["storyboard_json"], []),
+        "storyboard": canonicalize_storyboard_panel_orders(
+            _loads(row["storyboard_json"], [])
+        ),
         "quality_check": _loads(row["quality_check_json"], None),
         "ai_model_settings": _loads(row["ai_model_settings_json"], None),
         "generation_metadata": _loads(row["generation_metadata_json"], []),
@@ -518,7 +541,9 @@ def update_project(
         "current_step": (
             current_step if current_step is not None else current["current_step"]
         ),
-        "settings": settings if settings is not None else current["settings"],
+        "settings": canonicalize_stored_settings(
+            settings if settings is not None else current["settings"]
+        ),
         "analysis": analysis if update_analysis else current["analysis"],
         "characters": characters if characters is not None else current["characters"],
         "storyboard": storyboard if storyboard is not None else current["storyboard"],

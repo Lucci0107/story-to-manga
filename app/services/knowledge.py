@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List
 
 from .. import db
 from ..schemas import ALLOWED_KNOWLEDGE_SCOPES
+from .reading_order import reading_order_context, reading_order_issues
 
 
 def normalize_knowledge_text(text: str) -> str:
@@ -251,6 +252,42 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
     else:
         add_check("characters", "Character Bible", "pass", f"{len(project['characters'])}人を参照")
 
+    order_issues = reading_order_issues(project)
+    for issue in order_issues:
+        issues.append(issue)
+    order_context = reading_order_context(project.get("settings") or {})
+    direction_errors = [item for item in order_issues if item["key"] == "language_direction"]
+    panel_errors = [item for item in order_issues if item["key"].startswith("panel-")]
+    bubble_errors = [
+        item
+        for item in order_issues
+        if item["key"].startswith(("bubble_order-", "narration_order-", "sfx_order-"))
+    ]
+    add_check(
+        "language_direction",
+        "言語と読み方向",
+        "error" if direction_errors else "pass",
+        "{} / {}".format(order_context["language_name"], order_context["reading_direction"])
+        if not direction_errors
+        else direction_errors[0]["detail"],
+    )
+    add_check(
+        "panel_order",
+        "コマの読順",
+        "error" if panel_errors else "pass",
+        "Panel.orderと視覚配置をProjectの読順に統一しました"
+        if not panel_errors
+        else panel_errors[0]["detail"],
+    )
+    add_check(
+        "bubble_order",
+        "吹き出し・テキスト順",
+        "error" if bubble_errors else "pass",
+        "セリフ、ナレーション、SFXの配置順を確認しました"
+        if not bubble_errors
+        else bubble_errors[0]["detail"],
+    )
+
     unfinished = [panel for panel in panels if panel.get("generation_status") != "completed"]
     if unfinished:
         warnings.append({"key": "artwork", "label": "コマ画像", "detail": f"未生成コマが{len(unfinished)}件あります。"})
@@ -286,4 +323,6 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
         "checks": checks,
         "knowledge_refs": refs,
         "knowledge_scope": context.get("scope"),
+        "language": order_context["language"],
+        "reading_direction": order_context["reading_direction"],
     }
