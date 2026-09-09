@@ -318,12 +318,17 @@ def semantic_effect_budget(page: Mapping[str, Any]) -> Dict[str, int]:
     if isinstance(raw, Mapping):
         # ユーザー／AIの指定は上限を緩めるためではなく、各ページの文脈に
         # 合わせて同じか少ない演出へ調整する場合だけ受け付ける。
+        special_emphasis = bool(page.get("special_emphasis")) and family in {"action", "comedy", "climax"}
         for key, default in budget.items():
             try:
                 requested = int(raw.get(key, default))
             except (TypeError, ValueError):
                 requested = default
-            budget[key] = max(0, min(requested, 2 if key == "character_breakouts" else 3))
+            # 静かな会話／心理ページへ指定値で斜めコマや越境を持ち込まない。
+            # 特別演出を明示したAction/Comedy/ClimaxだけBreakoutを最大2件に
+            # 拡張し、それ以外は意味的ファミリーの既定値を上限とする。
+            upper = 2 if key == "character_breakouts" and special_emphasis else default
+            budget[key] = max(0, min(requested, upper))
     return budget
 
 

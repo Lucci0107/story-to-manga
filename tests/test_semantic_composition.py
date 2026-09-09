@@ -14,6 +14,7 @@ from app.services.composition import (
     SEMANTIC_COMPOSITION_VERSION,
     composition_quality_issues,
     composition_quality_score,
+    semantic_effect_budget,
     semantic_page_family,
     simplify_composition,
 )
@@ -73,6 +74,16 @@ def test_dialogue_defaults_to_rectangles_and_keeps_breakouts_off() -> None:
     assert composition["breakouts"] == []
     assert composition["effect_budget"]["angled_panels"] == 0
     assert composition_quality_issues(prepared) == []
+
+
+def test_quiet_page_budget_cannot_be_expanded_by_decorative_override() -> None:
+    page = _page(composition_budget={"angled_panels": 3, "character_breakouts": 2, "bubble_breakouts": 2})
+    budget = semantic_effect_budget(page)
+    assert budget["angled_panels"] == 0
+    assert budget["character_breakouts"] == 0
+    assert budget["bubble_breakouts"] == 0
+    action = _page(layout="action", page_role="action", climax=True, special_emphasis=True, composition_budget={"character_breakouts": 2})
+    assert semantic_effect_budget(action)["character_breakouts"] == 2
 
 
 def test_semantic_family_ignores_reaction_substring_and_generated_prompt() -> None:

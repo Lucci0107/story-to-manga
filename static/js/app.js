@@ -2104,6 +2104,25 @@
         const style = "left:" + percentValue(item.x, .04) + "%;top:" + percentValue(item.y, .04) + "%;width:" + percentValue(item.width, .2) + "%;height:" + percentValue(item.height, .1) + "%;z-index:" + escapeAttr(item.z_index || 4) + ";transform:rotate(" + Number(item.rotation || 0) + "deg);--text-scale:" + Math.max(.72, Math.min(1.25, Number(item.font_scale) || 1)) + ";";
         return '<span class="' + className + '" style="' + style + '" ' + dataOrder + '="' + escapeAttr(item.reading_priority || item.order || 1) + '">' + escapeHtml(item.text || "").replace(/\n/g, "<br>") + '</span>';
       }
+      function compositionPanelTextMarkup(panel, geometry) {
+        if (!composition || !geometry) return "";
+        const gx = Number(geometry.x || 0), gy = Number(geometry.y || 0);
+        const gw = Math.max(Number(geometry.width || 1), .001), gh = Math.max(Number(geometry.height || 1), .001);
+        return panelTextLayout(panel).map(function (item) {
+          if (movedItems.has(String(panel.id) + "::" + String(item.id || ""))) return "";
+          // Composition v2/v3のPanel相対座標をページ相対へ変換し、Breakoutの後ろに
+          // 描画されるPanel内テキストをページ共通レイヤーへ移す。
+          return overlayMarkup({
+            ...item,
+            x: gx + Number(item.x || 0) * gw,
+            y: gy + Number(item.y || 0) * gh,
+            width: Number(item.width || .2) * gw,
+            height: Number(item.height || .1) * gh,
+            z_index: item.type === "sfx" ? 5 : 4,
+            reading_priority: item.order || 1,
+          });
+        }).join("");
+      }
       const panelHtml = panels.map(function (panel, index) {
         const geometry = compositionMap?.get(String(panel.id)) || geometryMap.get(String(panel.id)) || panel.geometry || {};
         const placement = ' style="left:' + percentValue(geometry.x, .025) + '%;top:' + percentValue(geometry.y, .02) + '%;width:' + percentValue(geometry.width, .95) + '%;height:' + percentValue(geometry.height, .9) + '%;' + (composition ? polygonStyle(geometry.polygon_points, geometry) : "") + 'z-index:' + escapeAttr(geometry.z_index || 1) + ';"';
@@ -2111,7 +2130,7 @@
         const logicalOrder = panel.order || index + 1;
         const objectPosition = composition ? ' style="object-position:' + escapeAttr(geometry.crop_anchor_x || "center") + ' ' + escapeAttr(geometry.crop_anchor_y || "center") + ';"' : "";
         const image = panel.image_url ? '<img class="' + imageClass + '"' + objectPosition + ' src="' + escapeAttr(panel.image_url) + '" alt="ページ' + escapeAttr(page.page_number) + ' コマ' + escapeAttr(logicalOrder) + '">' : '<div class="manga-panel-placeholder">ARTWORK<br>未生成</div>';
-        const textMarkup = panelTextLayout(panel).map(function (item) {
+        const textMarkup = composition ? "" : panelTextLayout(panel).map(function (item) {
           if (composition && movedItems.has(String(panel.id) + "::" + String(item.id || ""))) return "";
           const itemType = item.type === "narration" ? "narration" : item.type === "sfx" ? "sfx" : "bubble";
           const className = itemType === "bubble" ? "speech-bubble bubble-side-" + (item.side || bubbleSide((item.order || 1) - 1, state.settings)) : itemType === "narration" ? "page-narration" : "page-sfx";
@@ -2127,11 +2146,15 @@
         const style = 'left:' + percentValue(item.x, .04) + '%;top:' + percentValue(item.y, .04) + '%;width:' + percentValue(item.width, .22) + '%;height:' + percentValue(item.height, .34) + '%;z-index:' + escapeAttr(item.z_index || 3) + ';';
         return '<div class="manga-breakout manga-breakout-' + escapeAttr(item.type || "character") + '" style="' + style + '"><img src="' + escapeAttr(source.image_url) + '" alt="前景ブレイクアウト"></div>';
       }).join("") : "";
+      const panelTextLayerHtml = composition ? panels.map(function (panel) {
+        const geometry = compositionMap?.get(String(panel.id)) || geometryMap.get(String(panel.id)) || panel.geometry || {};
+        return compositionPanelTextMarkup(panel, geometry);
+      }).join("") : "";
       const overlayHtml = composition ? (composition.overlays || []).map(overlayMarkup).join("") : "";
       const direction = htmlDirection(state.settings);
       const compositionVersion = Number(composition?.composition_version || 1);
       const compositionClass = composition ? ' composition-v' + compositionVersion : '';
-      return '<div class="preview-frame-wrap" data-language="' + escapeAttr(canonicalLanguage(state.settings)) + '"><div class="manga-page layout-' + escapeAttr(template) + compositionClass + '" dir="' + direction + '" data-layout-version="' + escapeAttr(page.layout_version || 1) + '" data-composition-version="' + escapeAttr(compositionVersion) + '" data-semantic-family="' + escapeAttr(composition?.semantic_family || '') + '" data-reading-direction="' + escapeAttr(readingDirectionKey(state.settings)) + '">' + panelHtml + breakoutHtml + overlayHtml + '<span class="manga-page-number" aria-label="ページ番号 ' + escapeAttr(page.page_number || "") + '">' + escapeHtml(page.page_number || "") + '</span></div></div>';
+      return '<div class="preview-frame-wrap" data-language="' + escapeAttr(canonicalLanguage(state.settings)) + '"><div class="manga-page layout-' + escapeAttr(template) + compositionClass + '" dir="' + direction + '" data-layout-version="' + escapeAttr(page.layout_version || 1) + '" data-composition-version="' + escapeAttr(compositionVersion) + '" data-semantic-family="' + escapeAttr(composition?.semantic_family || '') + '" data-reading-direction="' + escapeAttr(readingDirectionKey(state.settings)) + '">' + panelHtml + breakoutHtml + panelTextLayerHtml + overlayHtml + '<span class="manga-page-number" aria-label="ページ番号 ' + escapeAttr(page.page_number || "") + '">' + escapeHtml(page.page_number || "") + '</span></div></div>';
     }
 
     function renderEdit() {
