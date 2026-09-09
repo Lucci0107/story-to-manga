@@ -55,7 +55,7 @@ from .services.knowledge import (
     recommended_knowledge_selections,
     retrieve_knowledge_context,
 )
-from .services.layout import repair_storyboard_page
+from .services.layout import reflow_page, repair_storyboard_page
 from .services.model_registry import (
     DEFAULT_AI_MODEL_SETTINGS,
     get_model_availability,
@@ -1717,6 +1717,11 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
     elif visual_changed:
         panel["generation_status"] = "not_started"
         panel["generation_error"] = None
+    if any(key in values for key in {"panel_shape", "crop_anchor_x", "crop_anchor_y", "allow_breakout"}):
+        project["storyboard"] = [
+            reflow_page(page, project.get("settings") or {}) if str(page.get("id")) == str(_page.get("id")) else page
+            for page in project.get("storyboard", [])
+        ]
     next_status = "storyboard_ready" if visual_changed and project.get("status") == "completed" else None
     updated = db.update_project(project_id, user["id"], storyboard=project["storyboard"], status=next_status, clear_quality_check=True)
     return {"project": project_view(updated or project)}

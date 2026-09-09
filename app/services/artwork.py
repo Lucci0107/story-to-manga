@@ -173,10 +173,16 @@ def save_openai_image(
     requested_model = model_id if is_allowed_image_model(str(model_id or "")) else runtime.openai_image_model
     if not is_allowed_image_model(str(requested_model)):
         requested_model = "gpt-image-2"
+    geometry = panel.get("geometry") if isinstance(panel.get("geometry"), dict) else {}
+    try:
+        ratio = float(geometry.get("width", 1) or 1) / max(float(geometry.get("height", 1) or 1), 0.01)
+    except (TypeError, ValueError):
+        ratio = 1.0
+    generation_size = "1536x1024" if ratio >= 1.45 else "1024x1536" if ratio <= 0.72 else "1024x1024"
     payload = {
         "model": requested_model,
         "prompt": panel.get("generation_prompt") or "漫画のコマ。文字は描かない。",
-        "size": "1024x1024",
+        "size": generation_size,
         "quality": "low",
     }
     try:

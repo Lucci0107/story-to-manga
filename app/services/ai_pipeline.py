@@ -514,6 +514,14 @@ def compose_panel_prompt(
         "webtoon": "縦読みを意識した明快なコマ構成",
     }
     mode = "白黒" if settings.get("color_mode") == "bw" else "カラー"
+    geometry = panel.get("geometry") if isinstance(panel.get("geometry"), dict) else {}
+    panel_shape = str(geometry.get("shape") or panel.get("panel_shape") or "rectangle")
+    try:
+        target_ratio = float(geometry.get("width", 1) or 1) / max(float(geometry.get("height", 1) or 1), 0.01)
+    except (TypeError, ValueError):
+        target_ratio = 1.0
+    crop_anchor = f"{panel.get('crop_anchor_x', geometry.get('crop_anchor_x', 'center'))}/{panel.get('crop_anchor_y', geometry.get('crop_anchor_y', 'middle'))}"
+    breakout_intent = "前景の人物または髪を最終ページでPanel境界から少し出せる構図" if geometry.get("allow_breakout") or panel.get("allow_breakout") else "人物はPanel内の安全領域に収める構図"
     return (
         f"出力言語: {order_context['language_name']}。ページの読順: {order_context['panel_reading_order']}。"
         f"吹き出しの読順: {order_context['bubble_reading_order']}。"
@@ -521,6 +529,8 @@ def compose_panel_prompt(
         f"ショット: {panel.get('shot_type', '')}。舞台: {panel.get('background', '')}。"
         f"行動: {panel.get('action', '')}。表情: {panel.get('expression', '')}。"
         f"登場人物: {' / '.join(identities)}。"
+        f"Panel geometry: {panel_shape}, target aspect ratio {target_ratio:.2f}:1, crop anchor {crop_anchor}, {breakout_intent}。"
+        "顔と重要な小物は安全領域に置き、中央固定のパスポート構図や左右の空レターボックスを避ける。"
         "文字や吹き出しは描かず、後工程で合成する。"
     )
 
@@ -1243,6 +1253,10 @@ class OpenAIProvider(DemoAIProvider):
                         "action",
                         "expression",
                         "background",
+                        "geometry",
+                        "crop_anchor_x",
+                        "crop_anchor_y",
+                        "allow_breakout",
                     )
                 },
                 "characters": selected_characters,

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .services.composition import COMPOSITION_VERSION
 from .services.layout import ensure_storyboard_layout, normalize_importance
 from .services.reading_order import (
     ALLOWED_LANGUAGES,
@@ -31,6 +32,7 @@ ALLOWED_LAYOUTS = {
     "action",
     "psychological",
     "four_panel",
+    "dynamic_7",
 }
 ALLOWED_KNOWLEDGE_MODES = {"follow_latest", "pinned"}
 ALLOWED_KNOWLEDGE_SCOPES = {
@@ -68,6 +70,7 @@ ALLOWED_PROJECT_STATUSES = {
     "completed",
 }
 ALLOWED_CROP_MODES = {"fit", "fill"}
+ALLOWED_PANEL_SHAPES = {"rectangle", "wide", "tall", "trapezoid", "slanted-left", "slanted-right", "polygon", "large-bleed"}
 
 
 class SettingsPayload(BaseModel):
@@ -217,6 +220,10 @@ class PanelPatch(BaseModel):
     panel_role: Optional[str] = Field(default=None, max_length=120)
     scene_type: Optional[str] = Field(default=None, max_length=40)
     importance: Optional[str] = Field(default=None, max_length=20)
+    panel_shape: Optional[str] = Field(default=None, max_length=30)
+    crop_anchor_x: Optional[str] = Field(default=None, max_length=20)
+    crop_anchor_y: Optional[str] = Field(default=None, max_length=20)
+    allow_breakout: Optional[bool] = None
 
     @field_validator("characters", "dialogue", "narration", "sfx")
     @classmethod
@@ -237,6 +244,27 @@ class PanelPatch(BaseModel):
     def valid_importance(cls, value: Optional[str]) -> Optional[str]:
         if value is not None and value not in {"low", "medium", "high", "critical"}:
             raise ValueError("importanceが不正です")
+        return value
+
+    @field_validator("panel_shape")
+    @classmethod
+    def valid_panel_shape(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in ALLOWED_PANEL_SHAPES:
+            raise ValueError("panel_shapeが不正です")
+        return value
+
+    @field_validator("crop_anchor_x")
+    @classmethod
+    def valid_crop_anchor_x(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in {"left", "center", "right"}:
+            raise ValueError("crop_anchor_xが不正です")
+        return value
+
+    @field_validator("crop_anchor_y")
+    @classmethod
+    def valid_crop_anchor_y(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in {"top", "middle", "bottom"}:
+            raise ValueError("crop_anchor_yが不正です")
         return value
 
 
@@ -475,6 +503,112 @@ def normalize_generation_metadata(value: Any) -> Optional[Dict[str, Any]]:
     return normalized
 
 
+def _normalized_ratio(value: Any, fallback: float = 0.5) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = fallback
+    return max(0.0, min(1.0, number))
+
+
+def _bounded_int(value: Any, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = fallback
+    return max(minimum, min(maximum, number))
+
+
+def _bounded_float(value: Any, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = fallback
+    return max(minimum, min(maximum, number))
+
+
+def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
+    """PageCompositionの表示用メタデータだけを安全に保持する。"""
+
+    if not isinstance(value, dict):
+        return None
+    try:
+        version = int(value.get("composition_version", 0))
+    except (TypeError, ValueError):
+        return None
+    if version < COMPOSITION_VERSION:
+        return None
+    raw_background = value.get("background") if isinstance(value.get("background"), dict) else {}
+    result: Dict[str, Any] = {
+        "composition_version": COMPOSITION_VERSION,
+        "size": [900, 1200],
+        "safe_margin": _normalized_ratio(value.get("safe_margin"), 0.04),
+        "background": {"color": str(raw_background.get("color", "#f5f3eb"))[:20]},
+        "panels": [],
+        "breakouts": [],
+        "overlays": [],
+        "moved_text_items": [],
+    }
+    raw_panels = value.get("panels", [])
+    if isinstance(raw_panels, list):
+        for raw in raw_panels[:24]:
+            if not isinstance(raw, dict):
+                continue
+            points = []
+            if isinstance(raw.get("polygon_points"), list):
+                for point in raw["polygon_points"][:12]:
+                    if isinstance(point, (list, tuple)) and len(point) >= 2:
+                        points.append([_normalized_ratio(point[0]), _normalized_ratio(point[1])])
+            shape_value = str(raw.get("shape", "rectangle"))
+            gutter_value = raw.get("gutter") if isinstance(raw.get("gutter"), dict) else {}
+            panel = {
+                "panel_id": str(raw.get("panel_id", ""))[:120],
+                "x": _normalized_ratio(raw.get("x")),
+                "y": _normalized_ratio(raw.get("y")),
+                "width": _normalized_ratio(raw.get("width"), 0.2),
+                "height": _normalized_ratio(raw.get("height"), 0.2),
+                "polygon_points": points,
+                "shape": shape_value if shape_value in ALLOWED_PANEL_SHAPES else "rectangle",
+                "z_index": _bounded_int(raw.get("z_index", 1), 1, 0, 20),
+                "bleed": bool(raw.get("bleed", False)),
+                "gutter": {"type": str(gutter_value.get("type", "normal"))[:20], "width": _normalized_ratio(gutter_value.get("width"), 0.014)},
+                "reading_order": _bounded_int(raw.get("reading_order", 1), 1, 1, 128),
+                "importance": str(raw.get("importance", "medium"))[:20],
+                "allow_breakout": bool(raw.get("allow_breakout", False)),
+                "crop_anchor_x": str(raw.get("crop_anchor_x", "center")) if raw.get("crop_anchor_x") in {"left", "center", "right"} else "center",
+                "crop_anchor_y": str(raw.get("crop_anchor_y", "middle")) if raw.get("crop_anchor_y") in {"top", "middle", "bottom"} else "middle",
+                "artwork_coverage_target": _normalized_ratio(raw.get("artwork_coverage_target"), 0.95),
+            }
+            panel["bounding_box"] = {key: panel[key] for key in ("x", "y", "width", "height")}
+            result["panels"].append(panel)
+    for key, limit in (("breakouts", 4), ("overlays", 32)):
+        source = value.get(key, [])
+        if not isinstance(source, list):
+            continue
+        for raw in source[:limit]:
+            if not isinstance(raw, dict):
+                continue
+            item = {field: raw.get(field) for field in ("id", "panel_id", "source_panel_id", "source_item_id", "type", "subject_id", "text", "clip_shape") if raw.get(field) is not None}
+            item.update({
+                "x": _normalized_ratio(raw.get("x")),
+                "y": _normalized_ratio(raw.get("y")),
+                "width": _normalized_ratio(raw.get("width"), 0.2),
+                "height": _normalized_ratio(raw.get("height"), 0.1),
+                "z_index": max(0, min(20, int(raw.get("z_index", 3) or 3))),
+                "rotation": _bounded_float(raw.get("rotation", 0), 0, -180, 180),
+                "enabled": bool(raw.get("enabled", True)),
+                "breakout": bool(raw.get("breakout", False)),
+            })
+            result[key].append(item)
+    moved = value.get("moved_text_items", [])
+    if isinstance(moved, list):
+        result["moved_text_items"] = [
+            {"panel_id": str(item.get("panel_id", ""))[:120], "item_id": str(item.get("item_id", ""))[:120]}
+            for item in moved[:32] if isinstance(item, dict)
+        ]
+    return result
+
+
 def normalize_storyboard(
     value: Any,
     settings: Optional[Dict[str, Any]] = None,
@@ -501,6 +635,7 @@ def normalize_storyboard(
             crop_mode = str(raw_panel.get("crop_mode", "fit"))
             if crop_mode not in ALLOWED_CROP_MODES:
                 crop_mode = "fit"
+            panel_shape_value = str(raw_panel.get("panel_shape") or raw_panel.get("shape") or "")
             panel: Dict[str, Any] = {
                 "id": str(raw_panel.get("id") or f"panel-{page_index + 1}-{panel_index + 1}-{uuid.uuid4().hex[:6]}"),
                 "order": panel_index + 1,
@@ -521,6 +656,11 @@ def normalize_storyboard(
                 "importance": normalize_importance(raw_panel),
                 "knowledge_refs": normalize_knowledge_refs(raw_panel.get("knowledge_refs", [])),
                 "generation_metadata": normalize_generation_metadata(raw_panel.get("generation_metadata")),
+                "panel_shape": panel_shape_value[:30] if panel_shape_value in ALLOWED_PANEL_SHAPES else "",
+                "crop_anchor_x": str(raw_panel.get("crop_anchor_x", "center")) if raw_panel.get("crop_anchor_x") in {"left", "center", "right"} else "center",
+                "crop_anchor_y": str(raw_panel.get("crop_anchor_y", "middle")) if raw_panel.get("crop_anchor_y") in {"top", "middle", "bottom"} else "middle",
+                "allow_breakout": bool(raw_panel.get("allow_breakout", False)),
+                "intentional_whitespace": bool(raw_panel.get("intentional_whitespace", False)),
             }
             for field in list_fields:
                 source = raw_panel.get(field, [])
@@ -532,14 +672,17 @@ def normalize_storyboard(
             panel["narration_order"] = list(range(1, len(panel["narration"]) + 1))
             panel["sfx_order"] = list(range(1, len(panel["sfx"]) + 1))
             panels.append(panel)
-        normalized_pages.append(
-            {
+        normalized_composition = normalize_composition(item.get("composition"))
+        normalized_page = {
                 "id": str(item.get("id") or f"page-{page_index + 1}-{uuid.uuid4().hex[:6]}"),
                 "page_number": page_index + 1,
                 "title": str(item.get("title", f"ページ {page_index + 1}"))[:200],
                 "layout": layout,
                 "page_role": str(item.get("page_role") or "")[:120],
                 "panels": panels,
+                "composition": normalized_composition,
             }
-        )
+        if normalized_composition:
+            normalized_page["composition_version"] = COMPOSITION_VERSION
+        normalized_pages.append(normalized_page)
     return ensure_storyboard_layout(normalized_pages, settings or {})

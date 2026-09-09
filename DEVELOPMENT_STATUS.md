@@ -34,6 +34,10 @@
 - Projectごとの優先度、参照Scope、follow-latest / pinned Version設定と、AI処理ごとの参照メタデータ
 - 新規Projectの推奨Knowledge自動選択、カテゴリ別default Scope、既存Project向けの非破壊な推奨・明示適用
 - QAのKnowledge解決5状態、実参照Document/Version表示、Document/Version/Chunk/Scope traceability
+- PageComposition v2を追加：ページ相対polygon／台形／斜めgutter、不均等面積、重要コマのvisual hierarchy、cover cropと焦点anchor、ページ単位のbreakout／bubble／SFX／title overlayを一つのJSONとして保存します。既存Composition v1は自動変更せず、明示的なlayout repairだけで新版へ再計算します。
+- Preview、PNG、PDF、ZIPは同じPageCompositionをsource of truthとして描画し、通常コマのletterboxを作らず、PDFは合成画像と検索可能な日本語テキストを併記します。画像再生成や外部画像サービス追加は行いません。
+- 画像生成前に確定したPanel shape、target aspect ratio、crop anchor、safe zone、breakout intentをPromptへ渡し、OpenAI Images利用時はwide／portrait／squareの近い生成サイズを選択します。
+- PageComposition v2の回帰テスト（polygon、cover crop、breakout、page overlay、RTL/LTR、legacy互換、出力同一性、coverage／uniform QA）を追加しました。
 - 物語解析、漫画化設定、キャラクター、ネームの編集と永続化
 - ページ・コマの追加、削除、並び替え、レイアウト変更
 - コマ単位の生成Job、状態表示、再試行、重複リクエスト抑止
@@ -158,7 +162,7 @@
 
 ## In Progress
 
-- なし。Manga layout engineと文字要素collision回避はローカル・CI・Render・Production QAまで完了しています。
+- PageComposition v2のCI・Render自動deploy・Production Browser QAを実施中です。既存Projectと`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更しません。
 
 ## 永続化移行準備
 

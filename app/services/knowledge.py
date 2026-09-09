@@ -376,7 +376,7 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
     geometry_errors = [
         item
         for item in layout_issues
-        if item["key"].startswith(("layout-", "text-boundary-"))
+        if item["key"].startswith(("layout-", "text-boundary-", "composition-"))
     ]
     collision_errors = [
         item for item in layout_issues if item["key"].startswith("text-collision-")
@@ -385,7 +385,7 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
         "page_geometry",
         "コマ面積と視覚的階層",
         "error" if geometry_errors else "pass",
-        "通常ページの不均等geometryと重要コマの面積を確認しました"
+        "通常ページのpolygon geometry、cover領域、重要コマの面積階層を確認しました"
         if not geometry_errors
         else geometry_errors[0]["detail"],
     )

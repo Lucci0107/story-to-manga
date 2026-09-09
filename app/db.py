@@ -304,6 +304,7 @@ def init_db() -> None:
             next_storyboard = ensure_storyboard_layout(
                 canonicalize_storyboard_panel_orders(stored_storyboard),
                 next_settings,
+                enable_composition=False,
             )
             if next_settings != stored_settings or next_storyboard != stored_storyboard:
                 conn.execute(
@@ -517,6 +518,7 @@ def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     storyboard = ensure_storyboard_layout(
         canonicalize_storyboard_panel_orders(_loads(row["storyboard_json"], [])),
         settings,
+        enable_composition=False,
     )
     return {
         "id": row["id"],

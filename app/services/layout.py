@@ -8,6 +8,7 @@ import math
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
+from .composition import build_page_composition, composition_quality_issues, panel_shape_for, shape_points
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 
 
@@ -24,12 +25,14 @@ TEMPLATE_CONVERSATION = "template_b"
 TEMPLATE_ACTION = "template_c"
 TEMPLATE_PSYCHOLOGICAL = "template_d"
 TEMPLATE_FOUR_PANEL = "four_panel"
+TEMPLATE_DYNAMIC_7 = "template_dynamic_7"
 TEMPLATES = {
     TEMPLATE_DRAMA,
     TEMPLATE_CONVERSATION,
     TEMPLATE_ACTION,
     TEMPLATE_PSYCHOLOGICAL,
     TEMPLATE_FOUR_PANEL,
+    TEMPLATE_DYNAMIC_7,
 }
 
 IMPORTANCE_SCORES = {
@@ -153,6 +156,8 @@ def select_layout_template(page: Mapping[str, Any]) -> str:
         "four_panel": TEMPLATE_FOUR_PANEL,
         "wide": TEMPLATE_DRAMA,
         "hero": TEMPLATE_PSYCHOLOGICAL,
+        "dynamic_7": TEMPLATE_DYNAMIC_7,
+        TEMPLATE_DYNAMIC_7: TEMPLATE_DYNAMIC_7,
     }
     if layout in explicit:
         return explicit[layout]
@@ -253,6 +258,7 @@ def _row_base_weights(template: str, row_count: int) -> List[float]:
         TEMPLATE_ACTION: [0.72, 0.78, 1.5, 1.25],
         TEMPLATE_PSYCHOLOGICAL: [0.78, 0.68, 1.5, 1.18, 0.9],
         TEMPLATE_FOUR_PANEL: [1.0, 1.0],
+        TEMPLATE_DYNAMIC_7: [0.72, 0.88, 0.76, 1.35, 1.08],
     }
     values = list(defaults.get(template, defaults[TEMPLATE_DRAMA]))
     while len(values) < row_count:
@@ -467,7 +473,12 @@ def place_text_elements(panel: Mapping[str, Any], settings: Mapping[str, Any]) -
     }
 
 
-def reflow_page(page: Mapping[str, Any], settings: Mapping[str, Any]) -> Dict[str, Any]:
+def reflow_page(
+    page: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    *,
+    enable_composition: bool = True,
+) -> Dict[str, Any]:
     """一つのPageだけを再計算し、Artwork情報はそのまま維持する。"""
 
     next_page = deepcopy(dict(page))
@@ -520,6 +531,20 @@ def reflow_page(page: Mapping[str, Any], settings: Mapping[str, Any]) -> Dict[st
                 "visual_weight": panel_importance(panels[panel_index]),
                 "area": _round(box["width"] * box["height"]),
             }
+            if enable_composition:
+                shape = panel_shape_for(template, panels[panel_index], row_index, int(box["column"]), len(panels))
+                geometry["shape"] = shape
+                geometry["polygon_points"] = shape_points(box, shape)
+                geometry["z_index"] = 1 + max(0, round(panel_importance(panels[panel_index]) - 2.0))
+                geometry["bleed"] = bool(next_page.get("page_number", 1) == 1 and len(panels) == 1)
+                geometry["gutter"] = {
+                    "type": "diagonal" if shape != "rectangle" else "normal",
+                    "width": _round(0.010 if shape != "rectangle" else PANEL_GAP),
+                }
+                geometry["allow_breakout"] = bool(
+                    panel_importance(panels[panel_index]) >= IMPORTANCE_SCORES["high"]
+                    and template in {TEMPLATE_ACTION, TEMPLATE_PSYCHOLOGICAL, TEMPLATE_DRAMA, TEMPLATE_DYNAMIC_7}
+                )
             panels[panel_index]["importance"] = importance
             panels[panel_index]["visual_position"] = {
                 "row": row_index,
@@ -542,6 +567,12 @@ def reflow_page(page: Mapping[str, Any], settings: Mapping[str, Any]) -> Dict[st
         # rowsと各rowのindicesは論理読順のままなので、DOM・Export共通の順序を維持できる。
         "panels": geometries,
     }
+    if enable_composition:
+        next_page["composition"] = build_page_composition(next_page, geometries, settings)
+        next_page["composition_version"] = 2
+    else:
+        next_page.pop("composition", None)
+        next_page.pop("composition_version", None)
     return next_page
 
 
@@ -560,18 +591,28 @@ def _stored_geometry_is_current(page: Mapping[str, Any], settings: Mapping[str, 
     )
 
 
-def ensure_page_layout(page: Mapping[str, Any], settings: Mapping[str, Any]) -> Dict[str, Any]:
+def ensure_page_layout(
+    page: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    *,
+    enable_composition: bool = True,
+) -> Dict[str, Any]:
     if _stored_geometry_is_current(page, settings):
         return deepcopy(dict(page))
-    return reflow_page(page, settings)
+    return reflow_page(page, settings, enable_composition=enable_composition)
 
 
-def ensure_storyboard_layout(storyboard: Any, settings: Mapping[str, Any] | None) -> List[Dict[str, Any]]:
+def ensure_storyboard_layout(
+    storyboard: Any,
+    settings: Mapping[str, Any] | None,
+    *,
+    enable_composition: bool = True,
+) -> List[Dict[str, Any]]:
     if not isinstance(storyboard, list):
         return []
     canonical_settings = canonicalize_stored_settings(settings)
     return [
-        ensure_page_layout(page, canonical_settings)
+        ensure_page_layout(page, canonical_settings, enable_composition=enable_composition)
         for page in storyboard
         if isinstance(page, Mapping)
     ]
@@ -637,6 +678,7 @@ def page_layout_issues(page: Mapping[str, Any], settings: Mapping[str, Any] | No
             for right in items[left_index + 1 :]:
                 if isinstance(right, Mapping) and _rect_intersects(left, right):
                     issues.append({"key": f"text-collision-{page_number}-{panel_index}-{left.get('id', '')}-{right.get('id', '')}", "label": f"ページ{page_number} コマ{panel_index}の文字衝突", "detail": "吹き出し、ナレーション、またはSFXが重なっています。"})
+    issues.extend(composition_quality_issues(page))
     return issues
 
 
