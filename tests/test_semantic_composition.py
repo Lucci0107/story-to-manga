@@ -20,7 +20,7 @@ from app.services.composition import (
 )
 from app.services.export import export_pdf, export_zip, render_page_png
 from app.services.knowledge import quality_check as knowledge_quality_check
-from app.services.layout import ensure_page_layout
+from app.services.layout import ensure_page_layout, reflow_page, repair_storyboard_page, place_text_elements
 from app.services.storage import LocalFileStorage
 
 
@@ -117,13 +117,53 @@ def test_shape_without_reason_falls_back_to_rectangle() -> None:
     assert prepared["composition"]["panels"][0]["shape"] == "rectangle"
 
 
-def test_breakout_requires_reason_and_is_limited() -> None:
+def test_repair_replaces_polygon_vertices_not_only_shape_label() -> None:
+    prepared = _v3(_page(layout="action", page_role="action", climax=True, count=6))
+    prepared["composition"]["semantic_family"] = "dialogue"
+    repaired = simplify_composition(prepared)
+    for panel in repaired["composition"]["panels"]:
+        assert len({point[0] for point in panel["polygon_points"]}) == 2
+        assert len({point[1] for point in panel["polygon_points"]}) == 2
+
+
+def test_explicit_v3_repair_preserves_other_pages_and_artwork() -> None:
+    legacy = reflow_page(_page(), {"composition_version": 2})
+    legacy["panels"][0]["image_url"] = "/media/original.png"
+    other = {**legacy, "id": "untouched"}
+    repaired = repair_storyboard_page([legacy, other], legacy["id"], {}, composition_version=3)
+    assert repaired[0]["composition_version"] == 3
+    assert repaired[0]["panels"][0]["image_url"] == "/media/original.png"
+    assert repaired[0]["panels"][0]["dialogue"] == legacy["panels"][0]["dialogue"]
+    assert repaired[1] == other
+    assert legacy["composition_version"] == 2
+
+
+def test_impossible_face_safe_placement_is_not_silently_accepted() -> None:
+    layout = place_text_elements({"dialogue": ["隠してはいけない"]}, {"language": "ja"},
+                                 protected_zones=[{"x": 0, "y": 0, "width": 1, "height": 1}])
+    assert layout["items"][0]["overflow"]
+    assert layout["warnings"]
+
+
+def test_title_does_not_overlap_first_artwork_row() -> None:
+    page = _v3(_page())
+    title = next(item for item in page["composition"]["overlays"] if item["type"] == "title")
+    assert min(panel["y"] for panel in page["composition"]["panels"]) > title["y"] + title["height"]
+
+
+def test_text_rows_are_not_compressed_into_thin_strips() -> None:
+    page = _page(count=7)
+    for panel in page["panels"]:
+        panel["dialogue"] = ["読みやすい文字を配置する"]
+    prepared = _v3(page)
+    assert min(panel["height"] for panel in prepared["composition"]["panels"]) >= 0.17
+
+
+def test_breakout_reason_does_not_turn_full_artwork_into_fake_cutout() -> None:
     prepared = _v3(_page(layout="action", page_role="action", climax=True, count=6, breakout_reason=True))
     breakouts = prepared["composition"]["breakouts"]
-    assert len(breakouts) == 1
-    assert breakouts[0]["reason"]
-    assert breakouts[0]["max_extension"] == 0.2
-    noisy = {**prepared, "composition": {**prepared["composition"], "breakouts": breakouts * 3}}
+    assert breakouts == []
+    noisy = {**prepared, "composition": {**prepared["composition"], "breakouts": [{"enabled": True, "reason": "impact"}] * 3}}
     assert any(issue["key"] == "composition-v3-breakout-budget-1" for issue in composition_quality_issues(noisy))
 
 

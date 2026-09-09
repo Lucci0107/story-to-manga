@@ -1457,9 +1457,10 @@
       }); });
       content.querySelectorAll("[data-repair-page-layout]").forEach(function (button) { button.addEventListener("click", async function () {
         if (button.disabled) return;
+        if (!window.confirm("このページを新版の読みやすさ優先レイアウトで再計算します。コマ配置と文字位置は変更されますが、元画像・セリフは保持され、画像生成は行いません。続けますか？")) return;
         button.disabled = true;
         try {
-          const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(button.dataset.pageId) + "/layout/repair", { method: "POST", body: "{}" });
+          const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(button.dataset.pageId) + "/layout/repair?composition_version=3", { method: "POST", body: "{}" });
           state = data.project;
           showToast("このページのコマ割りと文字配置を再計算しました");
           render();
@@ -2086,6 +2087,14 @@
 
     function pageStage(page) {
       if (!page) return '<div class="preview-frame-wrap"><p>ページがありません</p></div>';
+      if ((page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
+        // 文字の実測配置をブラウザで再解釈せず、PDF・ZIPと同一の描画結果を表示する。
+        const src = "/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(page.id) + "/composition.png?v=" + encodeURIComponent(state.updated_at || "");
+        const transcript = (page.panels || []).map(function (panel, index) { return "コマ" + (index + 1) + " " + [...(panel.dialogue || []), ...(panel.narration || [])].join(" "); }).join("。 ");
+        const hasOverflow = (page.panels || []).some(function (panel) { return (panel.text_layout?.items || []).some(function (item) { return item.overflow; }); });
+        const warning = hasOverflow ? '<p role="alert">文字領域が不足しています。コマを広げるかページを分割して再計算してください。この状態では書き出せません。</p>' : '';
+        return warning + '<div class="preview-frame-wrap"><img class="composition-final-image" src="' + escapeAttr(src) + '" alt="' + escapeAttr("ページ" + page.page_number + "。 " + transcript) + '"></div>';
+      }
       const panels = page.panels || [];
       const geometryMap = pageGeometryMap(page);
       const template = page.layout_geometry?.template || page.layout || "classic";

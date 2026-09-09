@@ -677,10 +677,10 @@ def _build_v3_page_composition(
         shape_reason = str(geometry.get("shape_reason") or panel.get("shape_reason") or "").strip()[:160]
         if shape not in {"rectangle", "wide", "tall"} and not shape_reason:
             shape = "rectangle"
-        points = normalize_polygon(geometry.get("polygon_points"), {**box, "shape": shape})
+        points = shape_points(box, shape) if shape == "rectangle" else normalize_polygon(geometry.get("polygon_points"), {**box, "shape": shape})
         importance = str(panel.get("importance") or geometry.get("importance") or "medium")
         text_zones = semantic_text_safe_zones(panel, language)
-        protected_zones = semantic_protected_zones(panel)
+        protected_zones = geometry.get("protected_zones") or semantic_protected_zones(panel)
         item = {
             "panel_id": panel_id,
             **box,
@@ -701,105 +701,16 @@ def _build_v3_page_composition(
             "crop_anchor_y": str(geometry.get("crop_anchor_y") or "middle"),
             "text_safe_zones": text_zones,
             "protected_zones": protected_zones,
+            "artwork_viewport": deepcopy(geometry.get("artwork_viewport")),
+            "intentional_whitespace": bool(geometry.get("artwork_viewport")),
+            "whitespace_reason": "reserved_text_band" if geometry.get("artwork_viewport") else "",
             "artwork_coverage_target": ARTWORK_COVERAGE_TARGET,
         }
         composition_panels.append(item)
 
-    # v3ではBreakoutを意味的候補に限定し、理由のない指定を無効化する。
-    candidates: List[tuple[int, int, Dict[str, Any], Mapping[str, Any]]] = []
-    protected_global_zones: List[tuple[str, Dict[str, float]]] = []
-    for geometry in composition_panels:
-        for zone in geometry.get("protected_zones", []) if isinstance(geometry.get("protected_zones"), list) else []:
-            if not isinstance(zone, Mapping):
-                continue
-            protected_global_zones.append(
-                (
-                    str(geometry.get("panel_id")),
-                    {
-                        "x": _float(geometry.get("x")) + _float(zone.get("x")) * _float(geometry.get("width")),
-                        "y": _float(geometry.get("y")) + _float(zone.get("y")) * _float(geometry.get("height")),
-                        "width": _float(zone.get("width")) * _float(geometry.get("width")),
-                        "height": _float(zone.get("height")) * _float(geometry.get("height")),
-                    },
-                )
-            )
-    for index, (geometry, panel) in enumerate(zip(composition_panels, panels)):
-        reason = str(panel.get("breakout_reason") or panel.get("semantic_reason") or "").strip()[:160]
-        explicit = bool(panel.get("allow_breakout") or geometry.get("allow_breakout"))
-        if not reason:
-            continue
-        if explicit and (geometry.get("dominant") or page.get("special_emphasis")):
-            candidates.append((_importance_rank(geometry.get("importance")), -index, geometry, panel))
-    candidates.sort(reverse=True, key=lambda value: (value[0], value[1]))
-    breakout_limit = min(
-        budget["character_breakouts"],
-        2 if family in {"action", "comedy", "climax"} and page.get("special_emphasis") else 1,
-    )
+    # 元画像を楕円で複製しても人物切り抜きにはならない。
+    # 専用前景素材のない自動再配置ではBreakoutを作らず、元Artworkを保つ。
     breakouts: List[Dict[str, Any]] = []
-    for breakout_index, (_rank, _order, geometry, panel) in enumerate(candidates[:breakout_limit]):
-        reason = str(panel.get("breakout_reason") or panel.get("semantic_reason") or "").strip()[:160]
-        width = min(0.20, max(0.12, _float(geometry.get("width"), 0.2) * 0.34))
-        height = min(0.30, max(0.18, _float(geometry.get("height"), 0.3) * 0.55))
-        # 越境量をPanel bounding boxの20%以内に抑え、ページセーフ領域から出さない。
-        initial = _safe_breakout_position(geometry, breakout_index, width, height)
-        candidate_positions = [
-            initial,
-            {
-                "x": _round(_clamp(_float(geometry.get("x")) + _float(geometry.get("width")) * 0.04, PAGE_SAFE_MARGIN, 1 - PAGE_SAFE_MARGIN - width)),
-                "y": _round(_clamp(_float(geometry.get("y")) + _float(geometry.get("height")) * 0.52, PAGE_SAFE_MARGIN, 1 - PAGE_SAFE_MARGIN - height)),
-                "width": _round(width),
-                "height": _round(height),
-            },
-            {
-                "x": _round(_clamp(_float(geometry.get("x")) + _float(geometry.get("width")) * 0.64, PAGE_SAFE_MARGIN, 1 - PAGE_SAFE_MARGIN - width)),
-                "y": _round(_clamp(_float(geometry.get("y")) + _float(geometry.get("height")) * 0.52, PAGE_SAFE_MARGIN, 1 - PAGE_SAFE_MARGIN - height)),
-                "width": _round(width),
-                "height": _round(height),
-            },
-        ]
-        text_layout = panel.get("text_layout") if isinstance(panel.get("text_layout"), Mapping) else {}
-        text_items = text_layout.get("items", []) if isinstance(text_layout, Mapping) else []
-        position = candidate_positions[0]
-        for candidate_position in candidate_positions:
-            text_collision = any(
-                _rect_intersects(
-                    candidate_position,
-                    {
-                        "x": _float(geometry.get("x")) + _float(text_item.get("x")) * _float(geometry.get("width")),
-                        "y": _float(geometry.get("y")) + _float(text_item.get("y")) * _float(geometry.get("height")),
-                        "width": _float(text_item.get("width")) * _float(geometry.get("width")),
-                        "height": _float(text_item.get("height")) * _float(geometry.get("height")),
-                    },
-                    0.0,
-                )
-                for text_item in text_items
-                if isinstance(text_item, Mapping)
-            )
-            adjacent_face_collision = any(
-                panel_id != str(geometry.get("panel_id"))
-                and _rect_intersects(candidate_position, zone, 0.0)
-                for panel_id, zone in protected_global_zones
-            )
-            if not text_collision and not adjacent_face_collision:
-                position = candidate_position
-                break
-        breakouts.append(
-            {
-                "id": f"breakout-{geometry['panel_id']}",
-                "panel_id": geometry["panel_id"],
-                "source_panel_id": geometry["panel_id"],
-                "type": "character",
-                "subject_id": str((panel.get("characters") or [""])[0]),
-                "enabled": True,
-                "reason": reason or ("impact emphasis" if family == "action" else "semantic emphasis"),
-                "source_asset": panel.get("image_url"),
-                **position,
-                "max_extension": 0.20,
-                "z_index": 3,
-                "clip_shape": "ellipse",
-                "allowed_overlap_regions": ["gutter"],
-            }
-        )
 
     overlays: List[Dict[str, Any]] = []
     page_number = int(page.get("page_number", 1) or 1)
@@ -830,7 +741,7 @@ def _build_v3_page_composition(
         text_layout = dominant_panel.get("text_layout") if isinstance(dominant_panel, Mapping) else None
         text_items = text_layout.get("items", []) if isinstance(text_layout, Mapping) else []
         candidate = next((item for item in text_items if isinstance(item, Mapping) and item.get("type") == "bubble"), None)
-        if candidate and dominant_geometry and (page.get("bubble_breakout") or page.get("special_emphasis")):
+        if candidate and dominant_geometry and not dominant_geometry.get("artwork_viewport") and (page.get("bubble_breakout") or page.get("special_emphasis")):
             box = dominant_geometry["bounding_box"]
             width = _clamp(_float(candidate.get("width"), 0.34) * _float(box.get("width"), 0.3), 0.16, 0.30)
             height = _clamp(_float(candidate.get("height"), 0.18) * _float(box.get("height"), 0.3), 0.08, 0.16)
@@ -885,7 +796,7 @@ def _build_v3_page_composition(
             moved_items.add((dominant_geometry["panel_id"], str(candidate.get("id", ""))))
 
     # 大きなTypographyはclimax/comedyで明示された場合だけ許可する。
-    if budget["large_page_overlays"] > 0 and family in {"comedy", "climax"} and page.get("page_overlay_text"):
+    if budget["large_page_overlays"] > 0 and family in {"comedy", "climax"} and page.get("page_overlay_text") and not any(item.get("artwork_viewport") for item in composition_panels):
         overlays.append(
             {
                 "id": "semantic-page-overlay",
@@ -1229,6 +1140,7 @@ def simplify_composition(page: Mapping[str, Any]) -> Dict[str, Any]:
             if isinstance(panel, Mapping):
                 panel["shape"] = "rectangle"
                 panel["shape_reason"] = ""
+                panel["polygon_points"] = shape_points(panel, "rectangle")
         next_composition["breakouts"] = []
         next_composition["overlays"] = [
             item for item in next_composition.get("overlays", [])
@@ -1249,6 +1161,7 @@ def simplify_composition(page: Mapping[str, Any]) -> Dict[str, Any]:
             if not str(panel.get("shape_reason", "")).strip() or used >= max_angles:
                 panel["shape"] = "rectangle"
                 panel["shape_reason"] = ""
+                panel["polygon_points"] = shape_points(panel, "rectangle")
             else:
                 used += 1
         next_composition["overlays"] = [

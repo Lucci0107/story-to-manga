@@ -601,6 +601,7 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
                 "allow_breakout": bool(raw.get("allow_breakout", False)),
                 "text_safe_zones": raw.get("text_safe_zones") if isinstance(raw.get("text_safe_zones"), dict) else {},
                 "protected_zones": raw.get("protected_zones") if isinstance(raw.get("protected_zones"), list) else [],
+                "artwork_viewport": {key: _normalized_ratio(raw["artwork_viewport"].get(key)) for key in ("x", "y", "width", "height")} if isinstance(raw.get("artwork_viewport"), dict) else None,
                 "crop_anchor_x": str(raw.get("crop_anchor_x", "center")) if raw.get("crop_anchor_x") in {"left", "center", "right"} else "center",
                 "crop_anchor_y": str(raw.get("crop_anchor_y", "middle")) if raw.get("crop_anchor_y") in {"top", "middle", "bottom"} else "middle",
                 "artwork_coverage_target": _normalized_ratio(raw.get("artwork_coverage_target"), 0.95),

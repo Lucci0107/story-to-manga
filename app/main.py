@@ -44,7 +44,7 @@ from .schemas import (
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider
 from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artwork
 from .services.extraction import StoryExtractionError, extract_uploaded_file
-from .services.export import export_pdf, export_zip
+from .services.export import CompositionReadabilityError, export_pdf, export_zip, render_page_png
 from .services.knowledge import (
     append_knowledge_prompt,
     chunk_knowledge_text,
@@ -1879,10 +1879,22 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
     return {"project": project_view(updated or project)}
 
 
+@app.get("/api/projects/{project_id}/pages/{page_id}/composition.png")
+def api_page_composition_image(project_id: str, page_id: str, user=Depends(current_user)):
+    """最終PreviewをPDF・ZIPと同じ描画処理で返す。永続データは変更しない。"""
+    project = require_project(project_id, user["id"])
+    page = next((item for item in project.get("storyboard", []) if str(item.get("id")) == page_id), None)
+    if page is None:
+        raise HTTPException(status_code=404, detail="ページが見つかりません")
+    return Response(render_page_png(project, page, get_storage()), media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
 @app.post("/api/projects/{project_id}/pages/{page_id}/layout/repair")
-async def api_repair_page_layout(project_id: str, page_id: str, user=Depends(current_user)):
+async def api_repair_page_layout(project_id: str, page_id: str, composition_version: Optional[int] = None, user=Depends(current_user)):
     """Artworkを再生成せず、指定Pageのgeometryと文字配置だけを再計算する。"""
 
+    if composition_version not in (None, 3):
+        raise HTTPException(status_code=422, detail="再計算の対象バージョンが不正です")
     project = require_project(project_id, user["id"])
     if not any(str(page.get("id")) == page_id for page in project.get("storyboard", [])):
         raise HTTPException(status_code=404, detail="ページが見つかりません")
@@ -1890,6 +1902,7 @@ async def api_repair_page_layout(project_id: str, page_id: str, user=Depends(cur
         project.get("storyboard", []),
         page_id,
         project.get("settings") or {},
+        composition_version=composition_version,
     )
     updated = db.update_project(
         project_id,
@@ -2051,6 +2064,9 @@ async def api_export(project_id: str, payload: ExportRequest, user=Depends(curre
             content,
             content_type="application/pdf" if payload.format == "pdf" else "application/zip",
         )
+    except CompositionReadabilityError as exc:
+        db.update_export(export_record["id"], None, "failed")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("export failed")
         db.update_export(export_record["id"], None, "failed")

@@ -1,6 +1,17 @@
 # Story to Manga 開発状況
 
-更新日: 2026-09-09
+更新日: 2026-09-10
+
+## 出力PDFの可読性修正（2026-09-10、実作品の再検証待ち）
+
+- ユーザー提供PDF全4ページで、元絵の楕円複製、人物と文字の重なり、小コマの文字不足、不自然な枠を確認。下記9月9日の「COMPLETE」「保証」は実作品の漫画品質を立証するものではなく、今回の目的は未完了です。
+- ローカル修正: v3再配置で偽の人物Breakoutを作らない。矩形fallback時に頂点も修正。文字入りの段に最低高さを配分。初ページタイトルの領域を確保。保護領域との衝突を配置失敗として扱う。
+- 既存Artworkの人物位置が未確認の場合、推測で文字を重ねず文字専用帯とArtwork viewportを分離する保守的fallbackを追加。実測フォント幅・日本語禁則による折返し、本文17px（900px幅基準）、丸いセリフ枠と墨色の文字を利用。これは完成漫画の演出品質を保証するものではなく、実作品で過大な文字帯・cropを再評価する必要があります。
+- 実測文字配置のPreviewは所有権確認付きのPNGエンドポイントを使用。PDFは同じ900×1200画像・3:4ページ比率を利用し、ZIPのPNGとピクセル一致をテスト。旧形式のページ比率は維持。文字領域が不足するv3の書き出しは422として修正を案内し、無理な縮小で成功扱いしない。
+- 「配置を再計算」は変更内容を確認してから指定ページだけをv3で再計算。元画像・セリフ・他ページは維持し、課金生成なし。本番既存作品には未適用。
+- 検証: pytest **176 passed**、JavaScript構文、compileall、pip check、diff check成功。ローカルのデモArtwork4ページ（会話・コメディ・アクション・心理）でPreview/PDF/ZIP確認。Desktop、390px、Light/Darkの表示とconsole error 0件を確認。実作品ではなく合成検証用データでの結果です。
+- 未完了: 提供PDFと同一作品の元Artwork/編集用JSONを含むZIPでの修正前後比較、実人物の顔・頭のcrop検証、吹き出しと地の文の表現調整、新規Artwork生成前の空間計画との整合、本番QA。現在の変更のCI・Renderデプロイは未実施。元画像なしのPDFから人物・背景を復元したり、無断再生成したりしません。
+- `MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更・削除・commit対象外。
 
 ## 現在の状態
 
@@ -19,7 +30,7 @@
 - 文字レイヤー修正コミット`ee6ac39`のGitHub Actions run `34360955686`はsuccess。CI後のRender切替中に一時502を観測しましたが、復旧後の`/api/health`はHTTP 200、配信`app.js`へ`compositionPanelTextMarkup`が反映されています。本番既存Projectは読み取り専用で再確認し、Previewはページ共通文字層、PDF／ZIPは処理完了、推奨Knowledge付き新規Project画面、iPhone SE相当／Desktop、Light／Dark、Console 0 messagesを確認しました。
 - 実装コミットは`c39e5c1`、フォーカス修正コミットは`4084927`、文字レイヤー／保守的budget修正は`ee6ac39`です。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`はユーザー所有の未追跡データとして今回も変更・削除・commitしていません。
 
-**最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
+**9月9日時点の機能検証記録: 実作品の品質保証としてのCOMPLETE判定は撤回。上記の出力PDF再検証を継続。**
 
 ```text
 本文入力 / ファイル抽出

@@ -423,6 +423,7 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .page-overlay-bubble, .page-overlay-narration, .page-overlay-sfx, .page-overlay-title { position: absolute; }
 .page-overlay-title { display: flex; align-items: center; color: #1e201d; font-size: clamp(9px, 1.15vw, 16px); font-weight: 800; letter-spacing: .04em; line-height: 1; }
 .page-overlay-bubble { z-index: 4; }
+.composition-final-image { display: block; width: 100%; height: auto; aspect-ratio: 3 / 4; }
 .page-overlay-narration { z-index: 4; }
 .page-overlay-sfx { z-index: 5; }
 .speech-bubble[data-text-overflow="true"], .page-narration[data-text-overflow="true"], .page-sfx[data-text-overflow="true"] { outline: 2px solid var(--danger); outline-offset: -2px; }

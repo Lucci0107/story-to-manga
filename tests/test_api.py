@@ -31,6 +31,26 @@ def test_private_screen_redirects_without_session(tmp_path: Path) -> None:
     assert settings.status_code == 303
 
 
+def test_final_composition_preview_enforces_ownership(tmp_path: Path) -> None:
+    client = client_for(tmp_path)
+    client.post("/register", data={"email": "preview-owner@example.com", "password": "local-test-password"})
+    project = client.post("/api/projects", data={"title": "配置確認", "story_text": "検証用"}).json()["project"]
+    from app.services.layout import reflow_page
+    from app.services.export import render_page_png
+    page = reflow_page({"id": "preview-page", "page_number": 1, "panels": [{"id": "panel-a", "dialogue": ["確認"], "image_url": "/media/demo.svg"}]}, project["settings"])
+    db.update_project(project["id"], project["user_id"], storyboard=[page])
+    stored = db.get_project(project["id"], project["user_id"])
+    url = f"/api/projects/{project['id']}/pages/preview-page/composition.png"
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content == render_page_png(stored, stored["storyboard"][0], get_storage())
+    assert db.get_project(project["id"], project["user_id"])["storyboard"] == stored["storyboard"]
+    other = TestClient(app)
+    other.post("/register", data={"email": "preview-other@example.com", "password": "local-test-password"})
+    assert other.get(url).status_code == 404
+
+
 def test_settings_screen_hides_server_secret(tmp_path: Path) -> None:
     client = client_for(tmp_path)
     client.post("/register", data={"email": "settings@example.com", "password": "long-password"}, follow_redirects=False)

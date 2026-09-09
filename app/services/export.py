@@ -21,13 +21,28 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 from .artwork import render_panel_image
-from .composition import composition_for_page, moved_text_item_set, normalize_polygon
+from .composition import PAGE_SIZE, composition_for_page, moved_text_item_set, normalize_polygon
 from .layout import ensure_page_layout
 from .storage import StorageError, StorageObjectNotFound, StorageService, get_storage
 
 
 FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
 BUNDLED_FONT_PATH = FONT_DIR / "MPLUS1p-Regular.ttf"
+
+
+class CompositionReadabilityError(ValueError):
+    """配置修正が必要なページを不自然な完成品として書き出さない。"""
+
+
+def validate_export_readability(project: Mapping[str, Any]) -> None:
+    for raw_page in project.get("storyboard", []) or []:
+        page = ensure_page_layout(raw_page, project.get("settings") or {})
+        for panel in page.get("panels", []) or []:
+            layout = panel.get("text_layout") or {}
+            if int(page.get("composition_version", 1) or 1) >= 3 and any(item.get("overflow") for item in layout.get("items", [])):
+                raise CompositionReadabilityError(f"ページ{page.get('page_number', '')}の文字領域が不足しています。コマを広げるかページを分割してから再計算してください。画像再生成は不要です。")
+
+
 PDF_FONT = "Helvetica"
 try:
     # PDF閲覧環境の外部CMapへ依存しないよう、OFLの日本語フォントを埋め込む。
@@ -248,6 +263,7 @@ def _draw_pdf_accessible_text(c: canvas.Canvas, project: Mapping[str, Any], page
 def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -> bytes:
     """生成済みパネル画像へアプリ側の文字要素を重ねたPDFを返す。"""
 
+    validate_export_readability(project)
     storage = storage or get_storage()
     width, height = A4
     output = BytesIO()
@@ -257,15 +273,19 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
     for raw_page in project.get("storyboard", []):
         page = ensure_page_layout(raw_page, settings)
         composition = composition_for_page(page)
+        c.setPageSize(A4)
         if int(composition.get("composition_version", 1) or 1) >= 2:
-            rendered = render_page_png(
-                project,
-                page,
-                storage,
-                width=max(1, round(width)),
-                height=max(1, round(height)),
-            )
-            c.drawImage(ImageReader(BytesIO(rendered)), 0, 0, width, height, preserveAspectRatio=False, mask="auto")
+            measured = any((panel.get("text_layout") or {}).get("placement_mode") == "reserved_text_band" for panel in page.get("panels", []))
+            if measured:
+                # 実測文字のページはPreview/ZIPと同じピクセルを利用する。
+                # A4用に再描画するとcropと字形が変わるため、ページ比率も揃える。
+                rendered = render_page_png(project, page, storage)
+                output_height = width * PAGE_SIZE[1] / PAGE_SIZE[0]
+                c.setPageSize((width, output_height))
+            else:
+                rendered = render_page_png(project, page, storage, width=max(1, round(width)), height=max(1, round(height)))
+                output_height = height
+            c.drawImage(ImageReader(BytesIO(rendered)), 0, 0, width, output_height, preserveAspectRatio=False, mask="auto")
             _draw_pdf_accessible_text(c, project, page)
             c.showPage()
             continue
@@ -384,11 +404,22 @@ def _fit_pil_text(
 
     for font_size in range(max(6, initial_size), 5, -1):
         font = _load_page_font(font_size)
-        wrapped = _pil_lines(text, max(1, line_count))
+        # 推測した行数ではなく、実際の文字幅で改行する。
+        lines = []
+        for paragraph in text.split("\n"):
+            current = ""
+            for char in paragraph:
+                if current and draw.textlength(current + char, font=font) > width:
+                    lines.append(current)
+                    current = char
+                else:
+                    current += char
+            lines.append(current)
+        wrapped = "\n".join(lines)
         bounds = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=1)
         if bounds[2] - bounds[0] <= width and bounds[3] - bounds[1] <= height:
             return wrapped, font
-    return _pil_lines(text, max(1, line_count)), _load_page_font(6)
+    return wrapped, _load_page_font(6)
 
 
 def _draw_page_text(
@@ -441,6 +472,8 @@ def _draw_text_item(
     item_type = str(item.get("type", "bubble"))
     text = str(item.get("text", ""))
     font_size = max(9, min(25, int(height * (0.19 if item_type == "bubble" else 0.22))))
+    if item.get("font_size"):
+        font_size = max(6, int(item["font_size"]))
     line_count = max(1, int(item.get("line_count", 1) or 1))
     horizontal_padding = 16 if item_type == "bubble" else 14 if item_type == "narration" else 0
     vertical_padding = 14 if item_type == "bubble" else 10 if item_type == "narration" else 0
@@ -452,7 +485,22 @@ def _draw_text_item(
         line_count,
         font_size,
     )
+    if isinstance(item.get("lines"), list):
+        wrapped = "\n".join(str(line) for line in item["lines"])
+        font = _load_page_font(font_size)
     right, bottom = left + width, top + height
+    if item.get("font_size") and isinstance(item.get("lines"), list):
+        # 新しい実測文字配置。セリフは中央、地の文は左揃え、効果音は墨色。
+        bounds = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=2)
+        tx = left + (width - (bounds[2] - bounds[0])) / 2 - bounds[0]
+        ty = top + (height - (bounds[3] - bounds[1])) / 2 - bounds[1]
+        if item_type == "bubble":
+            draw.rounded_rectangle((left, top, right, bottom), radius=min(width, height) * 0.45, fill="white", outline="black", width=2)
+        elif item_type == "narration":
+            draw.rectangle((left, top, right, bottom), fill="white", outline="black", width=1)
+            tx = left + 10
+        draw.multiline_text((tx, ty), wrapped, fill="black", font=font, spacing=2, align="center" if item_type == "bubble" else "left")
+        return
     if item_type == "bubble":
         draw.rounded_rectangle((left, top, right, bottom), radius=max(8, height // 4), fill=(250, 248, 242), outline=(30, 32, 29), width=2)
         draw.multiline_text((left + 8, top + 7), wrapped, fill=(30, 32, 29), font=font, spacing=2)
@@ -514,6 +562,16 @@ def _render_composition_png(
             crop_anchor_x=str(geometry.get("crop_anchor_x", "center")),
             crop_anchor_y=str(geometry.get("crop_anchor_y", "middle")),
         ).convert("RGBA")
+        viewport = geometry.get("artwork_viewport")
+        if isinstance(viewport, Mapping):
+            vx = round(float(viewport.get("x", 0)) * box_width)
+            vy = round(float(viewport.get("y", 0)) * box_height)
+            vw = max(1, round(float(viewport.get("width", 1)) * box_width))
+            vh = max(1, round(float(viewport.get("height", 1)) * box_height))
+            panel_image = Image.new("RGBA", (box_width, box_height), "white")
+            panel_image.paste(_pil_panel_image(project, panel, vw, vh, storage,
+                              crop_anchor_x=str(geometry.get("crop_anchor_x", "center")),
+                              crop_anchor_y=str(geometry.get("crop_anchor_y", "middle"))), (vx, vy))
         points = normalize_polygon(geometry.get("polygon_points"), geometry)
         local_points = [
             (
@@ -559,7 +617,7 @@ def _render_composition_png(
             top = y + round(float(item.get("y", 0)) * box_height)
             _draw_text_item(
                 draw,
-                item,
+                {**item, "font_size": float(item["font_size"]) * width / PAGE_SIZE[0]} if item.get("font_size") else item,
                 left,
                 top,
                 max(12, round(float(item.get("width", 0.3)) * box_width)),
@@ -610,6 +668,7 @@ def render_page_png(
 def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -> bytes:
     """ページ構成、生成画像、編集可能なJSONをStorageからまとめて返す。"""
 
+    validate_export_readability(project)
     storage = storage or get_storage()
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:

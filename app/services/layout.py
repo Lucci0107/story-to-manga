@@ -22,6 +22,7 @@ from .composition import (
     shape_points,
 )
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
+from .text_composition import separate_text_from_unverified_artwork
 
 
 LAYOUT_VERSION = 2
@@ -437,6 +438,8 @@ def _candidate_rects(item_type: str, width: float, height: float, language: str)
                 x = 1 - TEXT_SAFE_MARGIN - width
             else:
                 x = (1 - width) / 2
+            if x < TEXT_SAFE_MARGIN or y < TEXT_SAFE_MARGIN or x + width > 1 - TEXT_SAFE_MARGIN + 0.000001 or y + height > 1 - TEXT_SAFE_MARGIN + 0.000001:
+                continue
             yield {"x": _round(x), "y": _round(y), "width": _round(width), "height": _round(height)}
 
 
@@ -490,6 +493,8 @@ def place_text_elements(
             if any(_rect_intersects(candidate, item, TEXT_GAP) for item in placed):
                 continue
             protected_overlap = sum(_intersection_area(candidate, zone) for zone in protected)
+            if protected_zones is not None and protected_overlap > 0.00001:
+                continue
             reserved_zone = reserved.get(item_type)
             reserved_overlap = _intersection_area(candidate, reserved_zone) if isinstance(reserved_zone, Mapping) else 0.0
             # 顔保護を第一にしつつ、予約領域に多く重なる候補を優先する。
@@ -503,7 +508,8 @@ def place_text_elements(
                 scaled_height = max(0.10, height * scale)
                 candidates = list(_candidate_rects(item_type, scaled_width, scaled_height, language))
                 candidate = next(
-                    (item for item in candidates if not any(_rect_intersects(item, existing, TEXT_GAP / 2) for existing in placed)),
+                    (item for item in candidates if not any(_rect_intersects(item, existing, TEXT_GAP / 2) for existing in placed)
+                     and (protected_zones is None or not any(_intersection_area(item, zone) > 0.00001 for zone in protected))),
                     None,
                 )
                 if candidate:
@@ -523,6 +529,8 @@ def place_text_elements(
                 "type": item_type,
                 "order": order,
                 "text": text,
+                "overflow": (protected_zones is not None and any(_intersection_area(rect, zone) > 0.00001 for zone in protected))
+                or any(_rect_intersects(rect, existing) for existing in placed),
                 **{key: _round(rect[key]) for key in ("x", "y", "width", "height")},
                 "side": side,
                 "line_count": lines,
@@ -589,13 +597,21 @@ def reflow_page(
             if semantic_mode and dominant_index is not None and len(panels) <= 3:
                 # 少コマページで主役が半ページを超えないよう、面積差を保ったまま上限を置く。
                 row_weights[row_index] = min(row_weights[row_index], max(other_weights) * 1.15)
-    total_height = 1 - PAGE_TOP_MARGIN - PAGE_BOTTOM_MARGIN - PANEL_GAP * max(0, len(rows) - 1)
+    top_margin = 0.075 if semantic_mode and int(page.get("page_number", 1) or 1) == 1 and page.get("title") else PAGE_TOP_MARGIN
+    total_height = 1 - top_margin - PAGE_BOTTOM_MARGIN - PANEL_GAP * max(0, len(rows) - 1)
     weight_total = sum(row_weights) or 1.0
     row_heights = [total_height * weight / weight_total for weight in row_weights]
+    if semantic_mode and rows:
+        # 文字のある段を細い横帯にしない。主役の面積を増やす前に最低高さを配分する。
+        floors = [0.17 if any(panels[index].get("dialogue") or panels[index].get("narration") for index in indices) else 0.10 for indices in rows]
+        floor_total = sum(floors)
+        if floor_total < total_height:
+            remaining = total_height - floor_total
+            row_heights = [floor + remaining * weight / weight_total for floor, weight in zip(floors, row_weights)]
 
     geometries: List[Dict[str, Any]] = []
     angled_used = 0
-    y = PAGE_TOP_MARGIN
+    y = top_margin
     for row_index, (indices, row_height) in enumerate(zip(rows, row_heights), start=1):
         boxes = _physical_boxes_for_row(
             indices,
@@ -673,6 +689,16 @@ def reflow_page(
                 reserved_zones=geometry.get("text_safe_zones") if semantic_mode else None,
                 protected_zones=geometry.get("protected_zones") if semantic_mode else None,
             )
+            if semantic_mode:
+                separate_layout = separate_text_from_unverified_artwork(panels[panel_index], geometry, str(language))
+                if separate_layout:
+                    panels[panel_index]["text_layout"] = separate_layout
+                    geometry["artwork_viewport"] = separate_layout["artwork_viewport"]
+                    geometry["protected_zones"] = [separate_layout["artwork_viewport"]]
+                    # 文字帯に斜線が入らないよう、保守的な再配置は矩形にする。
+                    geometry["shape"] = "rectangle"
+                    geometry["shape_reason"] = ""
+                    geometry["polygon_points"] = shape_points(box, "rectangle")
             geometries.append(geometry)
         y += row_height + PANEL_GAP
 
@@ -765,6 +791,8 @@ def repair_storyboard_page(
     storyboard: Any,
     page_id: str,
     settings: Mapping[str, Any] | None,
+    *,
+    composition_version: int | None = None,
 ) -> List[Dict[str, Any]]:
     """指定Pageだけを再配置し、他Pageと画像情報は変更しない。"""
 
@@ -776,6 +804,8 @@ def repair_storyboard_page(
         if not isinstance(page, Mapping):
             continue
         if str(page.get("id")) == str(page_id):
+            if composition_version == SEMANTIC_COMPOSITION_VERSION:
+                page = {**page, "composition_version": SEMANTIC_COMPOSITION_VERSION}
             repaired = reflow_page(page, canonical_settings)
             if int(repaired.get("composition_version", 0) or 0) >= SEMANTIC_COMPOSITION_VERSION and composition_quality_issues(repaired):
                 repaired = simplify_composition(repaired)
