@@ -452,6 +452,9 @@
       });
     }
 
+    window.addEventListener("resize", function () {
+      if (activeStep === "edit" || activeStep === "preview") scheduleMangaTextFit();
+    });
     render();
     fetch("/api/settings/ai-models", { headers: { Accept: "application/json" } }).then(function (response) {
       if (!response.ok) throw new Error("モデルの利用状況を確認できませんでした");
@@ -564,6 +567,95 @@
       const first = canonicalLanguage(settings) === "en" ? "left" : "right";
       const second = first === "left" ? "right" : "left";
       return (Math.max(0, Number(index) || 0) % 2 === 0) ? first : second;
+    }
+
+    function percentValue(value, fallback) {
+      const number = Number(value);
+      return Math.max(0, Math.min(1, Number.isFinite(number) ? number : fallback)) * 100;
+    }
+
+    function fallbackPageGeometry(page) {
+      const panels = page?.panels || [];
+      if (!panels.length) return new Map();
+      const gap = 1.4;
+      const side = 2.5;
+      const top = 2;
+      const bottom = 6;
+      const rows = [];
+      if (panels.length === 1) rows.push([0]);
+      else if (panels.length <= 3) panels.forEach(function (_panel, index) { rows.push([index]); });
+      else {
+        rows.push([0]);
+        let index = 1;
+        while (index < panels.length) {
+          const remaining = panels.length - index;
+          const size = remaining === 1 ? 1 : 2;
+          rows.push(Array.from({ length: size }, function (_item, offset) { return index + offset; }));
+          index += size;
+        }
+      }
+      const weights = rows.map(function (row, index) { return row.length === 1 ? (index === rows.length - 1 ? 1.45 : 1.1) : 0.82; });
+      const usableHeight = 100 - top - bottom - gap * Math.max(0, rows.length - 1);
+      const totalWeight = weights.reduce(function (sum, value) { return sum + value; }, 0);
+      const result = new Map();
+      let y = top;
+      rows.forEach(function (row, rowIndex) {
+        const height = usableHeight * weights[rowIndex] / totalWeight;
+        const physical = canonicalLanguage(state.settings) === "en" ? row : [...row].reverse();
+        const usableWidth = 100 - side * 2 - gap * Math.max(0, row.length - 1);
+        const firstWidth = row.length === 2 ? usableWidth * .54 : usableWidth / row.length;
+        let x = side;
+        physical.forEach(function (panelIndex, physicalIndex) {
+          const width = row.length === 2 ? (physicalIndex === 0 ? firstWidth : usableWidth - firstWidth) : usableWidth / row.length;
+          result.set(String(panels[panelIndex]?.id || panelIndex), { x: x / 100, y: y / 100, width: width / 100, height: height / 100, row: rowIndex + 1, column: physicalIndex + 1 });
+          x += width + gap;
+        });
+        y += height + gap;
+      });
+      return result;
+    }
+
+    function pageGeometryMap(page) {
+      const items = page?.layout_geometry?.panels;
+      if (!Array.isArray(items) || items.length !== (page?.panels || []).length) return fallbackPageGeometry(page);
+      return new Map(items.map(function (item) { return [String(item.panel_id), item]; }));
+    }
+
+    function fallbackTextLayout(panel) {
+      const result = [];
+      const language = canonicalLanguage(state.settings);
+      const sides = language === "en" ? ["left", "right"] : ["right", "left"];
+      [["bubble", panel.dialogue || []], ["narration", panel.narration || []], ["sfx", panel.sfx || []]].forEach(function (entry) {
+        entry[1].filter(Boolean).forEach(function (text, index) {
+          const side = sides[index % 2];
+          const row = result.length;
+          result.push({ id: entry[0] + "-" + (index + 1), type: entry[0], order: index + 1, text: text, x: side === "left" ? .06 : .56, y: Math.min(.78, .06 + row * .18), width: .38, height: .14, side: side, line_count: 2, font_scale: 1 });
+        });
+      });
+      return result;
+    }
+
+    function panelTextLayout(panel) {
+      const items = panel?.text_layout?.items;
+      return Array.isArray(items) ? items : fallbackTextLayout(panel || {});
+    }
+
+    function fitMangaText() {
+      document.querySelectorAll(".speech-bubble,.page-narration,.page-sfx").forEach(function (element) {
+        element.style.fontSize = "";
+        let size = Number.parseFloat(window.getComputedStyle(element).fontSize) || 10;
+        while ((element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1) && size > 5) {
+          size = Math.max(5, size - .5);
+          element.style.fontSize = size + "px";
+        }
+        const overflow = element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1;
+        element.dataset.textOverflow = overflow ? "true" : "false";
+        element.title = overflow ? "文字が収まらないため、配置の再計算または文面の分割が必要です" : "";
+      });
+    }
+
+    function scheduleMangaTextFit() {
+      window.requestAnimationFrame(fitMangaText);
     }
 
     function uuid(prefix) {
@@ -1018,7 +1110,9 @@
     function panelTemplate(pageId, panel, index) {
       const input = function (key, label, value, full) { return '<label class="editor-label ' + (full ? "full" : "") + '">' + escapeHtml(label) + '<textarea data-panel-field="' + key + '" rows="' + (full ? "3" : "2") + '">' + escapeHtml(Array.isArray(value) ? textAreaValue(value) : value || "") + '</textarea></label>'; };
       const scalar = function (key, label, value) { return '<label class="editor-label">' + escapeHtml(label) + '<input data-panel-field="' + key + '" value="' + escapeAttr(value || "") + '"></label>'; };
-      return '<article class="storyboard-panel" data-panel-id="' + escapeAttr(panel.id) + '"><span class="panel-index">' + String(panel.order || index + 1).padStart(2, "0") + '</span><div><div class="panel-editor-grid">' + input("description", "コマの意図", panel.description, true) + scalar("shot_type", "カメラ", panel.shot_type) + scalar("action", "行動", panel.action) + scalar("expression", "表情", panel.expression) + scalar("background", "背景", panel.background) + scalar("characters", "登場人物（カンマ区切り）", (panel.characters || []).join(", ")) + input("dialogue", "セリフ（1行1つ）", panel.dialogue, false) + input("narration", "ナレーション", panel.narration, false) + input("sfx", "効果音", panel.sfx, false) + '</div><div class="panel-mini-actions"><button type="button" class="text-button" data-panel-move="up" data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">↑ 上へ</button><button type="button" class="text-button" data-panel-move="down" data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">↓ 下へ</button><button type="button" class="text-button danger-button" data-panel-delete data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">削除</button><button type="button" class="primary-button compact-button" data-save-panel data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">コマを保存</button></div></div></article>';
+      const importanceOptions = [{value:"low", label:"小"}, {value:"medium", label:"中"}, {value:"high", label:"大"}, {value:"critical", label:"特大"}].map(function (option) { return '<option value="' + option.value + '"' + (option.value === (panel.importance || "medium") ? " selected" : "") + '>' + option.label + '</option>'; }).join("");
+      const importance = '<label class="editor-label">重要度<select data-panel-field="importance">' + importanceOptions + '</select></label>';
+      return '<article class="storyboard-panel" data-panel-id="' + escapeAttr(panel.id) + '"><span class="panel-index">' + String(panel.order || index + 1).padStart(2, "0") + '</span><div><div class="panel-editor-grid">' + input("description", "コマの意図", panel.description, true) + scalar("panel_role", "コマの役割", panel.panel_role) + importance + scalar("scene_type", "シーン種別", panel.scene_type) + scalar("shot_type", "カメラ", panel.shot_type) + scalar("action", "行動", panel.action) + scalar("expression", "表情", panel.expression) + scalar("background", "背景", panel.background) + scalar("characters", "登場人物（カンマ区切り）", (panel.characters || []).join(", ")) + input("dialogue", "セリフ（1行1つ）", panel.dialogue, false) + input("narration", "ナレーション", panel.narration, false) + input("sfx", "効果音", panel.sfx, false) + '</div><div class="panel-mini-actions"><button type="button" class="text-button" data-panel-move="up" data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">↑ 上へ</button><button type="button" class="text-button" data-panel-move="down" data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">↓ 下へ</button><button type="button" class="text-button danger-button" data-panel-delete data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">削除</button><button type="button" class="primary-button compact-button" data-save-panel data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">コマを保存</button></div></div></article>';
     }
 
     function renderStoryboard() {
@@ -1042,8 +1136,9 @@
           : "";
       const pageMarkup = pages.map(function (page, pageIndex) {
         const panels = (page.panels || []).map(function (panel, panelIndex) { return panelTemplate(page.id, panel, panelIndex); }).join("");
-        const layoutOptions = [{value:"hero", label:"Hero"}, {value:"classic", label:"Classic"}, {value:"grid", label:"Grid"}, {value:"wide", label:"Wide"}].map(function (option) { return '<option value="' + option.value + '"' + (option.value === (page.layout || "classic") ? " selected" : "") + '>' + option.label + '</option>'; }).join("");
-        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + String(pageIndex + 1).padStart(2, "0") + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header><div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
+        const layoutOptions = [{value:"classic", label:"自動"}, {value:"drama", label:"標準ドラマ"}, {value:"conversation", label:"会話"}, {value:"action", label:"アクション"}, {value:"psychological", label:"心理"}, {value:"four_panel", label:"4コマ（均等）"}, {value:"hero", label:"1コマ"}, {value:"wide", label:"横長重視"}].map(function (option) { return '<option value="' + option.value + '"' + (option.value === (page.layout || "classic") ? " selected" : "") + '>' + option.label + '</option>'; }).join("");
+        const resolvedTemplate = page.layout_geometry?.template || "未計算";
+        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + String(pageIndex + 1).padStart(2, "0") + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header><div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
       }).join("");
       const body = pages.length ? jobNotice + '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : jobNotice + '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
@@ -1052,7 +1147,7 @@
     }
 
     function newPanel(order) {
-      return { id: uuid("panel"), order: order, description: "追加したコマの意図を入力", shot_type: "バストアップ", characters: [], action: "", expression: "", background: "", dialogue: [], narration: [], sfx: [], bubble_order: [], narration_order: [], sfx_order: [], generation_prompt: "", image_url: null, generation_status: "not_started", generation_error: null, revision: 0, crop_mode: "fit" };
+      return { id: uuid("panel"), order: order, description: "追加したコマの意図を入力", panel_role: "", scene_type: "dialogue", importance: "medium", shot_type: "バストアップ", characters: [], action: "", expression: "", background: "", dialogue: [], narration: [], sfx: [], bubble_order: [], narration_order: [], sfx_order: [], generation_prompt: "", image_url: null, generation_status: "not_started", generation_error: null, revision: 0, crop_mode: "fit" };
     }
 
     function bindStoryboardEvents() {
@@ -1065,6 +1160,16 @@
       });
       content.querySelectorAll("[data-page-layout]").forEach(function (select) { select.addEventListener("change", function () {
         const pages = structuredClone(state.storyboard); const page = pages.find(function (item) { return item.id === select.dataset.pageId; }); if (!page) return; page.layout = select.value; saveStoryboard(pages, "ページレイアウトを更新しました");
+      }); });
+      content.querySelectorAll("[data-repair-page-layout]").forEach(function (button) { button.addEventListener("click", async function () {
+        if (button.disabled) return;
+        button.disabled = true;
+        try {
+          const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(button.dataset.pageId) + "/layout/repair", { method: "POST", body: "{}" });
+          state = data.project;
+          showToast("このページのコマ割りと文字配置を再計算しました");
+          render();
+        } catch (error) { showToast(error.message, "error"); button.disabled = false; }
       }); });
       content.querySelectorAll("[data-page-move]").forEach(function (button) { button.addEventListener("click", function () {
         const pages = [...state.storyboard]; const index = pages.findIndex(function (page) { return page.id === button.dataset.pageId; }); const nextIndex = button.dataset.pageMove === "up" ? index - 1 : index + 1; if (index < 0 || nextIndex < 0 || nextIndex >= pages.length) return; [pages[index], pages[nextIndex]] = [pages[nextIndex], pages[index]]; pages.forEach(function (page, i) { page.page_number = i + 1; }); saveStoryboard(pages, "ページの順番を更新しました");
@@ -1685,38 +1790,25 @@
     function pageStage(page) {
       if (!page) return '<div class="preview-frame-wrap"><p>ページがありません</p></div>';
       const panels = page.panels || [];
-      let layout = page.layout || "classic";
-      if (panels.length === 1) layout = "hero";
-      else if (panels.length >= 3) layout = "grid";
+      const geometryMap = pageGeometryMap(page);
+      const template = page.layout_geometry?.template || page.layout || "classic";
       const panelHtml = panels.map(function (panel, index) {
-        const position = panelVisualPosition(index, panels.length, state.settings);
-        const visualColumn = layout === "wide" && index === 0 ? "1 / -1" : String(position.column);
-        const placement = ' style="grid-column:' + visualColumn + ';grid-row:' + position.row + ';"';
+        const geometry = geometryMap.get(String(panel.id)) || panel.geometry || {};
+        const placement = ' style="left:' + percentValue(geometry.x, .025) + '%;top:' + percentValue(geometry.y, .02) + '%;width:' + percentValue(geometry.width, .95) + '%;height:' + percentValue(geometry.height, .9) + '%;"';
         const imageClass = panel.crop_mode === "fill" ? "panel-image-fill" : "panel-image-fit";
         const logicalOrder = panel.order || index + 1;
         const image = panel.image_url ? '<img class="' + imageClass + '" src="' + escapeAttr(panel.image_url) + '" alt="ページ' + escapeAttr(page.page_number) + ' コマ' + escapeAttr(logicalOrder) + '">' : '<div class="manga-panel-placeholder">ARTWORK<br>未生成</div>';
-        const dialogue = (panel.dialogue || []).filter(Boolean);
-        const narration = (panel.narration || []).filter(Boolean);
-        const sfx = (panel.sfx || []).filter(Boolean);
-        const bubbles = dialogue.map(function (text, bubbleIndex) {
-          const side = bubbleSide(bubbleIndex, state.settings);
-          const top = 10 + Math.floor(bubbleIndex / 2) * 49;
-          return '<span class="speech-bubble bubble-side-' + side + '" style="top:' + top + 'px" data-bubble-order="' + (bubbleIndex + 1) + '">' + escapeHtml(text).replace(/\n/g, "<br>") + '</span>';
+        const textMarkup = panelTextLayout(panel).map(function (item) {
+          const itemType = item.type === "narration" ? "narration" : item.type === "sfx" ? "sfx" : "bubble";
+          const className = itemType === "bubble" ? "speech-bubble bubble-side-" + (item.side || bubbleSide((item.order || 1) - 1, state.settings)) : itemType === "narration" ? "page-narration" : "page-sfx";
+          const dataOrder = itemType === "bubble" ? "data-bubble-order" : itemType === "narration" ? "data-narration-order" : "data-sfx-order";
+          const style = 'left:' + percentValue(item.x, .06) + '%;top:' + percentValue(item.y, .06) + '%;width:' + percentValue(item.width, .4) + '%;height:' + percentValue(item.height, .14) + '%;--text-scale:' + Math.max(.72, Math.min(1, Number(item.font_scale) || 1)) + ';';
+          return '<span class="' + className + '" style="' + style + '" ' + dataOrder + '="' + escapeAttr(item.order || 1) + '">' + escapeHtml(item.text || "").replace(/\n/g, "<br>") + '</span>';
         }).join("");
-        const narrationMarkup = narration.map(function (text, narrationIndex) {
-          const side = bubbleSide(narrationIndex, state.settings);
-          const bottom = 8 + narrationIndex * 22;
-          return '<span class="page-narration narration-side-' + side + '" style="bottom:' + bottom + 'px" data-narration-order="' + (narrationIndex + 1) + '">' + escapeHtml(text) + '</span>';
-        }).join("");
-        const sfxMarkup = sfx.map(function (text, sfxIndex) {
-          const side = bubbleSide(sfxIndex, state.settings);
-          const top = 8 + sfxIndex * 18;
-          return '<span class="page-sfx sfx-side-' + side + '" style="top:' + top + 'px" data-sfx-order="' + (sfxIndex + 1) + '">' + escapeHtml(text) + '</span>';
-        }).join("");
-        return '<div class="manga-panel' + (layout === "wide" && index === 0 ? " wide" : "") + '" data-reading-order="' + escapeAttr(logicalOrder) + '" data-visual-column="' + position.column + '" data-visual-row="' + position.row + '"' + placement + '>' + image + bubbles + narrationMarkup + sfxMarkup + '</div>';
+        return '<div class="manga-panel" role="group" aria-label="コマ' + escapeAttr(logicalOrder) + '" data-reading-order="' + escapeAttr(logicalOrder) + '" data-visual-column="' + escapeAttr(geometry.column || panel.visual_position?.column || 1) + '" data-visual-row="' + escapeAttr(geometry.row || panel.visual_position?.row || index + 1) + '" data-panel-area="' + escapeAttr(geometry.area || "") + '"' + placement + '>' + image + textMarkup + '</div>';
       }).join("");
       const direction = htmlDirection(state.settings);
-      return '<div class="preview-frame-wrap" data-language="' + escapeAttr(canonicalLanguage(state.settings)) + '"><div class="manga-page layout-' + escapeAttr(layout) + '" dir="' + direction + '" data-reading-direction="' + escapeAttr(readingDirectionKey(state.settings)) + '">' + panelHtml + '</div></div>';
+      return '<div class="preview-frame-wrap" data-language="' + escapeAttr(canonicalLanguage(state.settings)) + '"><div class="manga-page layout-' + escapeAttr(template) + '" dir="' + direction + '" data-layout-version="' + escapeAttr(page.layout_version || 1) + '" data-reading-direction="' + escapeAttr(readingDirectionKey(state.settings)) + '">' + panelHtml + '<span class="manga-page-number" aria-label="ページ番号 ' + escapeAttr(page.page_number || "") + '">' + escapeHtml(page.page_number || "") + '</span></div></div>';
     }
 
     function renderEdit() {
@@ -1848,6 +1940,7 @@
       else if (activeStep === "qa") renderQA();
       else if (activeStep === "preview") renderPreview();
       else if (activeStep === "export") renderExport();
+      if (activeStep === "edit" || activeStep === "preview") scheduleMangaTextFit();
     }
 
     render();

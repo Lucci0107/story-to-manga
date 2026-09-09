@@ -74,6 +74,11 @@
 - 言語別のPanel.order、グリッド視覚配置、吹き出し・ナレーション・SFX順、Previewナビゲーション、PDFコマ配置
 - Storyboard Structured Output、Panel Prompt、Knowledge-aware QAへProjectの言語・読順ルールを注入し、Knowledgeの逆方向指定を上書き
 - 旧`rtl`/`ltr`設定と0始まりのPanel orderを壊さずに移行する冪等な正規化、言語変更時の画像・本文保持
+- Knowledgeのレイアウト原則を反映した決定的なPage layout engine（標準ドラマ／会話／アクション／心理／4コマ）
+- Panelの役割・scene type・重要度に基づく不均等geometryと、重要コマの大面積化、日本語RTL／English LTRの物理配置
+- 吹き出し・ナレーション・SFXの共通collision pass、6%セーフマージン、人物保護zone評価、長文折り返し／overflow検出
+- 保存済みgeometryをPreview・PDF・ZIPページ画像で共用し、Artworkを再生成しないPage単位の配置再計算を追加
+- PDF／ページ画像へOFLのM PLUS 1pを埋め込み、閲覧環境の外部CMapへ依存せず日本語を表示
 
 ## 検証済み
 
@@ -136,10 +141,12 @@
 - Panel Job状態不明修正のローカル回帰：`pytest` 96 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。隔離Demo環境で16コマの一括生成について、中央Dialog、実際のgenerating/waiting集計、terminal cleanup、reload後の生成済み保持、Dark theme、孤児Panelのserver-side Retry可能化を確認しました。実AI／追加画像生成は行っていません。
 - Panel Job状態不明修正の初回本番検証：GitHub Actions run `34266695670`、Render deployment `dep-dag5o6gae00c738g456g`がsuccess。Production smokeのhealth/login/CSS/JavaScriptは全項目HTTP 200で、更新済み`app.js`の状態不明・再確認導線が本番配信されていることを確認しました。
 - Panel Job状態不明修正のProduction Browser QA：既存の本番Project（31コマ、生成済み2枚）を変更・追加生成せずに、生成画面の表示、Dark theme、reload後の31コマ／2枚保持、Dialog非表示、画像revision保持を確認しました。追加の画像生成は行っていません。
+- Manga layout engineのローカル回帰：`pytest` 111 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。標準ドラマ／会話／アクション／心理／4コマのgeometry、重要コマ面積、RTL/LTR、保存再読み、Page単位再配置、QA検出、PDF日本語フォント埋め込み、ZIP合成ページを検証。
+- Manga layout engineのローカルBrowser QA：6コマの不均等配置、重要コマ32.3%、日本語RTL／English LTR、文字要素collision 0、長文overflow 0、Light/Dark、狭幅Previewの1列化、console error 0を確認。PDFと900×1,200pxのZIPページ画像を実際に書き出し、同一geometryと読みやすい文字配置を確認。PDFはPopplerによる画像化と日本語テキスト抽出にも成功。画像AI生成は行っていません。
 
 ## In Progress
 
-- なし。Panel生成の全体Processing Dialog、active Jobのreload復元、実進捗表示、状態不明時のbounded recovery、terminal state cleanup、個別再生成、Production QAまで完了しています。
+- Manga layout engineと文字要素collision回避はローカル実装・検証完了。GitHub CI、Render自動deploy、Production QA待ちです。
 
 ## 永続化移行準備
 

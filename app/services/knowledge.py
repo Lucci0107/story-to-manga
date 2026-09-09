@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List
 
 from .. import db
 from ..schemas import ALLOWED_KNOWLEDGE_SCOPES
+from .layout import storyboard_layout_issues
 from .reading_order import reading_order_context, reading_order_issues
 
 
@@ -286,6 +287,33 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
         "セリフ、ナレーション、SFXの配置順を確認しました"
         if not bubble_errors
         else bubble_errors[0]["detail"],
+    )
+
+    layout_issues = storyboard_layout_issues(project)
+    issues.extend(layout_issues)
+    geometry_errors = [
+        item
+        for item in layout_issues
+        if item["key"].startswith(("layout-", "text-boundary-"))
+    ]
+    collision_errors = [
+        item for item in layout_issues if item["key"].startswith("text-collision-")
+    ]
+    add_check(
+        "page_geometry",
+        "コマ面積と視覚的階層",
+        "error" if geometry_errors else "pass",
+        "通常ページの不均等geometryと重要コマの面積を確認しました"
+        if not geometry_errors
+        else geometry_errors[0]["detail"],
+    )
+    add_check(
+        "text_collision",
+        "吹き出し・ナレーション衝突",
+        "error" if collision_errors else "pass",
+        "文字要素の境界・セーフマージン・相互衝突を確認しました"
+        if not collision_errors
+        else collision_errors[0]["detail"],
     )
 
     unfinished = [panel for panel in panels if panel.get("generation_status") != "completed"]

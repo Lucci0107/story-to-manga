@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from .config import get_settings
 from .services.database import DatabaseConnection, connection as database_connection
+from .services.layout import ensure_storyboard_layout
 from .services.model_registry import DEFAULT_AI_MODEL_SETTINGS
 from .services.reading_order import (
     canonicalize_stored_settings,
@@ -300,7 +301,10 @@ def init_db() -> None:
             stored_settings = _loads(row["settings_json"], dict(DEFAULT_SETTINGS))
             next_settings = canonicalize_stored_settings(stored_settings)
             stored_storyboard = _loads(row["storyboard_json"], [])
-            next_storyboard = canonicalize_storyboard_panel_orders(stored_storyboard)
+            next_storyboard = ensure_storyboard_layout(
+                canonicalize_storyboard_panel_orders(stored_storyboard),
+                next_settings,
+            )
             if next_settings != stored_settings or next_storyboard != stored_storyboard:
                 conn.execute(
                     "UPDATE projects SET settings_json = ?, storyboard_json = ? WHERE id = ?",
@@ -507,6 +511,13 @@ def delete_session(token: Optional[str]) -> None:
 
 
 def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    settings = canonicalize_stored_settings(
+        _loads(row["settings_json"], dict(DEFAULT_SETTINGS))
+    )
+    storyboard = ensure_storyboard_layout(
+        canonicalize_storyboard_panel_orders(_loads(row["storyboard_json"], [])),
+        settings,
+    )
     return {
         "id": row["id"],
         "user_id": row["user_id"],
@@ -516,17 +527,13 @@ def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
         "original_text": row["original_text"],
         "status": row["status"],
         "current_step": row["current_step"],
-        "settings": canonicalize_stored_settings(
-            _loads(row["settings_json"], dict(DEFAULT_SETTINGS))
-        ),
+        "settings": settings,
         "analysis": _loads(row["analysis_json"], None),
         "manga_settings_recommendation": _loads(
             row["manga_settings_recommendation_json"], None
         ),
         "characters": _loads(row["characters_json"], []),
-        "storyboard": canonicalize_storyboard_panel_orders(
-            _loads(row["storyboard_json"], [])
-        ),
+        "storyboard": storyboard,
         "quality_check": _loads(row["quality_check_json"], None),
         "ai_model_settings": _loads(row["ai_model_settings_json"], None),
         "generation_metadata": _loads(row["generation_metadata_json"], []),
@@ -629,7 +636,12 @@ def update_project(
         ),
         "analysis": analysis if update_analysis else current["analysis"],
         "characters": characters if characters is not None else current["characters"],
-        "storyboard": storyboard if storyboard is not None else current["storyboard"],
+        "storyboard": ensure_storyboard_layout(
+            storyboard if storyboard is not None else current["storyboard"],
+            canonicalize_stored_settings(
+                settings if settings is not None else current["settings"]
+            ),
+        ),
         "quality_check": None if clear_quality_check else current.get("quality_check"),
     }
     now = utc_now()

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .services.layout import ensure_storyboard_layout, normalize_importance
 from .services.reading_order import (
     ALLOWED_LANGUAGES,
     LEGACY_DIRECTION_ALIASES,
@@ -20,7 +21,17 @@ ALLOWED_COLOR_MODES = {"bw", "color"}
 ALLOWED_STYLES = {"dynamic", "elegant", "cinematic", "comedy", "minimal", "webtoon"}
 ALLOWED_PACING = {"fast", "balanced", "slow"}
 ALLOWED_DIALOGUE_DENSITY = {"low", "medium", "high"}
-ALLOWED_LAYOUTS = {"hero", "classic", "grid", "wide"}
+ALLOWED_LAYOUTS = {
+    "hero",
+    "classic",
+    "grid",
+    "wide",
+    "drama",
+    "conversation",
+    "action",
+    "psychological",
+    "four_panel",
+}
 ALLOWED_KNOWLEDGE_MODES = {"follow_latest", "pinned"}
 ALLOWED_KNOWLEDGE_SCOPES = {
     "all",
@@ -201,6 +212,9 @@ class PanelPatch(BaseModel):
     sfx: Optional[List[str]] = Field(default=None, max_length=16)
     generation_prompt: Optional[str] = Field(default=None, max_length=4_000)
     crop_mode: Optional[str] = Field(default=None, max_length=20)
+    panel_role: Optional[str] = Field(default=None, max_length=120)
+    scene_type: Optional[str] = Field(default=None, max_length=40)
+    importance: Optional[str] = Field(default=None, max_length=20)
 
     @field_validator("characters", "dialogue", "narration", "sfx")
     @classmethod
@@ -214,6 +228,13 @@ class PanelPatch(BaseModel):
     def valid_crop_mode(cls, value: Optional[str]) -> Optional[str]:
         if value is not None and value not in ALLOWED_CROP_MODES:
             raise ValueError("crop_modeが不正です")
+        return value
+
+    @field_validator("importance")
+    @classmethod
+    def valid_importance(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in {"low", "medium", "high", "critical"}:
+            raise ValueError("importanceが不正です")
         return value
 
 
@@ -452,7 +473,10 @@ def normalize_generation_metadata(value: Any) -> Optional[Dict[str, Any]]:
     return normalized
 
 
-def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
+def normalize_storyboard(
+    value: Any,
+    settings: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """外部AIのネームをページ・コマの編集可能な形へ正規化する。"""
 
     if not isinstance(value, list):
@@ -490,6 +514,9 @@ def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
                 "generation_error": raw_panel.get("generation_error") if isinstance(raw_panel.get("generation_error"), str) else None,
                 "revision": max(0, int(raw_panel.get("revision", 0))) if str(raw_panel.get("revision", 0)).isdigit() else 0,
                 "crop_mode": crop_mode,
+                "panel_role": str(raw_panel.get("panel_role") or raw_panel.get("role") or "")[:120],
+                "scene_type": str(raw_panel.get("scene_type") or "")[:40],
+                "importance": normalize_importance(raw_panel),
                 "knowledge_refs": normalize_knowledge_refs(raw_panel.get("knowledge_refs", [])),
                 "generation_metadata": normalize_generation_metadata(raw_panel.get("generation_metadata")),
             }
@@ -509,7 +536,8 @@ def normalize_storyboard(value: Any) -> List[Dict[str, Any]]:
                 "page_number": page_index + 1,
                 "title": str(item.get("title", f"ページ {page_index + 1}"))[:200],
                 "layout": layout,
+                "page_role": str(item.get("page_role") or "")[:120],
                 "panels": panels,
             }
         )
-    return normalized_pages
+    return ensure_storyboard_layout(normalized_pages, settings or {})

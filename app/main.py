@@ -53,6 +53,7 @@ from .services.knowledge import (
     normalize_knowledge_text,
     retrieve_knowledge_context,
 )
+from .services.layout import repair_storyboard_page
 from .services.model_registry import (
     DEFAULT_AI_MODEL_SETTINGS,
     get_model_availability,
@@ -711,7 +712,7 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             knowledge_context,
         )
         characters = normalize_characters(characters)
-        storyboard = normalize_storyboard(storyboard)
+        storyboard = normalize_storyboard(storyboard, project["settings"])
         valid, validation_message = validate_storyboard(storyboard)
         if not storyboard or not valid:
             raise AIProviderError(
@@ -1422,7 +1423,11 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
     if payload.original_text is not None and not payload.original_text.strip():
         raise HTTPException(status_code=422, detail="本文を空にすることはできません")
     characters = normalize_characters(payload.characters) if payload.characters is not None else None
-    storyboard = normalize_storyboard(payload.storyboard) if payload.storyboard is not None else None
+    storyboard = (
+        normalize_storyboard(payload.storyboard, settings or project.get("settings") or {})
+        if payload.storyboard is not None
+        else None
+    )
     if storyboard is not None:
         valid, message = validate_storyboard(storyboard)
         if not valid:
@@ -1601,7 +1606,7 @@ async def api_generate_storyboard(
             record_provider_generation(project_id, user["id"], provider)
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    storyboard = normalize_storyboard(storyboard)
+    storyboard = normalize_storyboard(storyboard, project["settings"])
     record_provider_generation(project_id, user["id"], provider)
     for page in storyboard:
         for panel in page.get("panels", []):
@@ -1650,6 +1655,27 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
     next_status = "storyboard_ready" if visual_changed and project.get("status") == "completed" else None
     updated = db.update_project(project_id, user["id"], storyboard=project["storyboard"], status=next_status, clear_quality_check=True)
     return {"project": project_view(updated or project)}
+
+
+@app.post("/api/projects/{project_id}/pages/{page_id}/layout/repair")
+async def api_repair_page_layout(project_id: str, page_id: str, user=Depends(current_user)):
+    """Artworkを再生成せず、指定Pageのgeometryと文字配置だけを再計算する。"""
+
+    project = require_project(project_id, user["id"])
+    if not any(str(page.get("id")) == page_id for page in project.get("storyboard", [])):
+        raise HTTPException(status_code=404, detail="ページが見つかりません")
+    storyboard = repair_storyboard_page(
+        project.get("storyboard", []),
+        page_id,
+        project.get("settings") or {},
+    )
+    updated = db.update_project(
+        project_id,
+        user["id"],
+        storyboard=storyboard,
+        clear_quality_check=True,
+    )
+    return {"project": project_view(updated or project), "repaired_page_id": page_id}
 
 
 @app.post("/api/projects/{project_id}/generate")
