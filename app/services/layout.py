@@ -8,17 +8,48 @@ import math
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-from .composition import build_page_composition, composition_quality_issues, panel_shape_for, shape_points
+from .composition import (
+    SEMANTIC_COMPOSITION_VERSION,
+    build_page_composition,
+    composition_quality_issues,
+    semantic_dominant_panel_index,
+    semantic_page_family,
+    semantic_protected_zones,
+    semantic_shape_plan,
+    semantic_text_safe_zones,
+    simplify_composition,
+    panel_shape_for,
+    shape_points,
+)
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 
 
 LAYOUT_VERSION = 2
+SEMANTIC_POLICY_VERSION = 2
 PAGE_SIDE_MARGIN = 0.025
 PAGE_TOP_MARGIN = 0.02
 PAGE_BOTTOM_MARGIN = 0.06
 PANEL_GAP = 0.014
 TEXT_SAFE_MARGIN = 0.06
 TEXT_GAP = 0.012
+
+
+def _requested_composition_version(page: Mapping[str, Any], settings: Mapping[str, Any] | None) -> int:
+    """新規Projectのv3指定と既存v2保存を区別する。"""
+
+    raw_page = page.get("composition_version")
+    raw_composition = page.get("composition") if isinstance(page.get("composition"), Mapping) else {}
+    raw_settings = settings if isinstance(settings, Mapping) else {}
+    for raw in (raw_page, raw_composition.get("composition_version"), raw_settings.get("composition_version")):
+        try:
+            version = int(raw or 0)
+        except (TypeError, ValueError):
+            continue
+        if version >= SEMANTIC_COMPOSITION_VERSION:
+            return SEMANTIC_COMPOSITION_VERSION
+        if version == 2:
+            return 2
+    return 2
 
 TEMPLATE_DRAMA = "template_a"
 TEMPLATE_CONVERSATION = "template_b"
@@ -212,7 +243,12 @@ def _base_pattern(template: str, count: int) -> List[int]:
     return pattern
 
 
-def _rows_for_panels(template: str, panels: Sequence[Mapping[str, Any]]) -> List[List[int]]:
+def _rows_for_panels(
+    template: str,
+    panels: Sequence[Mapping[str, Any]],
+    *,
+    force_dominant: bool = True,
+) -> List[List[int]]:
     count = len(panels)
     pattern = _base_pattern(template, count)
     rows: List[List[int]] = []
@@ -223,7 +259,7 @@ def _rows_for_panels(template: str, panels: Sequence[Mapping[str, Any]]) -> List
     if cursor < count:
         rows.append(list(range(cursor, count)))
 
-    if template == TEMPLATE_FOUR_PANEL or count < 3:
+    if template == TEMPLATE_FOUR_PANEL or count < 3 or not force_dominant:
         return rows
     scores = [panel_importance(panel) for panel in panels]
     highlight = max(range(count), key=lambda index: (scores[index], index))
@@ -305,7 +341,22 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
     payload = {
         "layout": page.get("layout"),
         "page_role": page.get("page_role"),
+        "scene_type": page.get("scene_type"),
+        "emotion": page.get("emotion"),
+        "action_intensity": page.get("action_intensity"),
+        "reveal": page.get("reveal"),
+        "comedy": page.get("comedy"),
+        "climax": page.get("climax"),
+        "layout_family": page.get("layout_family"),
+        "dominant_panel_id": page.get("dominant_panel_id"),
+        "composition_budget": page.get("composition_budget"),
+        "special_emphasis": page.get("special_emphasis"),
+        "bubble_breakout": page.get("bubble_breakout"),
+        "bubble_breakout_reason": page.get("bubble_breakout_reason"),
+        "page_overlay_text": page.get("page_overlay_text"),
+        "page_overlay_reason": page.get("page_overlay_reason"),
         "language": canonicalize_stored_settings(settings).get("language"),
+        "composition_version": settings.get("composition_version") if isinstance(settings, Mapping) else None,
         "panels": [
             {
                 "id": panel.get("id"),
@@ -320,6 +371,15 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
                 "dialogue": panel.get("dialogue"),
                 "narration": panel.get("narration"),
                 "sfx": panel.get("sfx"),
+                "panel_shape": panel.get("panel_shape"),
+                "shape_reason": panel.get("shape_reason"),
+                "breakout_reason": panel.get("breakout_reason"),
+                "semantic_reason": panel.get("semantic_reason"),
+                "character_position": panel.get("character_position"),
+                "subject_position": panel.get("subject_position"),
+                "face_position": panel.get("face_position"),
+                "text_safe_zones": panel.get("text_safe_zones"),
+                "protected_zones": panel.get("protected_zones"),
             }
             for panel in page.get("panels", [])
             if isinstance(panel, Mapping)
@@ -403,7 +463,13 @@ def _protected_zones(panel: Mapping[str, Any]) -> List[Dict[str, float]]:
     return []
 
 
-def place_text_elements(panel: Mapping[str, Any], settings: Mapping[str, Any]) -> Dict[str, Any]:
+def place_text_elements(
+    panel: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    *,
+    reserved_zones: Mapping[str, Mapping[str, float]] | None = None,
+    protected_zones: Sequence[Mapping[str, float]] | None = None,
+) -> Dict[str, Any]:
     """吹き出し・ナレーション・SFXを同じ衝突判定で配置する。"""
 
     language = canonicalize_stored_settings(settings).get("language")
@@ -415,17 +481,21 @@ def place_text_elements(panel: Mapping[str, Any], settings: Mapping[str, Any]) -
 
     placed: List[Dict[str, Any]] = []
     warnings: List[str] = []
-    protected = _protected_zones(panel)
+    protected = list(protected_zones) if protected_zones is not None else _protected_zones(panel)
+    reserved = reserved_zones or {}
     for item_type, order, text in elements:
         width, height, lines = _text_box_size(text, item_type)
-        valid_candidates: List[tuple[float, int, Dict[str, float]]] = []
+        valid_candidates: List[tuple[float, float, int, Dict[str, float]]] = []
         for candidate_index, candidate in enumerate(_candidate_rects(item_type, width, height, language)):
             if any(_rect_intersects(candidate, item, TEXT_GAP) for item in placed):
                 continue
             protected_overlap = sum(_intersection_area(candidate, zone) for zone in protected)
-            valid_candidates.append((protected_overlap, candidate_index, candidate))
+            reserved_zone = reserved.get(item_type)
+            reserved_overlap = _intersection_area(candidate, reserved_zone) if isinstance(reserved_zone, Mapping) else 0.0
+            # 顔保護を第一にしつつ、予約領域に多く重なる候補を優先する。
+            valid_candidates.append((protected_overlap, -reserved_overlap, candidate_index, candidate))
         if valid_candidates:
-            _score, _candidate_index, rect = min(valid_candidates, key=lambda value: (value[0], value[1]))
+            _score, _reserved_score, _candidate_index, rect = min(valid_candidates, key=lambda value: (value[0], value[1], value[2]))
         else:
             rect = {}
             for scale in (0.9, 0.8):
@@ -489,7 +559,15 @@ def reflow_page(
     next_page["panels"] = panels
     template = select_layout_template(next_page)
     language = canonicalize_stored_settings(settings).get("language")
-    rows = _rows_for_panels(template, panels)
+    composition_version = _requested_composition_version(next_page, settings) if enable_composition else 2
+    semantic_mode = composition_version >= SEMANTIC_COMPOSITION_VERSION
+    family = semantic_page_family(next_page) if semantic_mode else ""
+    dominant_index = semantic_dominant_panel_index(next_page) if semantic_mode else None
+    rows = _rows_for_panels(
+        template,
+        panels,
+        force_dominant=not semantic_mode or dominant_index is not None,
+    )
     row_weights = _row_base_weights(template, len(rows))
     for row_index, indices in enumerate(rows):
         importance = max((panel_importance(panels[index]) for index in indices), default=2.0)
@@ -497,17 +575,26 @@ def reflow_page(
     highlighted_rows = [
         row_index
         for row_index, indices in enumerate(rows)
-        if len(indices) == 1 and panel_importance(panels[indices[0]]) >= IMPORTANCE_SCORES["high"]
+        if len(indices) == 1
+        and (
+            not semantic_mode
+            and panel_importance(panels[indices[0]]) >= IMPORTANCE_SCORES["high"]
+            or semantic_mode and dominant_index is not None and dominant_index in indices
+        )
     ]
     for row_index in highlighted_rows:
         other_weights = [weight for index, weight in enumerate(row_weights) if index != row_index]
         if other_weights:
             row_weights[row_index] = max(row_weights[row_index], max(other_weights) * 1.4)
+            if semantic_mode and dominant_index is not None and len(panels) <= 3:
+                # 少コマページで主役が半ページを超えないよう、面積差を保ったまま上限を置く。
+                row_weights[row_index] = min(row_weights[row_index], max(other_weights) * 1.15)
     total_height = 1 - PAGE_TOP_MARGIN - PAGE_BOTTOM_MARGIN - PANEL_GAP * max(0, len(rows) - 1)
     weight_total = sum(row_weights) or 1.0
     row_heights = [total_height * weight / weight_total for weight in row_weights]
 
     geometries: List[Dict[str, Any]] = []
+    angled_used = 0
     y = PAGE_TOP_MARGIN
     for row_index, (indices, row_height) in enumerate(zip(rows, row_heights), start=1):
         boxes = _physical_boxes_for_row(
@@ -532,19 +619,47 @@ def reflow_page(
                 "area": _round(box["width"] * box["height"]),
             }
             if enable_composition:
-                shape = panel_shape_for(template, panels[panel_index], row_index, int(box["column"]), len(panels))
+                if semantic_mode:
+                    shape, shape_reason, angled_used = semantic_shape_plan(
+                        next_page,
+                        panels[panel_index],
+                        panel_index,
+                        len(panels),
+                        dominant_index,
+                        angled_used,
+                    )
+                else:
+                    shape = panel_shape_for(template, panels[panel_index], row_index, int(box["column"]), len(panels))
+                    shape_reason = ""
                 geometry["shape"] = shape
                 geometry["polygon_points"] = shape_points(box, shape)
+                geometry["shape_reason"] = shape_reason
                 geometry["z_index"] = 1 + max(0, round(panel_importance(panels[panel_index]) - 2.0))
                 geometry["bleed"] = bool(next_page.get("page_number", 1) == 1 and len(panels) == 1)
                 geometry["gutter"] = {
                     "type": "diagonal" if shape != "rectangle" else "normal",
                     "width": _round(0.010 if shape != "rectangle" else PANEL_GAP),
                 }
-                geometry["allow_breakout"] = bool(
-                    panel_importance(panels[panel_index]) >= IMPORTANCE_SCORES["high"]
-                    and template in {TEMPLATE_ACTION, TEMPLATE_PSYCHOLOGICAL, TEMPLATE_DRAMA, TEMPLATE_DYNAMIC_7}
-                )
+                geometry["semantic_family"] = family if semantic_mode else ""
+                geometry["dominant"] = bool(semantic_mode and dominant_index == panel_index)
+                if semantic_mode:
+                    geometry["text_safe_zones"] = semantic_text_safe_zones(panels[panel_index], str(language))
+                    geometry["protected_zones"] = semantic_protected_zones(panels[panel_index])
+                    # v3は明示的な理由がある場合だけBreakout候補にする。
+                    geometry["allow_breakout"] = bool(
+                        (geometry["dominant"] or bool(next_page.get("special_emphasis")))
+                        and str(
+                            panels[panel_index].get("breakout_reason")
+                            or panels[panel_index].get("semantic_reason")
+                            or ""
+                        ).strip()
+                        and panel_importance(panels[panel_index]) >= IMPORTANCE_SCORES["high"]
+                    )
+                else:
+                    geometry["allow_breakout"] = bool(
+                        panel_importance(panels[panel_index]) >= IMPORTANCE_SCORES["high"]
+                        and template in {TEMPLATE_ACTION, TEMPLATE_PSYCHOLOGICAL, TEMPLATE_DRAMA, TEMPLATE_DYNAMIC_7}
+                    )
             panels[panel_index]["importance"] = importance
             panels[panel_index]["visual_position"] = {
                 "row": row_index,
@@ -552,7 +667,12 @@ def reflow_page(
                 "column_count": len(indices),
             }
             panels[panel_index]["geometry"] = geometry
-            panels[panel_index]["text_layout"] = place_text_elements(panels[panel_index], settings)
+            panels[panel_index]["text_layout"] = place_text_elements(
+                panels[panel_index],
+                settings,
+                reserved_zones=geometry.get("text_safe_zones") if semantic_mode else None,
+                protected_zones=geometry.get("protected_zones") if semantic_mode else None,
+            )
             geometries.append(geometry)
         y += row_height + PANEL_GAP
 
@@ -567,9 +687,16 @@ def reflow_page(
         # rowsと各rowのindicesは論理読順のままなので、DOM・Export共通の順序を維持できる。
         "panels": geometries,
     }
+    if semantic_mode:
+        next_page["layout_geometry"]["semantic_policy_version"] = SEMANTIC_POLICY_VERSION
     if enable_composition:
-        next_page["composition"] = build_page_composition(next_page, geometries, settings)
-        next_page["composition_version"] = 2
+        next_page["composition"] = build_page_composition(
+            next_page,
+            geometries,
+            settings,
+            composition_version=composition_version,
+        )
+        next_page["composition_version"] = composition_version
     else:
         next_page.pop("composition", None)
         next_page.pop("composition_version", None)
@@ -581,6 +708,18 @@ def _stored_geometry_is_current(page: Mapping[str, Any], settings: Mapping[str, 
     if not isinstance(layout, Mapping) or layout.get("version") != LAYOUT_VERSION:
         return False
     if layout.get("signature") != _page_signature(page, settings):
+        return False
+    requested_version = _requested_composition_version(page, settings)
+    stored_composition = page.get("composition") if isinstance(page.get("composition"), Mapping) else {}
+    try:
+        stored_version = int(stored_composition.get("composition_version", page.get("composition_version", 0)) or 0)
+    except (TypeError, ValueError):
+        stored_version = 0
+    # 新規Projectでv3を指定した場合だけ、未作成のCompositionを計算する。
+    # 既存v2はsettings更新やProject読込だけでは自動変更しない。
+    if requested_version >= SEMANTIC_COMPOSITION_VERSION and stored_version not in {SEMANTIC_COMPOSITION_VERSION}:
+        return False
+    if requested_version >= SEMANTIC_COMPOSITION_VERSION and layout.get("semantic_policy_version") != SEMANTIC_POLICY_VERSION:
         return False
     panels = page.get("panels", [])
     return bool(panels) and all(
@@ -611,6 +750,10 @@ def ensure_storyboard_layout(
     if not isinstance(storyboard, list):
         return []
     canonical_settings = canonicalize_stored_settings(settings)
+    if not enable_composition:
+        # DB読込・migrationでは保存済みv1/v2/v3をそのまま返す。ここで再flowすると、
+        # 旧形式のsignature差異だけで既存ArtworkやCompositionが消えるため。
+        return [deepcopy(dict(page)) for page in storyboard if isinstance(page, Mapping)]
     return [
         ensure_page_layout(page, canonical_settings, enable_composition=enable_composition)
         for page in storyboard
@@ -632,7 +775,13 @@ def repair_storyboard_page(
     for page in storyboard:
         if not isinstance(page, Mapping):
             continue
-        result.append(reflow_page(page, canonical_settings) if str(page.get("id")) == str(page_id) else deepcopy(dict(page)))
+        if str(page.get("id")) == str(page_id):
+            repaired = reflow_page(page, canonical_settings)
+            if int(repaired.get("composition_version", 0) or 0) >= SEMANTIC_COMPOSITION_VERSION and composition_quality_issues(repaired):
+                repaired = simplify_composition(repaired)
+            result.append(repaired)
+        else:
+            result.append(deepcopy(dict(page)))
     return result
 
 

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .services.composition import COMPOSITION_VERSION
+from .services.composition import COMPOSITION_VERSION, SEMANTIC_COMPOSITION_VERSION
 from .services.layout import ensure_storyboard_layout, normalize_importance
 from .services.reading_order import (
     ALLOWED_LANGUAGES,
@@ -84,6 +84,8 @@ class SettingsPayload(BaseModel):
     target_audience: str = Field(default="一般読者", max_length=80)
     pacing: str = "balanced"
     dialogue_density: str = "medium"
+    # 新規Projectのv3選択を保存する。Noneは既存v2設定を意味する。
+    composition_version: Optional[int] = Field(default=None, ge=COMPOSITION_VERSION, le=SEMANTIC_COMPOSITION_VERSION)
 
     @field_validator("language")
     @classmethod
@@ -224,6 +226,14 @@ class PanelPatch(BaseModel):
     crop_anchor_x: Optional[str] = Field(default=None, max_length=20)
     crop_anchor_y: Optional[str] = Field(default=None, max_length=20)
     allow_breakout: Optional[bool] = None
+    shape_reason: Optional[str] = Field(default=None, max_length=160)
+    breakout_reason: Optional[str] = Field(default=None, max_length=160)
+    semantic_reason: Optional[str] = Field(default=None, max_length=160)
+    character_position: Optional[str] = Field(default=None, max_length=80)
+    subject_position: Optional[str] = Field(default=None, max_length=80)
+    face_position: Optional[str] = Field(default=None, max_length=80)
+    text_safe_zones: Optional[Dict[str, Dict[str, float]]] = None
+    protected_zones: Optional[List[Dict[str, float]]] = None
 
     @field_validator("characters", "dialogue", "narration", "sfx")
     @classmethod
@@ -540,7 +550,15 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
         return None
     raw_background = value.get("background") if isinstance(value.get("background"), dict) else {}
     result: Dict[str, Any] = {
-        "composition_version": COMPOSITION_VERSION,
+        "composition_version": max(COMPOSITION_VERSION, min(SEMANTIC_COMPOSITION_VERSION, version)),
+        "policy": "semantic" if version >= SEMANTIC_COMPOSITION_VERSION else "legacy",
+        "semantic_family": str(value.get("semantic_family", ""))[:40],
+        "effect_budget": {
+            str(key)[:40]: max(0, min(3, int(item)))
+            for key, item in (value.get("effect_budget") or {}).items()
+            if isinstance(key, str) and str(item).lstrip("-").isdigit()
+        } if isinstance(value.get("effect_budget"), dict) else {},
+        "dominant_panel_id": str(value.get("dominant_panel_id", ""))[:120] if value.get("dominant_panel_id") else None,
         "size": [900, 1200],
         "safe_margin": _normalized_ratio(value.get("safe_margin"), 0.04),
         "background": {"color": str(raw_background.get("color", "#f5f3eb"))[:20]},
@@ -561,20 +579,28 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
                         points.append([_normalized_ratio(point[0]), _normalized_ratio(point[1])])
             shape_value = str(raw.get("shape", "rectangle"))
             gutter_value = raw.get("gutter") if isinstance(raw.get("gutter"), dict) else {}
+            panel_width = _normalized_ratio(raw.get("width"), 0.2)
+            panel_height = _normalized_ratio(raw.get("height"), 0.2)
             panel = {
                 "panel_id": str(raw.get("panel_id", ""))[:120],
                 "x": _normalized_ratio(raw.get("x")),
                 "y": _normalized_ratio(raw.get("y")),
-                "width": _normalized_ratio(raw.get("width"), 0.2),
-                "height": _normalized_ratio(raw.get("height"), 0.2),
+                "width": panel_width,
+                "height": panel_height,
+                "area": _normalized_ratio(raw.get("area"), panel_width * panel_height),
                 "polygon_points": points,
                 "shape": shape_value if shape_value in ALLOWED_PANEL_SHAPES else "rectangle",
+                "shape_reason": str(raw.get("shape_reason", ""))[:160],
+                "semantic_family": str(raw.get("semantic_family", ""))[:40],
+                "dominant": bool(raw.get("dominant", False)),
                 "z_index": _bounded_int(raw.get("z_index", 1), 1, 0, 20),
                 "bleed": bool(raw.get("bleed", False)),
                 "gutter": {"type": str(gutter_value.get("type", "normal"))[:20], "width": _normalized_ratio(gutter_value.get("width"), 0.014)},
                 "reading_order": _bounded_int(raw.get("reading_order", 1), 1, 1, 128),
                 "importance": str(raw.get("importance", "medium"))[:20],
                 "allow_breakout": bool(raw.get("allow_breakout", False)),
+                "text_safe_zones": raw.get("text_safe_zones") if isinstance(raw.get("text_safe_zones"), dict) else {},
+                "protected_zones": raw.get("protected_zones") if isinstance(raw.get("protected_zones"), list) else [],
                 "crop_anchor_x": str(raw.get("crop_anchor_x", "center")) if raw.get("crop_anchor_x") in {"left", "center", "right"} else "center",
                 "crop_anchor_y": str(raw.get("crop_anchor_y", "middle")) if raw.get("crop_anchor_y") in {"top", "middle", "bottom"} else "middle",
                 "artwork_coverage_target": _normalized_ratio(raw.get("artwork_coverage_target"), 0.95),
@@ -588,7 +614,7 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
         for raw in source[:limit]:
             if not isinstance(raw, dict):
                 continue
-            item = {field: raw.get(field) for field in ("id", "panel_id", "source_panel_id", "source_item_id", "type", "subject_id", "text", "clip_shape") if raw.get(field) is not None}
+            item = {field: raw.get(field) for field in ("id", "panel_id", "source_panel_id", "source_item_id", "type", "subject_id", "text", "clip_shape", "reason", "max_extension", "allowed_overlap_regions") if raw.get(field) is not None}
             item.update({
                 "x": _normalized_ratio(raw.get("x")),
                 "y": _normalized_ratio(raw.get("y")),
@@ -661,6 +687,14 @@ def normalize_storyboard(
                 "crop_anchor_y": str(raw_panel.get("crop_anchor_y", "middle")) if raw_panel.get("crop_anchor_y") in {"top", "middle", "bottom"} else "middle",
                 "allow_breakout": bool(raw_panel.get("allow_breakout", False)),
                 "intentional_whitespace": bool(raw_panel.get("intentional_whitespace", False)),
+                "shape_reason": str(raw_panel.get("shape_reason") or "")[:160],
+                "breakout_reason": str(raw_panel.get("breakout_reason") or "")[:160],
+                "semantic_reason": str(raw_panel.get("semantic_reason") or "")[:160],
+                "character_position": str(raw_panel.get("character_position") or "")[:80],
+                "subject_position": str(raw_panel.get("subject_position") or "")[:80],
+                "face_position": str(raw_panel.get("face_position") or "")[:80],
+                "text_safe_zones": raw_panel.get("text_safe_zones") if isinstance(raw_panel.get("text_safe_zones"), dict) else {},
+                "protected_zones": raw_panel.get("protected_zones") if isinstance(raw_panel.get("protected_zones"), list) else [],
             }
             for field in list_fields:
                 source = raw_panel.get(field, [])
@@ -679,10 +713,27 @@ def normalize_storyboard(
                 "title": str(item.get("title", f"ページ {page_index + 1}"))[:200],
                 "layout": layout,
                 "page_role": str(item.get("page_role") or "")[:120],
+                "scene_type": str(item.get("scene_type") or "")[:80],
+                "emotion": str(item.get("emotion") or "")[:240],
+                "action_intensity": str(item.get("action_intensity") or "")[:80],
+                "reveal": bool(item.get("reveal", False)),
+                "comedy": bool(item.get("comedy", False)),
+                "climax": bool(item.get("climax", False)),
+                "layout_family": str(item.get("layout_family") or "")[:40],
+                "dominant_panel_id": str(item.get("dominant_panel_id") or "")[:120],
+                "composition_budget": item.get("composition_budget") if isinstance(item.get("composition_budget"), dict) else {},
+                "special_emphasis": bool(item.get("special_emphasis", False)),
+                "bubble_breakout": bool(item.get("bubble_breakout", False)),
+                "bubble_breakout_reason": str(item.get("bubble_breakout_reason") or "")[:160],
+                "page_overlay_text": str(item.get("page_overlay_text") or "")[:120],
+                "page_overlay_reason": str(item.get("page_overlay_reason") or "")[:160],
                 "panels": panels,
                 "composition": normalized_composition,
             }
         if normalized_composition:
-            normalized_page["composition_version"] = COMPOSITION_VERSION
+            try:
+                normalized_page["composition_version"] = int(normalized_composition.get("composition_version", COMPOSITION_VERSION))
+            except (TypeError, ValueError):
+                normalized_page["composition_version"] = COMPOSITION_VERSION
         normalized_pages.append(normalized_page)
     return ensure_storyboard_layout(normalized_pages, settings or {})

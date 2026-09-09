@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List
 
 from .. import db
 from ..schemas import ALLOWED_KNOWLEDGE_SCOPES
+from .composition import composition_quality_score
 from .layout import storyboard_layout_issues
 from .reading_order import reading_order_context, reading_order_issues
 
@@ -373,6 +374,22 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
 
     layout_issues = storyboard_layout_issues(project)
     issues.extend(layout_issues)
+    composition_scores = []
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("composition"), dict):
+            continue
+        try:
+            composition_version = int(page["composition"].get("composition_version", 0) or 0)
+        except (TypeError, ValueError):
+            composition_version = 0
+        if composition_version >= 3:
+            composition_scores.append(composition_quality_score(page))
+    composition_quality = {
+        "pages": composition_scores,
+        "average_readability": round(sum(item["readability"] for item in composition_scores) / len(composition_scores), 1) if composition_scores else None,
+        "average_visual_hierarchy": round(sum(item["visual_hierarchy"] for item in composition_scores) / len(composition_scores), 1) if composition_scores else None,
+        "issue_count": sum(int(item.get("issue_count", 0) or 0) for item in composition_scores),
+    }
     geometry_errors = [
         item
         for item in layout_issues
@@ -441,6 +458,7 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
         "knowledge_refs": refs,
         "knowledge_scope": context.get("scope"),
         "knowledge_resolution_status": resolution_status,
+        "composition_quality": composition_quality,
         "language": order_context["language"],
         "reading_direction": order_context["reading_direction"],
     }

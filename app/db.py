@@ -35,6 +35,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "target_audience": "一般読者",
     "pacing": "balanced",
     "dialogue_density": "medium",
+    # 新規Projectだけv3を既定にする。既存設定にない場合はv2を維持する。
+    "composition_version": 3,
 }
 
 

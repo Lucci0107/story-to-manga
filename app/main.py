@@ -1853,7 +1853,23 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
     elif visual_changed:
         panel["generation_status"] = "not_started"
         panel["generation_error"] = None
-    if any(key in values for key in {"panel_shape", "crop_anchor_x", "crop_anchor_y", "allow_breakout"}):
+    if any(
+        key in values
+        for key in {
+            "panel_shape",
+            "shape_reason",
+            "breakout_reason",
+            "semantic_reason",
+            "crop_anchor_x",
+            "crop_anchor_y",
+            "allow_breakout",
+            "character_position",
+            "subject_position",
+            "face_position",
+            "text_safe_zones",
+            "protected_zones",
+        }
+    ):
         project["storyboard"] = [
             reflow_page(page, project.get("settings") or {}) if str(page.get("id")) == str(_page.get("id")) else page
             for page in project.get("storyboard", [])

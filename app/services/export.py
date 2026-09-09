@@ -530,6 +530,24 @@ def _render_composition_png(
         points = normalize_polygon(geometry.get("polygon_points"), geometry)
         draw.line([(round(point[0] * width), round(point[1] * height)) for point in [*points, points[0]]], fill=(24, 25, 23, 255), width=max(2, round(width * 0.003)))
 
+    # Breakoutは元Artworkを再利用し、画像生成や外部サービスを追加で呼ばない。
+    # 文字が人物の前景に来るよう、BreakoutをPanel内の文字より先に描く。
+    for breakout in composition.get("breakouts", []):
+        if not isinstance(breakout, Mapping) or not breakout.get("enabled", True):
+            continue
+        panel = panel_lookup.get(str(breakout.get("source_panel_id") or breakout.get("panel_id")), {})
+        bx = round(float(breakout.get("x", 0)) * width)
+        by = round(float(breakout.get("y", 0)) * height)
+        bw = max(1, round(float(breakout.get("width", 0.2)) * width))
+        bh = max(1, round(float(breakout.get("height", 0.3)) * height))
+        asset = _pil_panel_image(project, panel, bw, bh, storage, crop_anchor_x="center", crop_anchor_y="top").convert("RGBA")
+        mask = Image.new("L", (bw, bh), 0)
+        if str(breakout.get("clip_shape", "ellipse")) == "ellipse":
+            ImageDraw.Draw(mask).ellipse((0, 0, bw - 1, bh - 1), fill=255)
+        else:
+            ImageDraw.Draw(mask).rectangle((0, 0, bw, bh), fill=255)
+        image.paste(asset, (bx, by), mask)
+
     moved = moved_text_item_set(composition)
     for geometry in geometry_lookup.values():
         panel = panel_lookup.get(str(geometry.get("panel_id")), {})
@@ -547,23 +565,6 @@ def _render_composition_png(
                 max(12, round(float(item.get("width", 0.3)) * box_width)),
                 max(10, round(float(item.get("height", 0.15)) * box_height)),
             )
-
-    # Breakoutは元Artworkを再利用し、画像生成や外部サービスを追加で呼ばない。
-    for breakout in composition.get("breakouts", []):
-        if not isinstance(breakout, Mapping) or not breakout.get("enabled", True):
-            continue
-        panel = panel_lookup.get(str(breakout.get("source_panel_id") or breakout.get("panel_id")), {})
-        bx = round(float(breakout.get("x", 0)) * width)
-        by = round(float(breakout.get("y", 0)) * height)
-        bw = max(1, round(float(breakout.get("width", 0.2)) * width))
-        bh = max(1, round(float(breakout.get("height", 0.3)) * height))
-        asset = _pil_panel_image(project, panel, bw, bh, storage, crop_anchor_x="center", crop_anchor_y="top").convert("RGBA")
-        mask = Image.new("L", (bw, bh), 0)
-        if str(breakout.get("clip_shape", "ellipse")) == "ellipse":
-            ImageDraw.Draw(mask).ellipse((0, 0, bw - 1, bh - 1), fill=255)
-        else:
-            ImageDraw.Draw(mask).rectangle((0, 0, bw, bh), fill=255)
-        image.paste(asset, (bx, by), mask)
 
     for overlay in composition.get("overlays", []):
         if isinstance(overlay, Mapping):
