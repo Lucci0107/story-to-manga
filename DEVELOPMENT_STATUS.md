@@ -38,6 +38,8 @@
 - Preview、PNG、PDF、ZIPは同じPageCompositionをsource of truthとして描画し、通常コマのletterboxを作らず、PDFは合成画像と検索可能な日本語テキストを併記します。画像再生成や外部画像サービス追加は行いません。
 - 画像生成前に確定したPanel shape、target aspect ratio、crop anchor、safe zone、breakout intentをPromptへ渡し、OpenAI Images利用時はwide／portrait／squareの近い生成サイズを選択します。
 - PageComposition v2の回帰テスト（polygon、cover crop、breakout、page overlay、RTL/LTR、legacy互換、出力同一性、coverage／uniform QA）を追加しました。
+- Character Bible生成Jobを永続化し、外部AI経路をqueued→processing→completed/failedへ収束させました。Project保存とCharacter Job完了／失敗を同一transactionで確定し、入力検証・安全なエラー分類・stale／中断復旧・同一Projectの重複Job抑止を実装しています。
+- Character画面は202応答のJob IDを受け取り、単一poller、再読み込み後のserver state復元、通信状態不明時の非破壊導線、失敗時Retry、完了／失敗後のボタン・次工程同期を行います。Demo providerの既存同期互換とFollow-upのProject状態は維持しています。
 - 物語解析、漫画化設定、キャラクター、ネームの編集と永続化
 - ページ・コマの追加、削除、並び替え、レイアウト変更
 - コマ単位の生成Job、状態表示、再試行、重複リクエスト抑止
@@ -160,9 +162,16 @@
 - Manga layout engineの初回コミット`9c68c2c`はGitHub Actions run `34294142746`、読順QA整合修正`fe214e5`はrun `34294923564`でsuccess。両方ともCI通過後にRenderへ自動反映され、最終`/api/health`はHTTP 200です。
 - Manga layout engineのProduction Browser QA：既存の8ページ／31コマ／生成済み画像2枚を保持したまま、layout version 2、不均等面積、日本語RTL、文字要素collision 0、overflow 0、PDF／ZIP生成、Processing Dialogの開始・終了を確認。再実行したKnowledge-aware QAでは、コマ読順、視覚的階層、吹き出し・ナレーション衝突がすべてOKとなりました。390pxでは横overflowなし、console error/warning 0件です。画像生成は追加実行していません。
 
+## Character Bible Job 最終検証
+
+- `pytest`: 143 passed。Character Jobの成功／失敗／構造化出力検証、例外分類、重複防止、stale／中断復旧、Retry、HTTP 202、task-specific timeout、既存Project状態保持を含みます。`node --check static/js/app.js`、`python -m compileall app`、`pip check`、`git diff --check`も成功しました。
+- ローカル隔離Demoで、Character画面の生成開始（Processing Dialog）、queued／processing表示、再読み込み後のJob復元、stale／中断時のRetry表示、再試行成功後のCharacterカード・次工程復帰を確認しました。既存Characterは保持され、画像生成・外部有料操作は行っていません。consoleログは空でした。
+- 本番既存Project「ある外科医の思考 v2」を認証済みセッションで読み取り専用確認し、Character画面の再読み込み後に旧「人物設定を作成中…」が残らず、再実行可能な「生成する」へ収束することを確認しました。Projectの生成・削除・上書き、Character再生成は行っていません。既存のDesktop／390px・Light／Dark・console 0回帰確認は維持しています。
+- コミット `6a3bcdd` を `main` へpushし、GitHub Actions run `34327735049`（pytest／compile／JavaScript syntax／pip check）がsuccess。Render自動deploy `dep-dagh9iss728c73d5tebg`もsuccess、Production `/api/health`はHTTP 200、`scripts/production_smoke.py`（health／login／CSS／JS）は全項目OKです。
+
 ## In Progress
 
-- なし。PageComposition v2の実装、ローカル回帰、CI、Render自動deploy、Production Browser QAを完了しました。既存Projectと`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更していません。
+- なし。PageComposition v2およびCharacter Bible Job lifecycleの実装、ローカル回帰、CI、Render自動deploy、Production Browser QAを完了しました。既存Projectと`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更していません。
 
 ## PageComposition v2 最終検証
 
@@ -245,6 +254,7 @@
 
 - Panel Job状態不明修正コミット: `b013bde`、GitHub Actions `34266695670`（success）、Render `dep-dag5o6gae00c738g456g`（success）
 - Panel Job状態不明修正後のProduction smokeはhealth/login/CSS/JavaScript全項目HTTP 200。既存本番Projectの31コマ／生成済み2枚はreload後も保持され、追加の画像生成は行っていません。
+- Character Bible Job lifecycle修正コミット: `6a3bcdd`、GitHub Actions run `34327735049`（success）、Render deployment `dep-dagh9iss728c73d5tebg`（success）。本番health 200、Production smoke（health／login／CSS／JavaScript）全項目成功。認証済み既存Projectの再読み込みでCharacter画面がstuck表示から再実行可能状態へ復帰することを読み取り専用で確認しました。
 
 ## 次回セッションの確認
 
