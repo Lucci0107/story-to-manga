@@ -24,6 +24,7 @@ from app.services.layout import (
     page_layout_issues,
     repair_storyboard_page,
 )
+from app.services.reading_order import reading_order_issues
 from app.services.storage import LocalFileStorage
 
 
@@ -169,6 +170,19 @@ def test_preview_and_export_use_same_persisted_geometry() -> None:
     largest_export = max(range(len(boxes)), key=lambda index: boxes[index][2] * boxes[index][3])
     assert largest_geometry == largest_export
     assert prepared["layout_version"] == 2
+
+
+def test_reading_order_qa_uses_saved_uneven_geometry() -> None:
+    for language in ("ja", "en"):
+        page = ensure_page_layout(_page("drama", 6, important=5), {"language": language})
+        project = {"settings": {"language": language}, "storyboard": [page]}
+        keys = {issue["key"] for issue in reading_order_issues(project)}
+        assert not any(key.startswith("panel-position-") for key in keys)
+
+    broken = ensure_page_layout(_page("conversation", 4), {"language": "ja"})
+    broken["panels"][0]["visual_position"]["column"] = 1
+    broken_project = {"settings": {"language": "ja"}, "storyboard": [broken]}
+    assert "panel-position-1" in {issue["key"] for issue in reading_order_issues(broken_project)}
 
 
 def test_reload_preserves_layout_signature() -> None:

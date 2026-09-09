@@ -141,8 +141,9 @@
 - Panel Job状態不明修正のローカル回帰：`pytest` 96 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。隔離Demo環境で16コマの一括生成について、中央Dialog、実際のgenerating/waiting集計、terminal cleanup、reload後の生成済み保持、Dark theme、孤児Panelのserver-side Retry可能化を確認しました。実AI／追加画像生成は行っていません。
 - Panel Job状態不明修正の初回本番検証：GitHub Actions run `34266695670`、Render deployment `dep-dag5o6gae00c738g456g`がsuccess。Production smokeのhealth/login/CSS/JavaScriptは全項目HTTP 200で、更新済み`app.js`の状態不明・再確認導線が本番配信されていることを確認しました。
 - Panel Job状態不明修正のProduction Browser QA：既存の本番Project（31コマ、生成済み2枚）を変更・追加生成せずに、生成画面の表示、Dark theme、reload後の31コマ／2枚保持、Dialog非表示、画像revision保持を確認しました。追加の画像生成は行っていません。
-- Manga layout engineのローカル回帰：`pytest` 111 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。標準ドラマ／会話／アクション／心理／4コマのgeometry、重要コマ面積、RTL/LTR、保存再読み、Page単位再配置、QA検出、PDF日本語フォント埋め込み、ZIP合成ページを検証。
+- Manga layout engineのローカル回帰：`pytest` 112 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。標準ドラマ／会話／アクション／心理／4コマのgeometry、重要コマ面積、RTL/LTR、保存再読み、Page単位再配置、QA検出、PDF日本語フォント埋め込み、ZIP合成ページを検証。
 - Manga layout engineのローカルBrowser QA：6コマの不均等配置、重要コマ32.3%、日本語RTL／English LTR、文字要素collision 0、長文overflow 0、Light/Dark、狭幅Previewの1列化、console error 0を確認。PDFと900×1,200pxのZIPページ画像を実際に書き出し、同一geometryと読みやすい文字配置を確認。PDFはPopplerによる画像化と日本語テキスト抽出にも成功。画像AI生成は行っていません。
+- Production QAで旧均等2列グリッド基準の読順検査が新しい不均等geometryを誤検知することを確認し、layout version 2では保存済み行構成と行内RTL/LTR列順を検証する方式へ局所修正。壊れた列順は引き続き検出する回帰テストを追加しました。
 
 ## In Progress
 

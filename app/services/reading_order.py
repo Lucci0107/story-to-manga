@@ -202,6 +202,54 @@ def canonicalize_storyboard_panel_orders(value: Any) -> List[Dict[str, Any]]:
     return result
 
 
+def _saved_layout_position_errors(
+    page: Mapping[str, Any],
+    panels: List[Any],
+    language: str,
+) -> Optional[List[int]]:
+    """新レイアウトの行内物理列が論理読順と一致するかを返す。
+
+    layout_version 2以降は不均等な行構成を持つため、旧2列グリッドの計算結果とは
+    比較しない。論理Panel順の行進行と、各行内のLTR／RTL列順を検証する。
+    """
+
+    layout = page.get("layout_geometry")
+    if not isinstance(layout, Mapping):
+        return None
+    try:
+        layout_version = int(layout.get("version", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if layout_version < 2:
+        return None
+    groups: List[tuple[int, List[tuple[int, int, int]]]] = []
+    errors: List[int] = []
+    for index, panel in enumerate(panels):
+        if not isinstance(panel, Mapping):
+            errors.append(index)
+            continue
+        position = panel.get("visual_position")
+        try:
+            row = int(position.get("row", -1)) if isinstance(position, Mapping) else -1
+            column = int(position.get("column", -1)) if isinstance(position, Mapping) else -1
+            column_count = int(position.get("column_count", -1)) if isinstance(position, Mapping) else -1
+        except (TypeError, ValueError):
+            errors.append(index)
+            continue
+        if not groups or groups[-1][0] != row:
+            groups.append((row, []))
+        groups[-1][1].append((index, column, column_count))
+
+    for expected_row, (actual_row, entries) in enumerate(groups, start=1):
+        expected_columns = list(range(1, len(entries) + 1))
+        if language == LANGUAGE_JA:
+            expected_columns.reverse()
+        for (index, column, column_count), expected_column in zip(entries, expected_columns):
+            if actual_row != expected_row or column != expected_column or column_count != len(entries):
+                errors.append(index)
+    return sorted(set(errors))
+
+
 def reading_order_issues(project: Mapping[str, Any]) -> List[Dict[str, str]]:
     """Project内の方向・コマ順・吹き出し順の不整合を検出する。"""
 
@@ -247,25 +295,35 @@ def reading_order_issues(project: Mapping[str, Any]) -> List[Dict[str, str]]:
                     "detail": "Panel.orderは実際の読者の読順（1始まり）で連続している必要があります。",
                 }
             )
+        saved_position_errors = _saved_layout_position_errors(page, panels, language)
+        if saved_position_errors:
+            issues.append(
+                {
+                    "key": f"panel-position-{page.get('page_number', '')}",
+                    "label": f"ページ{page.get('page_number', '')}のコマ配置",
+                    "detail": "視覚上のコマ位置がProjectの言語別読順と一致していません。",
+                }
+            )
         for index, panel in enumerate(panels):
             if not isinstance(panel, Mapping):
                 continue
-            position = panel.get("visual_position")
-            expected_position = panel_visual_position(index, len(panels), canonical_settings)
-            if isinstance(position, Mapping):
-                try:
-                    actual_column = int(position.get("column", -1))
-                    actual_row = int(position.get("row", -1))
-                except (TypeError, ValueError):
-                    actual_column = actual_row = -1
-                if actual_column != expected_position["column"] or actual_row != expected_position["row"]:
-                    issues.append(
-                        {
-                            "key": f"panel-position-{page.get('page_number', '')}-{index + 1}",
-                            "label": f"ページ{page.get('page_number', '')}のコマ配置",
-                            "detail": "視覚上のコマ位置がProjectの言語別読順と一致していません。",
-                        }
-                    )
+            if saved_position_errors is None:
+                position = panel.get("visual_position")
+                expected_position = panel_visual_position(index, len(panels), canonical_settings)
+                if isinstance(position, Mapping):
+                    try:
+                        actual_column = int(position.get("column", -1))
+                        actual_row = int(position.get("row", -1))
+                    except (TypeError, ValueError):
+                        actual_column = actual_row = -1
+                    if actual_column != expected_position["column"] or actual_row != expected_position["row"]:
+                        issues.append(
+                            {
+                                "key": f"panel-position-{page.get('page_number', '')}-{index + 1}",
+                                "label": f"ページ{page.get('page_number', '')}のコマ配置",
+                                "detail": "視覚上のコマ位置がProjectの言語別読順と一致していません。",
+                            }
+                        )
             for order_key, content_key, label in (
                 ("bubble_order", "dialogue", "吹き出し順"),
                 ("narration_order", "narration", "ナレーション順"),
