@@ -11,11 +11,13 @@
 - 既存PageComposition v2を保持したまま、新規Projectの既定をv3へ分離しました。矩形を標準とし、面積差・主役コマ・ページの意味（dialogue / action / comedy / psychological / establishing / climax）から構成を決定します。意味的理由のない台形・斜め境界・large bleedは矩形へ戻し、静かな会話／心理／導入ページの装飾を抑制します。
 - v3 Compositionへ、effect budget、dominant panel、shape reason、text safe zone、protected face zone、crop anchor、breakout reason／max extension、ページOverlay理由を保存しました。Breakoutは既定OFF、通常0〜1件、特殊ページでも最大2件に制限し、人物は隣接コマの保護顔領域・文字・セーフマージンと衝突しないよう検査します。吹き出しは自コマ内を優先し、明示された演出時だけgutterへ移します。
 - 画像生成Promptへsemantic family、Panel shape／理由、target aspect ratio、crop anchor、文字予約領域、顔を置かない領域を注入しました。Rendererはcover cropでPanelを満たし、ページ背景→Artwork→border→Breakout→文字→ページOverlayの共有レイヤー順で描画します。Preview／PNG／PDF／ZIPは同じCompositionを利用し、Breakoutがセリフを覆わないことを保証します。
+- Previewのv2/v3ではPanel相対の吹き出し・ナレーション・SFXをページ共通の文字レイヤーへ変換し、Breakoutの後・文字の前面へ描画するDOM順を固定しました。`moved_text_items`は重複描画せず、サーバー側PNG／PDF／ZIPとのレイヤー順をそろえています。静かなページのeffect budgetは指定値で過剰拡張できず、特別演出を明示したAction／Comedy／Climaxのみcharacter Breakoutを最大2件まで許可します。
 - QAへ読みやすさ・視覚階層・顔可視性・文字衝突・面積差・装飾密度の決定的スコアと、過剰変形／過剰越境／顔・文字衝突の検出・保守的簡略化を追加しました。既存v2は暗黙にv3へ更新せず、Artwork再生成も行いません。
-- v3回帰テストを追加し、既存を含む`pytest`: **162 passed**、`node --check static/js/app.js`、`python -m compileall -q app`、`git diff --check`が成功しました。ローカル新規ProjectのPreviewでComposition v3、心理ページの矩形主体・不均等面積、アクションページの意味付けされた斜め要素、RTL/LTR、Preview/PDF/ZIP同一PNGを確認しました。画像生成APIは呼び出していません。
+- v3回帰テストを追加し、既存を含む`pytest`: **163 passed**、`node --check static/js/app.js`、`python -m compileall -q app`、`git diff --check`が成功しました。ローカル新規ProjectのPreviewでComposition v3、心理ページの矩形主体・不均等面積、アクションページの意味付けされた斜め要素、RTL/LTR、Preview/PDF/ZIP同一PNGを確認しました。画像生成APIは呼び出していません。
 - 本番は既存Project「ある外科医の思考 v2」を読み取り専用で再読み込みし、4ページ／19コマ／19枚生成済みを維持したままPreview／QA／Exportを確認しました。既存v2のpolygon／Breakoutは保持し、新v3への自動再計算は行っていません。iPhone SE（375×667）相当、Desktop、Light／Darkを確認し、DevTools Consoleをクリア後に再読み込みして0 messagesでした。
 - 初回本番確認で検出した処理ダイアログ終了時の`aria-hidden`フォーカス警告は、復帰フォーカスを先に移す局所修正（`4084927`）で解消しました。最終CI `34359422531`とRender deployment `dep-dagm7tijnfac73fbk1o0`はsuccess、`/api/health`とProduction smoke（health／login／CSS／JavaScript）は全項目HTTP 200です。
-- 実装コミットは`c39e5c1`、フォーカス修正コミットは`4084927`です。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`はユーザー所有の未追跡データとして今回も変更・削除・commitしていません。
+- 文字レイヤー修正コミット`ee6ac39`のGitHub Actions run `34360955686`はsuccess。CI後のRender切替中に一時502を観測しましたが、復旧後の`/api/health`はHTTP 200、配信`app.js`へ`compositionPanelTextMarkup`が反映されています。本番既存Projectは読み取り専用で再確認し、Previewはページ共通文字層、PDF／ZIPは処理完了、推奨Knowledge付き新規Project画面、iPhone SE相当／Desktop、Light／Dark、Console 0 messagesを確認しました。
+- 実装コミットは`c39e5c1`、フォーカス修正コミットは`4084927`、文字レイヤー／保守的budget修正は`ee6ac39`です。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`はユーザー所有の未追跡データとして今回も変更・削除・commitしていません。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
