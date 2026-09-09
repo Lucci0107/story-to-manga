@@ -110,6 +110,7 @@ def init_db() -> None:
                 job_type TEXT NOT NULL,
                 status TEXT NOT NULL,
                 error TEXT,
+                error_category TEXT,
                 idempotency_key TEXT NOT NULL,
                 batch_id TEXT,
                 created_at TEXT NOT NULL,
@@ -227,6 +228,8 @@ def init_db() -> None:
             conn.execute(
                 "UPDATE generation_jobs SET updated_at = COALESCE(completed_at, created_at)"
             )
+        if "error_category" not in job_columns:
+            conn.execute("ALTER TABLE generation_jobs ADD COLUMN error_category TEXT")
         # Process再起動でBackgroundTasksは復元できないため、取り残したJobとPanelを
         # 失敗状態へ揃え、UIから個別に再試行できるようにする。
         interrupted_message = "処理が中断されました。再試行してください"
@@ -259,7 +262,9 @@ def init_db() -> None:
                         panel["generation_status"] = "failed"
                         panel["generation_error"] = interrupted_message
             next_step = (
-                "storyboard"
+                "characters"
+                if any(job["job_type"] == "character" for job in jobs)
+                else "storyboard"
                 if any(job["job_type"] == "storyboard" for job in jobs)
                 else project_row["current_step"]
             )
@@ -274,7 +279,7 @@ def init_db() -> None:
         conn.execute(
             """
             UPDATE generation_jobs
-            SET status = 'failed', error = ?, completed_at = ?, updated_at = ?
+            SET status = 'failed', error = ?, error_category = 'interrupted', completed_at = ?, updated_at = ?
             WHERE status IN ('queued', 'processing')
             """,
             (interrupted_message, utc_now(), utc_now()),
@@ -904,14 +909,17 @@ def get_generation_job(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def update_generation_job(
-    job_id: str, status: str, error: Optional[str] = None
+    job_id: str,
+    status: str,
+    error: Optional[str] = None,
+    error_category: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     now = utc_now()
     completed_at = now if status in {"completed", "failed"} else None
     with connection() as conn:
         conn.execute(
-            "UPDATE generation_jobs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-            (status, error, completed_at, now, job_id),
+            "UPDATE generation_jobs SET status = ?, error = ?, error_category = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+            (status, error, error_category, completed_at, now, job_id),
         )
     return get_generation_job(job_id)
 
@@ -989,7 +997,7 @@ def complete_panel_generation_job(
         conn.execute(
             """
             UPDATE generation_jobs
-            SET status = 'completed', error = NULL, completed_at = ?, updated_at = ?
+            SET status = 'completed', error = NULL, error_category = NULL, completed_at = ?, updated_at = ?
             WHERE id = ? AND project_id = ? AND job_type = 'panel_artwork'
               AND status IN ('queued', 'processing')
             """,
@@ -1104,6 +1112,151 @@ def complete_storyboard_job(
             (now, now, job_id, project_id),
         )
     return True
+
+
+def complete_character_job(
+    job_id: str,
+    project_id: str,
+    user_id: str,
+    characters: List[Dict[str, Any]],
+) -> bool:
+    """Character保存とJob完了を同一transactionで確定する。
+
+    stale復旧や再起動復旧で先に失敗へ進んだJobを、遅れて戻ったWorkerが
+    completedへ戻さないよう、queued/processingのJobだけを更新する。
+    """
+
+    now = utc_now()
+    with connection() as conn:
+        job = conn.execute(
+            """
+            SELECT status FROM generation_jobs
+            WHERE id = ? AND project_id = ? AND job_type = 'character'
+            """,
+            (job_id, project_id),
+        ).fetchone()
+        if not job or job["status"] not in {"queued", "processing"}:
+            return bool(job and job["status"] == "completed")
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not project:
+            return False
+        conn.execute(
+            """
+            UPDATE projects
+            SET characters_json = ?, status = 'characters_ready', current_step = 'characters',
+                quality_check_json = NULL, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (_json(characters), now, project_id, user_id),
+        )
+        conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'completed', error = NULL, completed_at = ?, updated_at = ?
+            WHERE id = ? AND project_id = ? AND job_type = 'character'
+              AND status IN ('queued', 'processing')
+            """,
+            (now, now, job_id, project_id),
+        )
+    return True
+
+
+def fail_character_job(
+    job_id: str,
+    project_id: str,
+    user_id: str,
+    error: str,
+    error_category: Optional[str] = None,
+) -> bool:
+    """失敗したCharacter JobとProject状態を同一transactionで確定する。"""
+
+    now = utc_now()
+    with connection() as conn:
+        job = conn.execute(
+            """
+            SELECT status FROM generation_jobs
+            WHERE id = ? AND project_id = ? AND job_type = 'character'
+            """,
+            (job_id, project_id),
+        ).fetchone()
+        if not job or job["status"] not in {"queued", "processing"}:
+            return bool(job and job["status"] == "failed")
+        owner = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        conn.execute(
+            """
+            UPDATE generation_jobs
+            SET status = 'failed', error = ?, error_category = ?, completed_at = ?, updated_at = ?
+            WHERE id = ? AND project_id = ? AND job_type = 'character'
+              AND status IN ('queued', 'processing')
+            """,
+            (error, error_category, now, now, job_id, project_id),
+        )
+        if owner:
+            conn.execute(
+                """
+                UPDATE projects
+                SET status = 'partially_failed', current_step = 'characters', updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, project_id, user_id),
+            )
+    return True
+
+
+def recover_stale_character_jobs(
+    project_id: str, user_id: str, stale_after_seconds: int
+) -> List[str]:
+    """heartbeatが止まったCharacter Jobをfailedへ収束させる。"""
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=max(1, stale_after_seconds))
+    ).isoformat()
+    message = "キャラクター設定の処理がタイムアウトしました。再試行してください"
+    recovered: List[str] = []
+    now = utc_now()
+    with connection() as conn:
+        owner = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not owner:
+            return recovered
+        rows = conn.execute(
+            """
+            SELECT id FROM generation_jobs
+            WHERE project_id = ? AND job_type = 'character'
+              AND status IN ('queued', 'processing')
+              AND COALESCE(updated_at, created_at) < ?
+            ORDER BY created_at
+            """,
+            (project_id, cutoff),
+        ).fetchall()
+        recovered = [str(row["id"]) for row in rows]
+        for recovered_id in recovered:
+            conn.execute(
+                """
+                UPDATE generation_jobs
+                SET status = 'failed', error = ?, error_category = 'timeout', completed_at = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'processing')
+                """,
+                (message, now, now, recovered_id),
+            )
+        if recovered:
+            conn.execute(
+                """
+                UPDATE projects
+                SET status = 'partially_failed', current_step = 'characters', updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, project_id, user_id),
+            )
+    return recovered
 
 
 def fail_storyboard_job(

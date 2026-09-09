@@ -487,6 +487,14 @@
     let storyboardPolling = false;
     let storyboardJobState = null;
     let storyboardPollRun = 0;
+    let characterPolling = false;
+    let characterJobState = null;
+    let characterPollRun = 0;
+    let characterPollingTimer = null;
+    let characterPollingWaitResolve = null;
+    let characterPollingState = "idle";
+    let characterRecoveryNotice = null;
+    let characterStateSyncInFlight = false;
     let knowledgeRequestId = 0;
     let qaKnowledgeWarningOpen = false;
     let recommendationLoading = false;
@@ -834,6 +842,7 @@
       activeStep = step;
       await saveProject({ current_step: step }, null, false).catch(function () {});
       render();
+      if (step === "characters") restoreCharacterJobState();
       if (step === "generate") restorePanelGenerationState();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -1066,8 +1075,257 @@
       }
     }
 
+    function characterStatusUrl() {
+      return "/api/projects/" + encodeURIComponent(state.id) + "/generation/status";
+    }
+
+    function clearCharacterPollingTimer() {
+      if (characterPollingTimer) window.clearTimeout(characterPollingTimer);
+      characterPollingTimer = null;
+      if (characterPollingWaitResolve) characterPollingWaitResolve(false);
+      characterPollingWaitResolve = null;
+    }
+
+    function cancelCharacterPolling() {
+      characterPollRun += 1;
+      clearCharacterPollingTimer();
+      characterPolling = false;
+      characterPollingState = "idle";
+    }
+
+    function waitForCharacterPoll(delay, runId) {
+      return new Promise(function (resolve) {
+        clearCharacterPollingTimer();
+        characterPollingWaitResolve = resolve;
+        characterPollingTimer = window.setTimeout(function () {
+          characterPollingTimer = null;
+          characterPollingWaitResolve = null;
+          resolve(runId === characterPollRun);
+        }, delay);
+      });
+    }
+
+    function characterRecoveryKind(error) {
+      if (error?.status === 401 || error?.category === "auth") return "auth";
+      if (error?.status === 403 || error?.category === "forbidden") return "forbidden";
+      if (error?.status === 404 || error?.category === "not_found") return "not_found";
+      if (error?.category === "timeout") return "timeout";
+      return "connection";
+    }
+
+    function showCharacterRecoveryNotice(kind) {
+      const notices = {
+        connection: { message: "人物設定の処理状況を確認できません。", detail: "一時的な通信エラーです。Jobを停止したとは判断していません。" },
+        timeout: { message: "人物設定の確認がタイムアウトしました。", detail: "保存済みのJob状態を再確認できます。" },
+        not_found: { message: "人物設定のJobを見つけられませんでした。", detail: "Projectを再取得して保存済みの人物設定を確認してください。" },
+        auth: { message: "ログイン状態を確認できません。", detail: "再ログイン後に人物設定の状態を再確認してください。" },
+        forbidden: { message: "Projectへのアクセス権を確認できません。", detail: "Projectの所有者アカウントで再ログインしてください。" }
+      };
+      const notice = notices[kind] || notices.connection;
+      hideProcessingDialog();
+      characterPollingState = kind === "auth" || kind === "forbidden" ? "connection_error" : "unknown_recoverable";
+      characterJobState = characterJobState
+        ? { ...characterJobState, status: "unknown" }
+        : { status: "unknown" };
+      characterRecoveryNotice = { kind: kind, message: notice.message, detail: notice.detail };
+      if (activeStep === "characters") render();
+      showToast(notice.message + " 状態を再確認できます。", "error");
+    }
+
+    function renderCharacterRecoveryNotice() {
+      if (!characterRecoveryNotice) return "";
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      const loginAction = characterRecoveryNotice.kind === "auth" || characterRecoveryNotice.kind === "forbidden"
+        ? '<a class="secondary-button compact-button" href="/login?next=' + escapeAttr(next) + '">再ログイン</a>'
+        : "";
+      return '<div class="form-notice error-notice generation-recovery-notice" role="alert"><span class="notice-mark">!</span><div><strong>' + escapeHtml(characterRecoveryNotice.message) + '</strong><p>' + escapeHtml(characterRecoveryNotice.detail) + '</p><div class="generation-recovery-actions"><button type="button" class="secondary-button compact-button" data-character-recheck' + (characterStateSyncInFlight ? " disabled" : "") + '>状態を再確認</button><button type="button" class="text-button" data-character-reload>再読み込み</button>' + loginAction + '</div></div></div>';
+    }
+
+    async function rediscoverCharacterStateAfterNotFound() {
+      try {
+        await fetchProject(false);
+        const characters = state.characters || [];
+        const job = characterJobState;
+        if (characters.length || !job || !["queued", "processing"].includes(job.status)) {
+          hideProcessingDialog();
+          characterRecoveryNotice = null;
+          characterPollingState = characters.length ? "completed" : "failed";
+          if (activeStep === "characters") render();
+          showToast(characters.length ? "保存済みの人物設定を表示しました" : "人物設定の状態を再取得しました");
+          return true;
+        }
+      } catch (_error) {
+        // 下の非ブロッキング警告へ進む。
+      }
+      showCharacterRecoveryNotice("not_found");
+      return false;
+    }
+
+    async function recheckCharacterGenerationState() {
+      if (characterStateSyncInFlight || activeStep !== "characters") return;
+      characterStateSyncInFlight = true;
+      cancelCharacterPolling();
+      hideProcessingDialog();
+      try {
+        const data = await api(characterStatusUrl(), { timeoutMs: 10000 });
+        characterJobState = data.character_job || null;
+        if (data.project_status) state.status = data.project_status;
+        await fetchProject(false).catch(function () {});
+        characterRecoveryNotice = null;
+        if (characterJobState && ["queued", "processing"].includes(characterJobState.status)) {
+          showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "サーバー上のJob状態を復元しています", submessage: "確認できた状態に戻して処理を追跡します。" });
+          await pollCharacterJob(characterJobState.id, "キャラクター設定を生成しています…");
+        } else {
+          render();
+          showToast("保存済みの人物設定状態を確認しました");
+        }
+      } catch (error) {
+        if (characterRecoveryKind(error) === "not_found") await rediscoverCharacterStateAfterNotFound();
+        else showCharacterRecoveryNotice(characterRecoveryKind(error));
+      } finally {
+        characterStateSyncInFlight = false;
+        if (activeStep === "characters" && !characterPolling) render();
+      }
+    }
+
+    async function pollCharacterJob(jobId, operationMessage) {
+      if (characterPolling) return;
+      const runId = ++characterPollRun;
+      const startedAt = Date.now();
+      const maximumPollingMs = 16 * 60 * 1000;
+      let consecutiveNetworkErrors = 0;
+      let finished = false;
+      characterPolling = true;
+      characterPollingState = "active";
+      characterJobState = { ...(characterJobState || {}), id: jobId, status: "processing" };
+      if (activeStep === "characters") render();
+      try {
+        while (Date.now() - startedAt < maximumPollingMs) {
+          const interval = Date.now() - startedAt < 60 * 1000 ? 1500 : 5000;
+          if (!await waitForCharacterPoll(interval, runId) || runId !== characterPollRun) return;
+          let data;
+          try {
+            data = await api(characterStatusUrl(), { timeoutMs: 10000 });
+            consecutiveNetworkErrors = 0;
+          } catch (error) {
+            if (runId !== characterPollRun) return;
+            consecutiveNetworkErrors += 1;
+            characterPollingState = "reconnecting";
+            if (consecutiveNetworkErrors >= 4) {
+              showCharacterRecoveryNotice(characterRecoveryKind(error) === "timeout" ? "timeout" : "connection");
+              return;
+            }
+            updateProcessingDialog({ message: operationMessage, progress: "通信を再確認しています", submessage: "Jobはサーバー側で継続します。状態の取得を再試行しています。" });
+            continue;
+          }
+          if (runId !== characterPollRun) return;
+          const job = data.character_job || (data.jobs || []).find(function (item) { return item.id === jobId && item.job_type === "character"; });
+          if (!job || job.id !== jobId) {
+            await rediscoverCharacterStateAfterNotFound();
+            return;
+          }
+          characterJobState = job;
+          if (data.project_status) state.status = data.project_status;
+          if (job.status === "completed") {
+            await fetchProject(false);
+            characterRecoveryNotice = null;
+            characterPollingState = "completed";
+            finished = true;
+            showToast("キャラクターバイブルを作成しました");
+            render();
+            return;
+          }
+          if (job.status === "failed") {
+            await fetchProject(false).catch(function () {});
+            characterPollingState = "failed";
+            finished = true;
+            render();
+            showToast(job.error || "人物設定の生成に失敗しました", "error");
+            return;
+          }
+          if (job.status !== "queued" && job.status !== "processing") {
+            showCharacterRecoveryNotice("connection");
+            return;
+          }
+          updateProcessingDialog({
+            message: operationMessage,
+            progress: job.status === "queued" ? "生成キューで順番を待っています" : "AIが人物設定を作成しています",
+            submessage: "完了後に人物設定を保存します。画面を閉じても処理は継続します。"
+          });
+          if (activeStep === "characters") render();
+        }
+        if (runId === characterPollRun) showCharacterRecoveryNotice("timeout");
+      } catch (error) {
+        if (runId === characterPollRun) showCharacterRecoveryNotice(characterRecoveryKind(error));
+      } finally {
+        if (runId === characterPollRun) {
+          characterPolling = false;
+          clearCharacterPollingTimer();
+          if (finished) hideProcessingDialog();
+          if (activeStep === "characters") render();
+        }
+      }
+    }
+
+    async function restoreCharacterJobState() {
+      if (characterStateSyncInFlight || characterPolling) return;
+      characterStateSyncInFlight = true;
+      try {
+        const data = await api(characterStatusUrl());
+        characterJobState = data.character_job || null;
+        if (data.project_status) state.status = data.project_status;
+        if (!characterJobState) {
+          render();
+          return;
+        }
+        if (characterJobState.status === "completed") {
+          await fetchProject(false);
+          characterPollingState = "completed";
+          hideProcessingDialog();
+          render();
+          return;
+        }
+        if (characterJobState.status === "failed") {
+          await fetchProject(false).catch(function () {});
+          characterPollingState = "failed";
+          hideProcessingDialog();
+          render();
+          return;
+        }
+        if (!["queued", "processing"].includes(characterJobState.status)) return;
+        showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "サーバー上の処理状態を復元しています", submessage: "再読み込み前に開始したJobを引き続き確認します。" });
+        await pollCharacterJob(characterJobState.id, "キャラクター設定を生成しています…");
+      } catch (error) {
+        if (characterRecoveryKind(error) === "not_found") await rediscoverCharacterStateAfterNotFound();
+        else showCharacterRecoveryNotice(characterRecoveryKind(error));
+      } finally {
+        characterStateSyncInFlight = false;
+        if (activeStep === "characters" && !characterPolling) render();
+      }
+    }
+
     function renderCharacters() {
       const characters = state.characters || [];
+      const jobStatus = characterJobState?.status;
+      const jobActive = jobStatus === "queued" || jobStatus === "processing"
+        || (!characterJobState && state.status === "processing" && state.current_step === "characters");
+      const busy = characterPolling || jobActive || characterStateSyncInFlight;
+      const disabled = busy ? " disabled" : "";
+      const next = busy
+        ? '<div class="save-row"><button type="button" class="primary-button compact-button" data-next-step="storyboard" disabled>ネームを作る <span aria-hidden="true">→</span></button></div>'
+        : nextButton("storyboard", "ネームを作る");
+      const actionLabel = jobActive && characterPolling
+        ? "人物設定を作成中…"
+        : jobActive
+          ? "処理状態を再確認"
+          : jobStatus === "failed"
+            ? "人物設定を再試行"
+            : characters.length ? "人物設定を作り直す" : "生成する";
+      const jobNotice = jobStatus === "failed"
+        ? '<div class="form-notice error-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(characterJobState.error || "人物設定の生成に失敗しました。再試行できます。") + '</p></div>'
+        : jobActive
+          ? '<div class="form-notice" role="status"><span class="notice-mark">…</span><p>人物設定を生成しています。再読み込み後もサーバーのJob状態から復元します。</p></div>'
+          : "";
       const fields = function (character) {
         const textField = function (key, label, rows) { return '<label class="editor-label">' + escapeHtml(label) + '<textarea data-character-field="' + key + '" rows="' + rows + '">' + escapeHtml(character[key] || "") + '</textarea></label>'; };
         return textField("appearance", "外見", 3) + textField("clothing", "服装", 2) + textField("personality", "性格", 2) + textField("distinguishing_features", "識別ポイント", 2) + textField("visual_prompt", "生成用の一貫性メモ", 2) + textField("negative_constraints", "変えない制約", 2);
@@ -1075,9 +1333,14 @@
       const cards = characters.map(function (character, index) {
         return '<article class="surface-panel character-card" data-character-id="' + escapeAttr(character.id) + '"><div class="character-card-header"><div><h3>' + escapeHtml(character.name || "名前未設定") + '</h3><p>' + escapeHtml(character.role || "役割未設定") + ' / ' + escapeHtml(character.age_range || "年齢未設定") + '</p></div><span class="character-stamp">' + String(index + 1).padStart(2, "0") + '</span></div><div class="character-fields">' + '<label class="editor-label">名前<input data-character-field="name" value="' + escapeAttr(character.name || "") + '"></label>' + '<label class="editor-label">役割<input data-character-field="role" value="' + escapeAttr(character.role || "") + '"></label>' + fields(character) + '</div></article>';
       }).join("");
-      content.innerHTML = heading("キャラクターを固定する", "同一人物の外見・服装を後続コマへ引き継ぐための設定です。") + (characters.length ? '<div class="character-grid">' + cards + '</div><div class="save-row"><button type="button" class="secondary-button compact-button" data-regenerate-characters>人物設定を作り直す</button><button type="button" class="primary-button compact-button" data-save-characters>キャラクターを保存</button></div>' + nextButton("storyboard", "ネームを作る") : '<section class="surface-panel empty-panel"><h3>キャラクターバイブルを作る</h3><p>解析結果から、同じ人物を描き続けるための基準を作成します。</p><button type="button" class="primary-button compact-button" data-generate-characters>生成する</button></section>');
+      const body = characters.length
+        ? '<div class="character-grid">' + cards + '</div><div class="save-row"><button type="button" class="secondary-button compact-button" data-regenerate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button><button type="button" class="primary-button compact-button" data-save-characters' + disabled + '>キャラクターを保存</button></div>' + next
+        : '<section class="surface-panel empty-panel"><h3>キャラクターバイブルを作る</h3><p>解析結果から、同じ人物を描き続けるための基準を作成します。</p><button type="button" class="primary-button compact-button" data-generate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button></section>';
+      content.innerHTML = heading("キャラクターを固定する", "同一人物の外見・服装を後続コマへ引き継ぐための設定です。") + renderCharacterRecoveryNotice() + jobNotice + body;
       content.querySelector("[data-generate-characters]")?.addEventListener("click", generateCharacters);
       content.querySelector("[data-regenerate-characters]")?.addEventListener("click", generateCharacters);
+      content.querySelector("[data-character-recheck]")?.addEventListener("click", recheckCharacterGenerationState);
+      content.querySelector("[data-character-reload]")?.addEventListener("click", function () { window.location.reload(); });
       content.querySelector("[data-save-characters]")?.addEventListener("click", function () {
         const next = characters.map(function (character) {
           const card = content.querySelector('[data-character-id="' + CSS.escape(character.id) + '"]');
@@ -1092,20 +1355,48 @@
 
     async function generateCharacters() {
       if (!state.analysis) { showToast("先に物語解析を生成してください", "error"); return; }
+      if (characterPolling || characterStateSyncInFlight || ["queued", "processing"].includes(characterJobState?.status)) return;
       const button = content.querySelector("[data-generate-characters], [data-regenerate-characters]");
+      const originalButtonText = button?.textContent || "生成する";
       if (button) { button.disabled = true; button.textContent = "人物設定を作成中…"; }
-      showProcessingDialog({
-        message: "キャラクター設定を生成しています…",
-        progress: "人物の外見と関係性を整理しています",
-        submessage: "後続のコマでも同じ人物として描ける設定を作成しています。"
-      });
+      showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "人物の外見と関係性を整理しています", submessage: "後続のコマでも同じ人物として描ける設定を作成しています。" });
+      let handedOff = false;
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/characters", { method: "POST", body: "{}" });
         state = data.project;
+        if (data.accepted && data.job?.id) {
+          handedOff = true;
+          characterJobState = data.job;
+          characterRecoveryNotice = null;
+          updateProcessingDialog({ progress: "生成キューへ登録しました", submessage: "サーバー側のJob状態を確認しながら人物設定を保存します。" });
+          await pollCharacterJob(data.job.id, "キャラクター設定を生成しています…");
+          return;
+        }
+        characterJobState = null;
         showToast("キャラクターバイブルを作成しました");
         render();
-      } catch (error) { showToast(error.message, "error"); if (button) button.disabled = false; }
-      finally { hideProcessingDialog(); }
+      } catch (error) {
+        // POST応答だけが失われた場合は再送せず、既存Jobを一度だけ再確認する。
+        try {
+          const status = await api(characterStatusUrl(), { timeoutMs: 10000 });
+          characterJobState = status.character_job || characterJobState;
+          if (status.project_status) state.status = status.project_status;
+          if (characterJobState && ["queued", "processing"].includes(characterJobState.status)) {
+            handedOff = true;
+            await pollCharacterJob(characterJobState.id, "キャラクター設定を生成しています…");
+            return;
+          }
+          await fetchProject(false).catch(function () {});
+        } catch (_statusError) {
+          // 下の表示へ進み、状態を固定せず再確認導線を残す。
+        }
+        showToast(error.message, "error");
+        if (button) { button.disabled = false; button.textContent = originalButtonText; }
+        render();
+      } finally {
+        if (!handedOff) hideProcessingDialog();
+        if (activeStep === "characters" && !characterPolling) render();
+      }
     }
 
     function panelTemplate(pageId, panel, index) {
@@ -2013,6 +2304,7 @@
     }
 
     render();
+    restoreCharacterJobState();
     restoreStoryboardJobState();
     if (activeStep === "generate") restorePanelGenerationState();
   }

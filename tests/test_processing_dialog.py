@@ -71,6 +71,24 @@ def test_storyboard_job_ui_restores_terminal_and_reload_states() -> None:
     assert 'goToStep("generate")' in APP_SCRIPT
 
 
+def test_character_job_ui_restores_terminal_and_reload_states() -> None:
+    """Character Jobもserver stateから復元し、成功・失敗とも操作可能状態へ戻る。"""
+
+    assert "function restoreCharacterJobState()" in APP_SCRIPT
+    assert "function pollCharacterJob(jobId, operationMessage)" in APP_SCRIPT
+    assert "data.character_job" in APP_SCRIPT
+    assert 'job.status === "completed"' in APP_SCRIPT
+    assert 'job.status === "failed"' in APP_SCRIPT
+    assert 'characterPolling = false;' in APP_SCRIPT
+    assert '"人物設定を再試行"' in APP_SCRIPT
+    assert '"処理状態を再確認"' in APP_SCRIPT
+    assert "maximumPollingMs = 16 * 60 * 1000" in APP_SCRIPT
+    assert "consecutiveNetworkErrors >= 4" in APP_SCRIPT
+    assert "restoreCharacterJobState();" in APP_SCRIPT
+    assert "cancelCharacterPolling()" in APP_SCRIPT
+    assert 'characterPollingState = "reconnecting"' in APP_SCRIPT
+
+
 def test_generation_progress_uses_job_state_and_preserves_selective_retry() -> None:
     """パネル進捗がJob状態由来で、対象コマだけを追跡することを確認する。"""
 

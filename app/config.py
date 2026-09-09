@@ -90,6 +90,7 @@ class Settings:
     openai_image_model: str
     openai_timeout_seconds: float
     openai_storyboard_timeout_seconds: float
+    openai_character_timeout_seconds: float
     openai_max_retries: int
     openai_storyboard_max_retries: int
     openai_max_output_tokens: int
@@ -173,6 +174,17 @@ def get_settings() -> Settings:
                 _float_env(
                     "OPENAI_STORYBOARD_TIMEOUT_SECONDS",
                     240.0,
+                ),
+            ),
+        ),
+        # Character Bibleは複数人物のStructured Outputを返すため、短い一般処理と分離する。
+        openai_character_timeout_seconds=max(
+            30.0,
+            min(
+                600.0,
+                _float_env(
+                    "OPENAI_CHARACTER_TIMEOUT_SECONDS",
+                    180.0,
                 ),
             ),
         ),

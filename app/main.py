@@ -659,6 +659,94 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             )
 
 
+def process_character_job(project_id: str, user_id: str, job_id: str) -> None:
+    """Character Bibleをバックグラウンドで処理し、必ずterminal stateへ収束させる。"""
+
+    job = db.get_generation_job(job_id)
+    if not job or job.get("status") not in {"queued", "processing"}:
+        return
+    if not db.start_generation_job(job_id):
+        return
+    started = time.monotonic()
+    try:
+        project = db.get_project(project_id, user_id)
+        if not project or not project.get("analysis"):
+            raise AIProviderError("先に物語解析を生成してください", retryable=False)
+        db.touch_generation_job(job_id)
+        knowledge_context = retrieve_knowledge_context(
+            project_id,
+            user_id,
+            "character",
+            str(project["analysis"]),
+        )
+        provider = get_ai_provider(project_ai_model_settings(project, user_id))
+        characters = provider.characters(
+            project["original_text"],
+            project["analysis"],
+            knowledge_context,
+            project["settings"],
+        )
+        characters = normalize_characters(characters)
+        if not characters or any(
+            not character.get("name") or not character.get("appearance")
+            for character in characters
+        ):
+            raise AIProviderError(
+                "AIのキャラクター設定を検証できませんでした",
+                retryable=False,
+                error_category="validation",
+            )
+        for character in characters:
+            character["knowledge_refs"] = knowledge_context.get("references", [])
+        db.touch_generation_job(job_id)
+        if not db.complete_character_job(job_id, project_id, user_id, characters):
+            logger.warning(
+                "character generation completion ignored for inactive job project_id=%s job_id=%s",
+                project_id,
+                job_id,
+            )
+            return
+        record_provider_generation(project_id, user_id, provider)
+        logger.info(
+            "character job completed project_id=%s job_id=%s character_count=%s duration_seconds=%.2f",
+            project_id,
+            job_id,
+            len(characters),
+            time.monotonic() - started,
+        )
+    except Exception as exc:  # noqa: BLE001
+        message = safe_job_error(exc)
+        logger.error(
+            "character job failed project_id=%s job_id=%s error_category=%s duration_seconds=%.2f message=%s",
+            project_id,
+            job_id,
+            getattr(exc, "error_category", None) or type(exc).__name__,
+            time.monotonic() - started,
+            message,
+        )
+        try:
+            category = getattr(exc, "error_category", None) or (
+                "validation"
+                if isinstance(exc, AIProviderError) and "検証" in message
+                else type(exc).__name__.lower()
+            )
+            db.fail_character_job(
+                job_id,
+                project_id,
+                user_id,
+                message,
+                str(category)[:80],
+            )
+        except Exception as state_exc:  # noqa: BLE001
+            # Job状態更新自体の失敗でWorkerが落ちても、次回status APIのstale復旧へ委ねる。
+            logger.error(
+                "character job terminal-state update failed project_id=%s job_id=%s error_category=%s",
+                project_id,
+                job_id,
+                type(state_exc).__name__,
+            )
+
+
 def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
     """Storyboardの長時間AI処理をHTTP応答から切り離して実行する。"""
 
@@ -1570,17 +1658,65 @@ async def api_generate_analysis(project_id: str, user=Depends(current_user)):
 
 
 @app.post("/api/projects/{project_id}/characters")
-async def api_generate_characters(project_id: str, user=Depends(current_user)):
+async def api_generate_characters(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(current_user),
+):
     project = require_project(project_id, user["id"])
     if not project.get("analysis"):
         raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
+    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
+
+    # 外部AIはHTTPリクエストへ閉じ込めず、保存済みJobとして追跡する。
+    # Demoは既存の即時応答契約を維持し、課金APIなしのローカル確認を高速にする。
+    if getattr(provider, "uses_external_api", False):
+        job, created = db.create_async_generation_job(
+            project_id,
+            "character",
+            f"character:{project_id}",
+        )
+        if not job:
+            raise HTTPException(status_code=503, detail="Character処理を開始できませんでした")
+        if created:
+            updated = db.update_project(
+                project_id,
+                user["id"],
+                status="processing",
+                current_step="characters",
+                clear_quality_check=True,
+            )
+            background_tasks.add_task(
+                process_character_job,
+                project_id,
+                user["id"],
+                str(job["id"]),
+            )
+        else:
+            updated = project
+            if project.get("status") != "processing" or project.get("current_step") != "characters":
+                updated = db.update_project(
+                    project_id,
+                    user["id"],
+                    status="processing",
+                    current_step="characters",
+                ) or project
+        return JSONResponse(
+            {
+                "accepted": True,
+                "job": job,
+                "project": project_view(updated or project),
+                "mode": provider.provider_name,
+            },
+            status_code=202,
+        )
+
     knowledge_context = retrieve_knowledge_context(
         project_id,
         user["id"],
         "character",
         str(project["analysis"]),
     )
-    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     try:
         characters = provider.characters(
             project["original_text"], project["analysis"], knowledge_context, project["settings"]
@@ -1787,6 +1923,11 @@ async def api_retry_panel(
 @app.get("/api/projects/{project_id}/generation/status")
 async def api_generation_status(project_id: str, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
+    recovered_character = db.recover_stale_character_jobs(
+        project_id,
+        user["id"],
+        get_settings().storyboard_job_stale_seconds,
+    )
     recovered_stale_panel = db.recover_stale_panel_jobs(
         project_id,
         user["id"],
@@ -1801,17 +1942,33 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
         get_settings().storyboard_job_stale_seconds,
     )
     recovered_panel = recovered_stale_panel + recovered_orphaned_panel
-    recovered = recovered_panel + recovered_storyboard
+    recovered = recovered_character + recovered_panel + recovered_storyboard
     if recovered:
         logger.warning(
-            "generation state recovered project_id=%s stale_panel_job_count=%s "
+            "generation state recovered project_id=%s character_count=%s stale_panel_job_count=%s "
             "orphan_panel_count=%s storyboard_count=%s",
             project_id,
+            len(recovered_character),
             len(recovered_stale_panel),
             len(recovered_orphaned_panel),
             len(recovered_storyboard),
         )
         project = require_project(project_id, user["id"])
+    character_job = db.latest_generation_job(project_id, "character")
+    # Character保存後のJob更新だけが失敗した旧状態を、保存済みデータから整合させる。
+    if (
+        character_job
+        and character_job.get("status") == "completed"
+        and project.get("characters")
+        and project.get("current_step") == "characters"
+        and project.get("status") in {"processing", "partially_failed"}
+    ):
+        project = db.update_project(
+            project_id,
+            user["id"],
+            status="characters_ready",
+            current_step="characters",
+        ) or project
     storyboard_job = db.latest_generation_job(project_id, "storyboard")
     # 旧実装でStoryboard保存後のJob更新だけが失敗したProjectを安全に整合させる。
     if (
@@ -1846,11 +2003,15 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
         "project_status": project.get("status"),
         "panels": panels,
         "jobs": jobs,
+        "character_job": character_job,
         "storyboard_job": storyboard_job,
         "panel_generation": panel_generation_snapshot(project, jobs, recovered_panel),
         "panel_recovery": {
             "stale_job_ids": recovered_stale_panel,
             "orphan_panel_ids": recovered_orphaned_panel,
+        },
+        "character_recovery": {
+            "stale_job_ids": recovered_character,
         },
     }
 

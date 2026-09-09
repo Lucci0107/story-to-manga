@@ -43,6 +43,7 @@ def runtime_settings() -> SimpleNamespace:
         openai_image_model="gpt-image-2",
         openai_timeout_seconds=5.0,
         openai_storyboard_timeout_seconds=240.0,
+        openai_character_timeout_seconds=180.0,
         openai_max_retries=0,
         openai_storyboard_max_retries=1,
         openai_max_output_tokens=2_000,
@@ -157,6 +158,24 @@ def test_responses_structured_output_and_knowledge_are_sent(monkeypatch: pytest.
     assert requests[0]["text"]["format"]["strict"] is True
     assert "<knowledge_reference>" in requests[0]["input"]
     assert "霧の町では余白を広くする" in requests[0]["input"]
+
+
+def test_character_request_uses_task_specific_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Character Bibleは一般AI処理より長いが、上限付きの専用timeoutを使う。"""
+
+    timeouts: list[float] = []
+
+    def fake_urlopen(request, timeout):
+        timeouts.append(timeout)
+        return FakeHTTPResponse(response_with_json({"characters": [valid_character()]}))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+
+    result = OpenAIProvider().characters("蒼は灯台へ向かった。", valid_analysis())
+
+    assert result[0]["name"] == "蒼"
+    assert timeouts == [180.0]
 
 
 def test_settings_recommendation_uses_structured_output_and_knowledge(

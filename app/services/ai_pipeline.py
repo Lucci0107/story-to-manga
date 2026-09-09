@@ -793,6 +793,13 @@ class OpenAIProvider(DemoAIProvider):
             if task_key == "storyboard":
                 timeout = getattr(settings, "openai_storyboard_timeout_seconds", 240.0)
                 max_retries = getattr(settings, "openai_storyboard_max_retries", 1)
+            elif task_key == "character":
+                timeout = getattr(
+                    settings,
+                    "openai_character_timeout_seconds",
+                    getattr(settings, "openai_timeout_seconds", 90.0),
+                )
+                max_retries = getattr(settings, "openai_max_retries", 1)
             else:
                 timeout = getattr(settings, "openai_timeout_seconds", 90.0)
                 max_retries = getattr(settings, "openai_max_retries", 1)
