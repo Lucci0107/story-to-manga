@@ -144,10 +144,12 @@
 - Manga layout engineのローカル回帰：`pytest` 112 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功。標準ドラマ／会話／アクション／心理／4コマのgeometry、重要コマ面積、RTL/LTR、保存再読み、Page単位再配置、QA検出、PDF日本語フォント埋め込み、ZIP合成ページを検証。
 - Manga layout engineのローカルBrowser QA：6コマの不均等配置、重要コマ32.3%、日本語RTL／English LTR、文字要素collision 0、長文overflow 0、Light/Dark、狭幅Previewの1列化、console error 0を確認。PDFと900×1,200pxのZIPページ画像を実際に書き出し、同一geometryと読みやすい文字配置を確認。PDFはPopplerによる画像化と日本語テキスト抽出にも成功。画像AI生成は行っていません。
 - Production QAで旧均等2列グリッド基準の読順検査が新しい不均等geometryを誤検知することを確認し、layout version 2では保存済み行構成と行内RTL/LTR列順を検証する方式へ局所修正。壊れた列順は引き続き検出する回帰テストを追加しました。
+- Manga layout engineの初回コミット`9c68c2c`はGitHub Actions run `34294142746`、読順QA整合修正`fe214e5`はrun `34294923564`でsuccess。両方ともCI通過後にRenderへ自動反映され、最終`/api/health`はHTTP 200です。
+- Manga layout engineのProduction Browser QA：既存の8ページ／31コマ／生成済み画像2枚を保持したまま、layout version 2、不均等面積、日本語RTL、文字要素collision 0、overflow 0、PDF／ZIP生成、Processing Dialogの開始・終了を確認。再実行したKnowledge-aware QAでは、コマ読順、視覚的階層、吹き出し・ナレーション衝突がすべてOKとなりました。390pxでは横overflowなし、console error/warning 0件です。画像生成は追加実行していません。
 
 ## In Progress
 
-- Manga layout engineと文字要素collision回避はローカル実装・検証完了。GitHub CI、Render自動deploy、Production QA待ちです。
+- なし。Manga layout engineと文字要素collision回避はローカル・CI・Render・Production QAまで完了しています。
 
 ## 永続化移行準備
 
