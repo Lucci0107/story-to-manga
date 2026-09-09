@@ -87,6 +87,9 @@
 - Knowledge自動選択修正の全回帰: `pytest` 119 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功
 - Knowledge自動選択のローカルBrowser QA: 新規Projectの推奨Layout初期ONとQA実参照、既存未設定Projectの3択warningと明示適用、Scope不一致表示、OFF設定のreload保持を確認
 - QA画面を390px／1440px、Light／Darkで確認し、横overflowなし、error overlayなし、console error 0件。画像生成は実行していません
+- Knowledge自動選択コミット`f478ee3`のGitHub Actions CI run `34310984043`はsuccess、Render deployment `dep-dage0867bikc7393nv2g`もsuccess
+- Knowledge自動選択のProduction QA: QA専用Layout Knowledge v1と最小合成Projectを新規作成し、推奨設定の初期ON、優先度70、follow-latest、storyboard/page_layout/panel_prompt/quality_check/export Scopeを確認。Knowledge-aware QAで1 Version / 1 Chunkを実参照し、Document/Version/Chunk/quality_check Scope traceabilityの保存とreload後の保持を確認
+- Productionの既存2 Projectは検証前後で8ページ／31コマ／2生成済み、および8ページ／34コマ／0生成済みを保持。Desktop 1280pxとMobile 390px、Light/Darkで横overflow・error overlayなし、console error 0件。画像生成は実行していません
 
 - `pytest`: 86 passed（Storyboard Job成功・失敗・validation例外・重複防止・stale recovery・heartbeat・48ページ分割・RTL/LTR・frontend復元を含む）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）
