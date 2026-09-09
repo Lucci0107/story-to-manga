@@ -91,14 +91,16 @@
     if (!processingDialogElements.root || !processingDialogOpen) return;
     processingDialogOpen = false;
     processingDialogAction = null;
+    const previous = processingDialogPreviousFocus;
+    processingDialogPreviousFocus = null;
+    // aria-hiddenを付ける前に元の操作要素へ戻し、ダイアログ内へフォーカスを残さない。
+    if (previous && previous.isConnected && typeof previous.focus === "function") previous.focus();
+    if (processingDialogElements.root.contains(document.activeElement)) document.activeElement?.blur();
     if (processingDialogElements.action) processingDialogElements.action.hidden = true;
     processingDialogElements.root.hidden = true;
     processingDialogElements.root.setAttribute("aria-hidden", "true");
     processingDialogElements.root.setAttribute("aria-busy", "false");
     document.body.classList.remove("processing-dialog-open");
-    const previous = processingDialogPreviousFocus;
-    processingDialogPreviousFocus = null;
-    if (previous && previous.isConnected && typeof previous.focus === "function") previous.focus();
   }
 
   document.addEventListener("keydown", function (event) {
