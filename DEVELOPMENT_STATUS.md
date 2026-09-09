@@ -162,7 +162,17 @@
 
 ## In Progress
 
-- PageComposition v2のCI・Render自動deploy・Production Browser QAを実施中です。既存Projectと`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更しません。
+- なし。PageComposition v2の実装、ローカル回帰、CI、Render自動deploy、Production Browser QAを完了しました。既存Projectと`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更していません。
+
+## PageComposition v2 最終検証
+
+- コミット`ca09c36`を`main`へpushし、GitHub Actions CI run `34321761018`（pytest 134 passed、Python compile、JavaScript構文）がsuccess。
+- Render自動deploy `dep-dagg8r0ae00c73bqlf3g`（GitHub deployment `6344377609`）がsuccess。切替直後の一時502回復後、`/api/health`はHTTP 200（`status: ok`）。
+- ローカルBrowser QAで、dynamic 7-panelの大コマ／不均等面積／台形・斜め境界、cover crop、breakout foreground、ページ単位bubble／SFX／title overlayを確認。Preview・PDF・ZIPは同一Composition Modelを使い、画像再生成なし。
+- 本番の既存Project「ある外科医の思考」は認証済みセッションで読み取り専用確認。QAのKnowledge使用中1件（漫画スタイル・画風設計 Version 1 / 4 Chunk）、日本語right-to-left、4ページ／19コマ／19生成済みを確認し、Preview・Export導線を表示しました。既存データの生成・削除・上書きは行っていません。
+- 本番の新規Project画面で推奨Knowledgeが初期ON（Dialogue／Genre／Character／Layout／Style）で表示され、作成前に変更可能なことを確認。Project作成や画像生成は行っていません。
+- 本番ChromeのDesktop表示とiPhone SE（375×667）相当表示を確認。再読み込み後のDevTools Consoleは`0 messages in console`で、UIの横overflow／error overlayは確認されませんでした。
+- 本番へ配信された`app.css?v=12`／`app.js?v=13`はHTTP 200で、polygon／cover／breakout／composition実装を含むことを確認しました。既存Projectは互換性のためlegacy Composition v1のまま保持され、新版への再計算は明示操作時のみです。
 
 ## 永続化移行準備
 
