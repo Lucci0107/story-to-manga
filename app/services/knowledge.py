@@ -18,6 +18,61 @@ from .layout import storyboard_layout_issues
 from .reading_order import reading_order_context, reading_order_issues
 
 
+# Documentのカテゴリから、初回だけ使う合理的なScope初期値を解決する。
+# Projectで保存済みのScopeは常にそちらを優先し、この値で上書きしない。
+DEFAULT_SCOPES_BY_CATEGORY: Dict[str, List[str]] = {
+    "style": ["adaptation", "storyboard", "page_layout", "panel_prompt", "dialogue", "quality_check"],
+    "layout": ["storyboard", "page_layout", "panel_prompt", "quality_check", "export"],
+    "story_adaptation": ["story_analysis", "adaptation", "storyboard", "quality_check"],
+    "character": ["character", "storyboard", "panel_prompt", "quality_check"],
+    "dialogue": ["adaptation", "storyboard", "dialogue", "quality_check"],
+    "genre": ["story_analysis", "adaptation", "storyboard", "panel_prompt", "quality_check"],
+    "production_rules": ["adaptation", "storyboard", "page_layout", "quality_check", "export"],
+}
+
+DEFAULT_PRIORITY_BY_CATEGORY = {
+    "production_rules": 80,
+    "layout": 70,
+    "style": 70,
+    "story_adaptation": 60,
+    "character": 60,
+    "dialogue": 60,
+    "genre": 50,
+}
+
+
+def default_knowledge_scope(category: str) -> List[str]:
+    """カテゴリに対応する、Project選択用のScope初期値を返す。"""
+
+    return list(DEFAULT_SCOPES_BY_CATEGORY.get(str(category), []))
+
+
+def recommended_knowledge_selections(user_id: str) -> List[Dict[str, Any]]:
+    """新規Projectまたは明示適用用のReadyな推奨Knowledgeを返す。"""
+
+    recommendations: List[Dict[str, Any]] = []
+    for document in db.list_knowledge_documents(user_id):
+        scopes = default_knowledge_scope(str(document.get("category", "")))
+        if (
+            not scopes
+            or not document.get("active")
+            or document.get("archived")
+            or document.get("active_version_status") != "ready"
+        ):
+            continue
+        recommendations.append(
+            {
+                "knowledge_document_id": str(document["id"]),
+                "enabled": True,
+                "priority": DEFAULT_PRIORITY_BY_CATEGORY.get(str(document.get("category")), 50),
+                "mode": "follow_latest",
+                "selected_version_id": None,
+                "scope": scopes,
+            }
+        )
+    return recommendations
+
+
 def normalize_knowledge_text(text: str) -> str:
     """改行と空白を正規化し、Markdown見出しを保持する。"""
 
@@ -128,10 +183,13 @@ def _version_reference(selection: Dict[str, Any], version: Dict[str, Any], chunk
     return {
         "document_id": str(selection["knowledge_document_id"]),
         "version_id": str(version["id"]),
+        "knowledge_document_id": str(selection["knowledge_document_id"]),
+        "knowledge_version_id": str(version["id"]),
         "title": str(selection.get("title", "Knowledge")),
         "version_number": int(version.get("version_number", 0)),
         "chunk_ids": [str(chunk["id"]) for chunk in selected_chunks],
         "headings": [str(chunk.get("heading_path", "")) for chunk in selected_chunks if chunk.get("heading_path")],
+        "scope": None,
     }
 
 
@@ -148,18 +206,26 @@ def retrieve_knowledge_context(
         scope = "all"
     selections = db.list_project_knowledge(project_id, user_id) or []
     candidates: List[tuple[int, int, int, Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = []
+    enabled_count = 0
+    scope_match_count = 0
+    ready_count = 0
+    disabled_count = 0
     for selection in selections:
         if not selection.get("enabled") or not selection.get("document_active") or selection.get("document_archived"):
+            disabled_count += 1
             continue
+        enabled_count += 1
         scopes = selection.get("scope") or ["all"]
         if "all" not in scopes and scope not in scopes:
             continue
+        scope_match_count += 1
         version_id = selection.get("active_version_id") if selection.get("mode") == "follow_latest" else selection.get("selected_version_id")
         if not version_id:
             continue
         version = db.get_knowledge_version(str(version_id))
         if not version or version.get("status") != "ready":
             continue
+        ready_count += 1
         for chunk in db.list_knowledge_chunks(str(version_id)):
             candidates.append(
                 (
@@ -178,6 +244,7 @@ def retrieve_knowledge_context(
     for _priority, _relevance_score, _order, selection, version, chunk in chosen:
         version_id = str(version["id"])
         reference = references_by_version.setdefault(version_id, _version_reference(selection, version, []))
+        reference["scope"] = scope
         reference["chunk_ids"].append(str(chunk["id"]))
         heading = str(chunk.get("heading_path", ""))
         if heading and heading not in reference["headings"]:
@@ -200,13 +267,28 @@ def retrieve_knowledge_context(
             label += f" / {chunk['heading_path']}"
         prompt_parts.append(f"[{label}]\n{chunk['content']}")
     prompt_text = "\n\n".join(prompt_parts)[:6_000]
+    if context_chunks:
+        resolution_status = "selected_relevant"
+    elif not selections:
+        resolution_status = "no_selection"
+    elif enabled_count == 0:
+        resolution_status = "disabled"
+    elif scope_match_count == 0 or ready_count > 0:
+        resolution_status = "selected_no_relevant_chunks"
+    else:
+        resolution_status = "processing_not_ready"
     return {
         "scope": scope,
         "references": list(references_by_version.values()),
         "chunks": context_chunks,
         "prompt_text": prompt_text,
         "selection_count": len(selections),
+        "enabled_selection_count": enabled_count,
+        "disabled_selection_count": disabled_count,
+        "scope_match_count": scope_match_count,
+        "ready_selection_count": ready_count,
         "retrieved_chunk_count": len(context_chunks),
+        "resolution_status": resolution_status,
     }
 
 
@@ -334,14 +416,21 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
             warnings.append({"key": f"camera-{page.get('page_number')}", "label": f"ページ{page.get('page_number')}", "detail": "カメラが同じコマに偏っています。"})
 
     refs = context.get("references") or []
-    if context.get("selection_count", 0) == 0:
+    resolution_status = context.get("resolution_status", "selected_relevant" if refs else "no_selection")
+    if resolution_status == "no_selection":
         warnings.append({"key": "knowledge", "label": "Knowledge", "detail": "ProjectにKnowledgeが選択されていません。"})
         add_check("knowledge", "Knowledge解決", "warning", "選択されたKnowledgeはありません")
-    elif refs:
+    elif resolution_status == "selected_relevant":
         add_check("knowledge", "Knowledge解決", "pass", f"{len(refs)} Version / {context.get('retrieved_chunk_count', 0)} Chunkを参照")
+    elif resolution_status == "selected_no_relevant_chunks":
+        warnings.append({"key": "knowledge", "label": "Knowledge", "detail": "Knowledgeは選択されていますが、品質確認Scopeに該当するChunkがありません。"})
+        add_check("knowledge", "Knowledge解決", "warning", "選択済み / 品質確認に該当するChunkなし")
+    elif resolution_status == "processing_not_ready":
+        warnings.append({"key": "knowledge", "label": "Knowledge", "detail": "選択されたKnowledgeは処理中、またはReadyではありません。"})
+        add_check("knowledge", "Knowledge解決", "warning", "Knowledgeの処理完了を待っています")
     else:
-        warnings.append({"key": "knowledge", "label": "Knowledge", "detail": "選択されたKnowledgeにReadyなVersionがありません。"})
-        add_check("knowledge", "Knowledge解決", "warning", "ReadyなVersionを解決できません")
+        warnings.append({"key": "knowledge", "label": "Knowledge", "detail": "ProjectのKnowledgeは無効です。"})
+        add_check("knowledge", "Knowledge解決", "warning", "Knowledgeは無効になっています")
 
     return {
         "status": "attention" if issues or warnings else "pass",
@@ -351,6 +440,7 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
         "checks": checks,
         "knowledge_refs": refs,
         "knowledge_scope": context.get("scope"),
+        "knowledge_resolution_status": resolution_status,
         "language": order_context["language"],
         "reading_direction": order_context["reading_direction"],
     }

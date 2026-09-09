@@ -504,6 +504,15 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .knowledge-workspace-note span { min-width: 0; }
 .qa-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .qa-toolbar .knowledge-workspace-note { flex: 1; margin: 0; }
+.qa-knowledge-summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+.qa-knowledge-summary h3, .qa-knowledge-warning h3 { margin: 3px 0 0; }
+.qa-knowledge-summary details { min-width: min(100%, 300px); }
+.qa-knowledge-summary summary { color: var(--accent-deep); cursor: pointer; font-size: 11px; font-weight: 700; }
+.qa-knowledge-summary ul { display: grid; gap: 7px; margin: 10px 0 0; padding: 0; list-style: none; }
+.qa-knowledge-summary li { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; }
+.qa-knowledge-summary li span, .knowledge-resolution-label { color: var(--muted); }
+.qa-knowledge-warning { margin-bottom: 14px; border-color: var(--accent); }
+.qa-knowledge-warning p { color: var(--muted); }
 .qa-result { box-shadow: none; }
 .qa-result-header h3 { margin-bottom: 4px; font-size: 19px; }
 .qa-result-header p { margin: 0; color: var(--muted); font-size: 10px; }
@@ -634,6 +643,7 @@ body.processing-dialog-open { overflow: hidden; }
   .knowledge-selection-fields { grid-template-columns: 1fr 1fr; }
   .knowledge-scope-field { grid-column: 1 / -1; }
   .qa-toolbar { display: grid; }
+  .qa-knowledge-summary { align-items: flex-start; display: grid; }
   .qa-toolbar .primary-button { width: fit-content; }
   .analysis-grid .full, .settings-grid .full, .panel-editor-grid .full { grid-column: auto; }
   .panel-padding { padding: 16px; }

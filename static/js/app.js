@@ -488,6 +488,7 @@
     let storyboardJobState = null;
     let storyboardPollRun = 0;
     let knowledgeRequestId = 0;
+    let qaKnowledgeWarningOpen = false;
     let recommendationLoading = false;
     let recommendationAttempted = false;
     let pendingRecommendation = null;
@@ -952,7 +953,7 @@
           const mode = selected.mode || "follow_latest";
           const versions = document.versions || [];
           const selectedVersion = selected.selected_version_id || document.active_version_id || versions[0]?.id || "";
-          const scopes = selected.scope || ["all"];
+          const scopes = selected.scope || document.default_scope || ["all"];
           const versionOptions = versions.length ? versions.map(function (version) { return '<option value="' + escapeAttr(version.id) + '"' + (version.id === selectedVersion ? " selected" : "") + '>Version ' + escapeHtml(version.version_number) + ' (' + escapeHtml(version.status) + ')</option>'; }).join("") : '<option value="">利用可能なVersionなし</option>';
           const scopeOptionMarkup = scopeOptions.replace(/<option value="([^"]+)">/g, function (_match, value) { return '<option value="' + value + '"' + (scopes.includes(value) ? " selected" : "") + '>'; });
           return '<article class="knowledge-check surface-panel' + (archived ? " archived" : "") + '" data-knowledge-selection-card data-document-id="' + escapeAttr(document.id) + '"><div class="knowledge-check-header"><label class="knowledge-check-title"><input type="checkbox" data-knowledge-enabled' + (enabled ? " checked" : "") + fieldDisabled + '><span><strong>' + escapeHtml(document.title) + '</strong><small>' + escapeHtml(document.category) + ' / ' + escapeHtml(document.version_count || 0) + ' Version</small></span></label><span class="knowledge-active-label ' + (archived ? "archived" : (document.active ? "" : "inactive")) + '">' + (archived ? "アーカイブ済み" : (document.active ? "有効" : "無効")) + '</span></div><p class="knowledge-check-description">' + escapeHtml(document.description || "説明はまだありません。") + '</p><div class="knowledge-selection-fields"><label class="editor-label">優先度<input type="number" min="0" max="1000" value="' + escapeAttr(selected.priority ?? 50) + '" data-knowledge-priority' + fieldDisabled + '></label><label class="editor-label">Versionの扱い<select data-knowledge-mode' + fieldDisabled + '><option value="follow_latest"' + (mode === "follow_latest" ? " selected" : "") + '>最新Versionに追従</option><option value="pinned"' + (mode === "pinned" ? " selected" : "") + '>Versionを固定</option></select></label><label class="editor-label knowledge-version-field">固定Version<select data-knowledge-version' + (mode === "follow_latest" || archived ? " disabled" : "") + '>' + versionOptions + '</select></label><label class="editor-label knowledge-scope-field">参照Scope<select multiple size="3" data-knowledge-scope aria-label="' + escapeAttr(document.title) + 'の参照Scope"' + fieldDisabled + '>' + scopeOptionMarkup + '</select><small>複数選択できます。未変更ならすべての工程。</small></label></div>' + (archived ? '<p class="field-help">詳細画面からアーカイブを解除するとProjectで選択できます。</p>' : '') + '</article>';
@@ -983,13 +984,13 @@
       let invalid = "";
       content.querySelectorAll("[data-knowledge-selection-card]").forEach(function (card) {
         const enabled = card.querySelector("[data-knowledge-enabled]")?.checked;
-        if (!enabled) return;
+        if (card.classList.contains("archived")) return;
         const mode = card.querySelector("[data-knowledge-mode]")?.value || "follow_latest";
         const version = card.querySelector("[data-knowledge-version]")?.value || null;
-        if (mode === "pinned" && !version) invalid = "固定するVersionを選択してください";
+        if (enabled && mode === "pinned" && !version) invalid = "固定するVersionを選択してください";
         const priority = Number(card.querySelector("[data-knowledge-priority]")?.value || 50);
         const scope = Array.from(card.querySelector("[data-knowledge-scope]")?.selectedOptions || []).map(function (option) { return option.value; });
-        selections.push({ knowledge_document_id: card.dataset.documentId, enabled: true, priority: Number.isFinite(priority) ? priority : 50, mode: mode, selected_version_id: mode === "pinned" ? version : null, scope: scope.length ? scope : ["all"] });
+        selections.push({ knowledge_document_id: card.dataset.documentId, enabled: Boolean(enabled), priority: Number.isFinite(priority) ? priority : 50, mode: mode, selected_version_id: mode === "pinned" ? version : null, scope: scope.length ? scope : ["all"] });
       });
       if (invalid) { showToast(invalid, "error"); return; }
       button.disabled = true;
@@ -1851,14 +1852,55 @@
       }).join("");
       const issues = (result?.issues || []).map(function (issue) { return '<li class="qa-issue"><strong>' + escapeHtml(issue.label) + '</strong><span>' + escapeHtml(issue.detail) + '</span></li>'; }).join("");
       const warnings = (result?.warnings || []).map(function (warning) { return '<li class="qa-warning"><strong>' + escapeHtml(warning.label) + '</strong><span>' + escapeHtml(warning.detail) + '</span></li>'; }).join("");
-      const refs = (result?.knowledge_refs || []).map(function (ref) { return '<li><strong>' + escapeHtml(ref.title) + '</strong><span>Version ' + escapeHtml(ref.version_number) + ' / ' + escapeHtml((ref.chunk_ids || []).length) + ' Chunk</span></li>'; }).join("");
-      const resultMarkup = result ? '<section class="surface-panel panel-padding qa-result"><div class="qa-result-header"><div><p class="eyebrow">QUALITY REPORT</p><h3>制作状態: ' + escapeHtml(statusLabel) + '</h3><p>確認日時: ' + escapeHtml(result.checked_at || "") + '</p></div><span class="qa-result-badge qa-result-' + escapeAttr(result.status || "attention") + '">' + escapeHtml(statusLabel) + '</span></div><ul class="qa-check-list">' + checks + '</ul>' + (issues ? '<div class="qa-issues"><h4>修正が必要な項目</h4><ul>' + issues + '</ul></div>' : "") + (warnings ? '<div class="qa-issues"><h4>確認してください</h4><ul>' + warnings + '</ul></div>' : "") + (refs ? '<div class="knowledge-reference-list"><h4>今回参照したKnowledge</h4><ul>' + refs + '</ul></div>' : '<div class="knowledge-workspace-note"><strong>Knowledge参照なし</strong><span>このProjectではKnowledgeを選択していないか、Scopeに該当するChunkがありません。</span></div>') + '</section>' : '<section class="surface-panel empty-panel"><h3>書き出し前に品質を確認する</h3><p>本文、ネーム、画像状態、ページ内のコマ数とKnowledgeの解決状況を確認します。判定は決定的なチェックを中心に行います。</p></section>';
-      content.innerHTML = heading("Knowledge-aware QA", "書き出し前に制作状態と、どのKnowledge Versionを参照したかを確認します。") + '<div class="qa-toolbar"><div class="knowledge-workspace-note"><strong>確認対象</strong><span>原作の意図を変える判定ではなく、編集を続けるための状態チェックです。</span></div><button type="button" class="primary-button compact-button" data-run-quality-check>品質を確認する</button></div>' + resultMarkup + nextButton("preview", "Previewを見る");
-      content.querySelector("[data-run-quality-check]")?.addEventListener("click", runQualityCheck);
+      const referenceItems = result?.knowledge_refs || [];
+      const refs = referenceItems.map(function (ref) { return '<li><strong>' + escapeHtml(ref.title) + '</strong><span>Version ' + escapeHtml(ref.version_number) + ' / ' + escapeHtml((ref.chunk_ids || []).length) + ' Chunk</span></li>'; }).join("");
+      const resolutionStatus = result?.knowledge_resolution_status;
+      const noReferenceMessages = {
+        no_selection: ["Knowledge未選択", "このProjectにはKnowledgeが設定されていません。"],
+        selected_no_relevant_chunks: ["該当Chunkなし", "Knowledgeは選択されていますが、品質確認Scopeに該当するChunkがありません。"],
+        processing_not_ready: ["Knowledge処理中", "選択したKnowledgeの処理完了後にもう一度実行してください。"],
+        disabled: ["Knowledge無効", "Project設定またはDocument設定でKnowledgeが無効です。"],
+      };
+      const noReference = noReferenceMessages[resolutionStatus] || ["QA未実行", "品質確認を実行すると、参照したKnowledgeを表示します。"];
+      const knowledgeSummary = '<section class="surface-panel panel-padding qa-knowledge-summary"><div><p class="eyebrow">KNOWLEDGE</p><h3>使用中: ' + referenceItems.length + '件</h3></div>' + (refs ? '<details><summary>参照したKnowledgeを確認</summary><ul>' + refs + '</ul></details>' : '<span class="knowledge-resolution-label">' + escapeHtml(noReference[0]) + '</span>') + '</section>';
+      const resultMarkup = result ? '<section class="surface-panel panel-padding qa-result"><div class="qa-result-header"><div><p class="eyebrow">QUALITY REPORT</p><h3>制作状態: ' + escapeHtml(statusLabel) + '</h3><p>確認日時: ' + escapeHtml(result.checked_at || "") + '</p></div><span class="qa-result-badge qa-result-' + escapeAttr(result.status || "attention") + '">' + escapeHtml(statusLabel) + '</span></div><ul class="qa-check-list">' + checks + '</ul>' + (issues ? '<div class="qa-issues"><h4>修正が必要な項目</h4><ul>' + issues + '</ul></div>' : "") + (warnings ? '<div class="qa-issues"><h4>確認してください</h4><ul>' + warnings + '</ul></div>' : "") + (refs ? '<div class="knowledge-reference-list"><h4>今回参照したKnowledge</h4><ul>' + refs + '</ul></div>' : '<div class="knowledge-workspace-note"><strong>' + escapeHtml(noReference[0]) + '</strong><span>' + escapeHtml(noReference[1]) + '</span></div>') + '</section>' : '<section class="surface-panel empty-panel"><h3>書き出し前に品質を確認する</h3><p>本文、ネーム、画像状態、ページ内のコマ数とKnowledgeの解決状況を確認します。判定は決定的なチェックを中心に行います。</p></section>';
+      const noSelection = (state.knowledge || []).length === 0;
+      const warningMarkup = qaKnowledgeWarningOpen && noSelection ? '<section class="surface-panel panel-padding qa-knowledge-warning" role="alert"><h3>このProjectにはKnowledgeが設定されていません。</h3><p>共通Knowledgeを適用してQAを実行しますか？</p><div class="save-row"><button type="button" class="primary-button compact-button" data-apply-recommended-knowledge>推奨Knowledgeを適用</button><button type="button" class="secondary-button compact-button" data-open-knowledge-settings>Knowledge設定を開く</button><button type="button" class="text-button" data-continue-without-knowledge>Knowledgeなしで続行</button></div></section>' : '';
+      const recommendationNotice = noSelection && !qaKnowledgeWarningOpen ? '<div class="knowledge-workspace-note"><strong>推奨Knowledgeを確認できます</strong><span>品質確認の前に適用できます。既存作品へ自動では追加しません。</span></div>' : '';
+      content.innerHTML = heading("Knowledge-aware QA", "書き出し前に制作状態と、どのKnowledge Versionを参照したかを確認します。") + knowledgeSummary + warningMarkup + recommendationNotice + '<div class="qa-toolbar"><div class="knowledge-workspace-note"><strong>確認対象</strong><span>原作の意図を変える判定ではなく、編集を続けるための状態チェックです。</span></div><button type="button" class="primary-button compact-button" data-run-quality-check>品質を確認する</button></div>' + resultMarkup + nextButton("preview", "Previewを見る");
+      content.querySelector("[data-run-quality-check]")?.addEventListener("click", function () { runQualityCheck(false); });
+      content.querySelector("[data-open-knowledge-settings]")?.addEventListener("click", function () { qaKnowledgeWarningOpen = false; goToStep("knowledge"); });
+      content.querySelector("[data-continue-without-knowledge]")?.addEventListener("click", function () { qaKnowledgeWarningOpen = false; runQualityCheck(true); });
+      content.querySelector("[data-apply-recommended-knowledge]")?.addEventListener("click", applyRecommendedKnowledgeAndRunQA);
       content.querySelector("[data-next-step]")?.addEventListener("click", function () { goToStep("preview"); });
     }
 
-    async function runQualityCheck() {
+    async function applyRecommendedKnowledgeAndRunQA() {
+      const button = content.querySelector("[data-apply-recommended-knowledge]");
+      if (button) button.disabled = true;
+      try {
+        const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/knowledge/recommended", { method: "POST", body: "{}" });
+        state = data.project;
+        qaKnowledgeWarningOpen = false;
+        if (!(state.knowledge || []).some(function (item) { return item.enabled; })) {
+          showToast("適用できる推奨Knowledgeがありません", "error");
+          render();
+          return;
+        }
+        showToast("推奨Knowledgeを適用しました");
+        await runQualityCheck(true);
+      } catch (error) {
+        showToast(error.message, "error");
+        render();
+      }
+    }
+
+    async function runQualityCheck(skipPreflight) {
+      if (!skipPreflight && (state.knowledge || []).length === 0) {
+        qaKnowledgeWarningOpen = true;
+        render();
+        return;
+      }
       const button = content.querySelector("[data-run-quality-check]");
       if (!button || button.disabled) return;
       button.disabled = true;

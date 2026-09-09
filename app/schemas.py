@@ -49,9 +49,11 @@ ALLOWED_KNOWLEDGE_SCOPES = {
 ALLOWED_KNOWLEDGE_CATEGORIES = {
     "style",
     "layout",
+    "story_adaptation",
     "character",
     "genre",
     "dialogue",
+    "production_rules",
     "world",
     "brand",
     "other",

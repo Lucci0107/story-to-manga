@@ -4,7 +4,7 @@
 
 ## 現在の状態
 
-ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。2026-09-08の全体最適化レビューでは、既存構成を維持しながら共有Demoの本番無効化、再起動時Job復旧、同時生成のDB一意保証、Project資産削除、抽出上限、security header、Jinja2 security patchを実装し、本番Browser QAで検出したモバイルテーマ操作の配置崩れも局所修正しました。同日のStoryboard Job同期修正では、長時間生成の状態復元、失敗収束、stale回復、大規模ページ分割、atomic保存、次工程遷移を本番で確認しました。
+ローカルで主要なStory to Manga制作フロー、Project横断Knowledge Library、OpenAI実AI接続とモデル選択・フォールバックを確認できるMVPです。GitHubの`main`へ接続・pushし、GitHub Actions CI成功後にRenderへ自動デプロイできる状態を確認済みです。永続化層はSQLite／ローカルStorageを維持したまま、将来のPostgreSQL／S3互換Storageへ移行できる境界を追加済みです。本番URLでSmoke Check、低負荷Production QA、管理者認証確認まで完了しています。言語・読順ロック機能と、Story Analysis由来のAI漫画化設定推奨も実装・ローカル・本番検証済みです。新規Projectではactive/readyな推奨Knowledgeをカテゴリ別Scope付きで自動選択し、既存Projectはユーザーが明示適用するまで変更しません。QAではKnowledge未選択、Scope不一致、処理中、無効、参照成功を区別し、利用Document/Versionを確認できます。
 
 **最終状態: COMPLETE**（将来の外部PostgreSQL／Object Storage移行は別タスク）
 
@@ -32,6 +32,8 @@
 - Knowledge Library（複数Document、Markdown見出し保持、正規化、SHA-256重複判定、Bounded Chunk）
 - KnowledgeのVersion履歴、旧Versionの再有効化、active/archived管理、Project単位のenable/disable
 - Projectごとの優先度、参照Scope、follow-latest / pinned Version設定と、AI処理ごとの参照メタデータ
+- 新規Projectの推奨Knowledge自動選択、カテゴリ別default Scope、既存Project向けの非破壊な推奨・明示適用
+- QAのKnowledge解決5状態、実参照Document/Version表示、Document/Version/Chunk/Scope traceability
 - 物語解析、漫画化設定、キャラクター、ネームの編集と永続化
 - ページ・コマの追加、削除、並び替え、レイアウト変更
 - コマ単位の生成Job、状態表示、再試行、重複リクエスト抑止
@@ -81,6 +83,10 @@
 - PDF／ページ画像へOFLのM PLUS 1pを埋め込み、閲覧環境の外部CMapへ依存せず日本語を表示
 
 ## 検証済み
+
+- Knowledge自動選択修正の全回帰: `pytest` 119 passed、`compileall`、JavaScript構文、`pip check`、`git diff --check`が成功
+- Knowledge自動選択のローカルBrowser QA: 新規Projectの推奨Layout初期ONとQA実参照、既存未設定Projectの3択warningと明示適用、Scope不一致表示、OFF設定のreload保持を確認
+- QA画面を390px／1440px、Light／Darkで確認し、横overflowなし、error overlayなし、console error 0件。画像生成は実行していません
 
 - `pytest`: 86 passed（Storyboard Job成功・失敗・validation例外・重複防止・stale recovery・heartbeat・48ページ分割・RTL/LTR・frontend復元を含む）
 - `psycopg[binary]`を含む依存関係でPostgreSQL接続backendを準備（外部DBへの接続は未実施）

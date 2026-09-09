@@ -24,7 +24,7 @@
         <p class="panel-lead">Markdownの見出し構造を保ったまま、Version 1として索引化します。</p>
         <form id="knowledge-upload-form" class="knowledge-upload-form" method="post" action="/api/knowledge" enctype="multipart/form-data">
           <label class="editor-label">タイトル<input name="title" maxlength="120" placeholder="例：会話シーンのルール" required></label>
-          <label class="editor-label">カテゴリ<select name="category"><option value="style">Style</option><option value="layout">Layout</option><option value="character">Character</option><option value="genre">Genre</option><option value="dialogue">Dialogue</option><option value="world">World</option><option value="brand">Brand</option><option value="other" selected>Other</option></select></label>
+          <label class="editor-label">カテゴリ<select name="category"><option value="style">Manga Style</option><option value="layout">Layout</option><option value="story_adaptation">Story Adaptation</option><option value="character">Character</option><option value="dialogue">Dialogue</option><option value="genre">Genre</option><option value="production_rules">Production Rules</option><option value="world">World</option><option value="brand">Brand</option><option value="other" selected>Other</option></select></label>
           <label class="editor-label">説明<textarea name="description" rows="3" maxlength="2000" placeholder="このKnowledgeを使う場面"></textarea></label>
           <div class="knowledge-source-tabs"><span class="source-tab-label">本文またはファイル</span><span>md / txt / PDF / docx、最大5MB</span></div>
           <label class="editor-label">本文<textarea name="source_text" rows="8" placeholder="# 見出し\n\n制作ルールを入力するか、下のファイルを選択してください。"></textarea></label>

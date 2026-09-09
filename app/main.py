@@ -48,9 +48,11 @@ from .services.export import export_pdf, export_zip
 from .services.knowledge import (
     append_knowledge_prompt,
     chunk_knowledge_text,
+    default_knowledge_scope,
     knowledge_content_hash,
     quality_check as knowledge_quality_check,
     normalize_knowledge_text,
+    recommended_knowledge_selections,
     retrieve_knowledge_context,
 )
 from .services.layout import repair_storyboard_page
@@ -194,6 +196,11 @@ def knowledge_document_view(document: Dict[str, Any], user_id: str) -> Dict[str,
     versions = db.list_knowledge_versions(document["id"], user_id)
     return {
         **document,
+        "default_scope": default_knowledge_scope(str(document.get("category", ""))),
+        "recommended": bool(default_knowledge_scope(str(document.get("category", ""))))
+        and bool(document.get("active"))
+        and not bool(document.get("archived"))
+        and document.get("active_version_status") == "ready",
         "versions": [knowledge_version_view(version) for version in versions],
     }
 
@@ -1238,6 +1245,7 @@ async def api_create_project(
     title: str = Form(...),
     story_text: str = Form(""),
     knowledge_ids: Optional[List[str]] = Form(None),
+    knowledge_selection_present: bool = Form(False),
     story_file: Optional[UploadFile] = File(None),
     user=Depends(current_user),
 ):
@@ -1256,21 +1264,49 @@ async def api_create_project(
         raise HTTPException(status_code=422, detail="本文は50万文字以内で入力してください")
     project = db.create_project(user["id"], clean, text, source_type, source_filename)
     selected_ids = list(dict.fromkeys(str(item) for item in (knowledge_ids or []) if str(item).strip()))
-    if selected_ids:
+    recommended = recommended_knowledge_selections(user["id"])
+    if knowledge_ids is None and not knowledge_selection_present:
+        selections = recommended
+    elif knowledge_selection_present:
+        # 画面で明示的にOFFにした推奨Knowledgeも行として残し、後から勝手に再有効化しない。
+        selected_set = set(selected_ids)
+        selections = [{**item, "enabled": item["knowledge_document_id"] in selected_set} for item in recommended]
+        known_ids = {item["knowledge_document_id"] for item in selections}
+        selections.extend(
+            {
+                "knowledge_document_id": document_id,
+                "enabled": True,
+                "priority": 50,
+                "mode": "follow_latest",
+                "selected_version_id": None,
+                "scope": ["all"],
+            }
+            for document_id in selected_ids
+            if document_id not in known_ids
+        )
+    else:
+        # APIクライアントがknowledge_idsを渡した場合は、その明示選択だけを保存する。
+        recommended_by_id = {item["knowledge_document_id"]: item for item in recommended}
+        selections = [
+            recommended_by_id.get(
+                document_id,
+                {
+                    "knowledge_document_id": document_id,
+                    "enabled": True,
+                    "priority": 50,
+                    "mode": "follow_latest",
+                    "selected_version_id": None,
+                    "scope": ["all"],
+                },
+            )
+            for document_id in selected_ids
+        ]
+    if selections:
         try:
             db.set_project_knowledge(
                 project["id"],
                 user["id"],
-                [
-                    {
-                        "knowledge_document_id": document_id,
-                        "enabled": True,
-                        "priority": 50,
-                        "mode": "follow_latest",
-                        "scope": ["all"],
-                    }
-                    for document_id in selected_ids
-                ],
+                selections,
             )
         except ValueError as exc:
             db.delete_project(project["id"], user["id"])
@@ -1368,6 +1404,35 @@ async def api_project_knowledge(project_id: str, user=Depends(current_user)):
     if selections is None:
         raise HTTPException(status_code=404, detail="Projectが見つかりません")
     return {"knowledge": selections}
+
+
+@app.get("/api/projects/{project_id}/knowledge/recommendation")
+async def api_project_knowledge_recommendation(project_id: str, user=Depends(current_user)):
+    """既存Projectを変更せず、適用可能な推奨Knowledgeだけを返す。"""
+
+    current = db.list_project_knowledge(project_id, user["id"])
+    if current is None:
+        raise HTTPException(status_code=404, detail="Projectが見つかりません")
+    return {
+        "can_apply": len(current) == 0,
+        "recommendations": recommended_knowledge_selections(user["id"]),
+    }
+
+
+@app.post("/api/projects/{project_id}/knowledge/recommended")
+async def api_apply_recommended_project_knowledge(project_id: str, user=Depends(current_user)):
+    """未設定の既存Projectへ、ユーザー操作時だけ推奨Knowledgeを適用する。"""
+
+    current = db.list_project_knowledge(project_id, user["id"])
+    if current is None:
+        raise HTTPException(status_code=404, detail="Projectが見つかりません")
+    if current:
+        raise HTTPException(status_code=409, detail="既存のKnowledge設定は変更しません")
+    recommendations = recommended_knowledge_selections(user["id"])
+    selections = db.set_project_knowledge(project_id, user["id"], recommendations) or []
+    db.update_project(project_id, user["id"], clear_quality_check=True)
+    project = require_project(project_id, user["id"])
+    return {"project": project_view(project), "knowledge": selections}
 
 
 @app.put("/api/projects/{project_id}/knowledge")
