@@ -41,10 +41,11 @@ def plan_panel_direction(panel, settings):
     if "center" in position or "中央" in position:
         character_zone["x"] = 0.27
     face_zone = {"x": character_zone["x"] + 0.04, "y": 0.12, "width": 0.36, "height": 0.38}
+    head_zone = {"x": character_zone["x"] + 0.02, "y": 0.08, "width": 0.40, "height": 0.46}
     prop_zone = {"x": character_zone["x"] + 0.03, "y": 0.56, "width": 0.38, "height": 0.30}
     raised_hand = any(word in str(panel.get("action", "")) for word in ("手を挙げ", "手を上げ", "raise", "wave"))
     hand_zone = {"x": character_zone["x"], "y": 0.08 if raised_hand else 0.56, "width": 0.16, "height": 0.25}
-    protected = deepcopy(panel.get("protected_zones") or ([face_zone, prop_zone, hand_zone] if panel.get("characters") else []))
+    protected = deepcopy(panel.get("protected_zones") or ([face_zone, head_zone, prop_zone, hand_zone] if panel.get("characters") else []))
     items, zones = [], []
     cursor = 0.04
     for kind, key in (("bubble", "dialogue"), ("narration", "narration"), ("sfx", "sfx")):
@@ -81,6 +82,9 @@ def plan_panel_direction(panel, settings):
             "in_world_text": resolve_in_world_text(panel),
             "source": "pre_generation_plan", "fingerprint": direction_fingerprint(panel, settings),
             "geometry": deepcopy(geometry), "character_zone": character_zone,
+            "head_safe_zone": head_zone,
+            "camera_framing": {"preserve_entire_head": True, "minimum_headroom": 0.08,
+                               "close_up_treatment": "head_and_shoulders_with_headroom"},
             "face_safe_zone": face_zone, "important_prop_zone": prop_zone, "important_hand_zone": hand_zone,
             "protected_zones": protected, "reserved_text_zones": zones,
             "crop_anchor": {"x": "right" if character_right else "left", "y": "middle"},

@@ -72,6 +72,6 @@ def generation_canvas_zones(panel: Mapping[str, Any], model_id: str | None = Non
                 "width": round(float(zone["width"]) * crop["width"], 5),
                 "height": round(float(zone["height"]) * crop["height"], 5)}
 
-    regions = {key: transform(direction[key]) for key in ("character_zone", "face_safe_zone", "important_prop_zone", "important_hand_zone") if direction.get(key)}
+    regions = {key: transform(direction[key]) for key in ("character_zone", "face_safe_zone", "head_safe_zone", "important_prop_zone", "important_hand_zone") if direction.get(key)}
     regions["text_reserved_zones"] = [transform(zone) for zone in direction.get("reserved_text_zones", [])]
     return {"generation_size": artwork_generation_size(panel, model_id), "final_crop_window": crop, "regions": regions}

@@ -530,7 +530,7 @@ def compose_panel_prompt(
     text_safe_zones = geometry.get("text_safe_zones") or panel.get("text_safe_zones") or {}
     reserved_text = json.dumps(text_safe_zones, ensure_ascii=False, separators=(",", ":")) if isinstance(text_safe_zones, dict) else "{}"
     direction = panel.get("panel_direction") or {}
-    planned_regions = json.dumps({key: direction.get(key) for key in ("character_zone", "face_safe_zone", "important_prop_zone", "important_hand_zone", "reserved_text_zones", "crop_anchor")}, ensure_ascii=False, separators=(",", ":")) if direction else "{}"
+    planned_regions = json.dumps({key: direction.get(key) for key in ("character_zone", "face_safe_zone", "head_safe_zone", "camera_framing", "important_prop_zone", "important_hand_zone", "reserved_text_zones", "crop_anchor")}, ensure_ascii=False, separators=(",", ":")) if direction else "{}"
     canvas_regions = json.dumps(generation_canvas_zones(panel), ensure_ascii=False, separators=(",", ":")) if direction else "{}"
     return (
         f"出力言語: {order_context['language_name']}。ページの読順: {order_context['panel_reading_order']}。"
@@ -546,6 +546,7 @@ def compose_panel_prompt(
         f"Confirmed PanelDirection (panel-relative): {planned_regions}。人物・顔・重要小物は指定領域へ配置し、文字予約領域は利用できる静かな背景として描く。白い文字帯や枠は描かない。"
         f"Generation canvas coordinates: {canvas_regions}。最終crop後に指定構図になるよう、この生成キャンバス座標に従う。頭頂・顎・重要な手指を全てfinal_crop_windowの内側へ収め、その境界から十分に離す。外周は切り落とし用の背景のみ描く。"
         "顔と重要な小物は安全領域に置き、中央固定のパスポート構図や左右の空レターボックスを避ける。"
+        "Framing priority: for a close-up, use a head-and-shoulders portrait, not an extreme facial crop. Keep the entire hair silhouette inside head_safe_zone, with at least 8% background headroom above the highest hair. Zoom out before cutting hair, chin, or an important hand. This overrides a tight close-up interpretation. "
         "文字や吹き出しは描かず、後工程で合成する。"
         + in_world_text_prompt(panel)
     )

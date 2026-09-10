@@ -65,6 +65,20 @@ def test_prompt_uses_plan_regions():
         assert key in prompt
 
 
+def test_close_up_plans_whole_head_before_generation():
+    from app.services.artwork_geometry import generation_canvas_zones
+    item = panel()
+    item['shot_type'] = 'close-up'
+    item['panel_direction'] = plan_panel_direction(item, {})
+    direction = item['panel_direction']
+    assert direction['head_safe_zone']['y'] >= 0.08
+    assert direction['camera_framing']['preserve_entire_head']
+    assert 'head_safe_zone' in generation_canvas_zones(item)['regions']
+    prompt = compose_panel_prompt(item, [], {})
+    assert 'head-and-shoulders portrait' in prompt
+    assert '8% background headroom' in prompt
+
+
 @pytest.mark.parametrize("kind", ["normal", "thought", "shout", "whisper", "weak", "comedic_reaction", "announcement"])
 def test_explicit_dialogue_semantics(kind):
     profile = resolve_visual_style({"visual_style": "comedy"})
