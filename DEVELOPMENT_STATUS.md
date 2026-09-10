@@ -2,6 +2,17 @@
 
 更新日: 2026-09-11
 
+## 保存済み構図照合後の限定2コマ検証（2026-09-11、視覚ゲート未達）
+
+- 明示承認に基づき、新規非本番Project `c64f0300-1c31-4d19-93ce-d53bec9572e7` でmedium_close人物1コマと手/器具close_up1コマを各1回生成。既存6コマ・過去の校正画像・本番Projectは変更せず、排他マーカーとRetryなしで2回に限定。追加生成・main反映・merge・deployなし。
+- 課金前にshotを確定して設計・DB保存し、保存返却値と再読込のComposition/geometry/PanelDirection/text_layoutが一致することをassert。校正スクリプトはDBから読み直した方向指定だけでpromptを作成し、prompt保存・再読込後にも一致を確認。生成後も構図のsnapshot一致を確認（実生成canvas/traceメタデータを除外）。
+- Preview PNG/PDF/ZIP生成時にlayout.reflow_pageを禁止し、保存済み構図で書き出せることを生成前後で確認。4ページすべてでPreview PNGとZIP PNGがバイト一致、PDF内埋込RGB画像ともピクセル一致。今回の保存済み設計は文字領域不足なし。旧校正Projectの不足状態は修正・上書きしていません。
+- 要求/実画像寸法一致: medium_close=880×1120、手/器具close_up=1440×720。原画2枚と合成ページ2/3を目視。medium_closeは髪の最上部を保持し、余白は目視約3〜4%で設計目安5〜9%より狭いが自然（TIGHT_BUT_ACCEPTABLE）。顔の大きさ、右側のセリフ領域、漫画表現は保持。
+- **FAILED:** 手/器具close_upは原画の時点で頭頂が切れ、FAIL_CROP_RISK。顔と握った手/器具、右側セリフ領域は見えるが、保存された頭部安全領域への実画像追従は不合格。双方とも目視で偶発的な可読背景文字・顔と吹き出しの衝突は認めないものの、OCRや全身体要素の保証ではありません。PDF専用補正・crop変更・画像差し替えで隠していません。
+- 全回帰 **253 passed（30.58秒）**、diff check成功。今回は製品コード変更なし。新規Browser UI/console検証およびPDF全ページの独立ラスタライズ目視は未実施。描画データ一致を完成漫画の視覚合格と混同しません。今回Projectは2/16コマのみ実画像、残りは設計図なので完成4ページの品質ゲートも未達です。
+- 診断成果物: `/tmp/manga-readable-qa.HNAykr/reconstructed/persisted-after.pdf`、同名ZIP、`persisted-after-1.png`〜`4.png`。原画は同QAルートの`assets/c64f0300-1c31-4d19-93ce-d53bec9572e7/`。秘密値・prompt全文は記録しません。保護フォルダは未変更・未追跡。
+- 次は横長close shotで頭部・手/器具を同時保持する生成前設計の再検討。単に余白の文言を繰り返したりPDFを補正したりして解決扱いしません。実画像効果は未合格のため残り10コマへ進まず、以後の有料生成には別の明示承認が必要です。
+
 ## 実状態再監査・校正失敗の切り分け（2026-09-11、未リリース）
 
 - 起点は専用ブランチ715b818、追跡ファイルclean。fetch後origin/main=06c478b、remote-only 0/local-only 9。mainの最新CI34362218932はsuccess。本番公開smokeはhealth/login/CSS/JSすべてHTTP200。これは専用ブランチが本番反映された証拠ではありません。
