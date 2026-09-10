@@ -72,6 +72,8 @@ def test_hands_props_and_text_metadata_reach_direction():
     direction = plan_panel_direction(panel, {})
     framing = direction['camera_framing']
     assert framing['hands_required'] and framing['props_required']
-    assert framing['top_safe_zone']['height'] == .07
+    # 横長で手と器具を同時に要求する場合は、mediumへ引いて頭部を上端から離す。
+    assert framing['top_safe_zone']['height'] > .07
+    assert framing['effective_shot_type'] == 'medium'
     assert framing['text_reserved_zones'] == direction['reserved_text_zones']
     assert direction['status'] == 'ready'

@@ -27,7 +27,12 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
     scale_max = min(available_height / BODY_HEAD_UNITS[extent], horizontal_limit)
     initial = HEAD_SCALE[requested]
     effective = requested
-    if applicable and initial > scale_max:
+    # 横長で頭・手・器具を同時に見せるclose-upは、モデルが顔を過大化しやすい。
+    # 文字領域もある場合を含め、mediumへ引いてから生成前に構図を確定する。
+    wide_multi_requirement = applicable and ratio >= 1.6 and hands and props
+    if wide_multi_requirement:
+        effective = 'medium'
+    elif applicable and initial > scale_max:
         for candidate in ('medium_close', 'medium'):
             if HEAD_SCALE[candidate] <= min(scale_max, initial):
                 effective = candidate
@@ -35,7 +40,9 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
     target = HEAD_SCALE[effective]
     failed = applicable and (target > scale_max or target < .18 or text_area > .50)
     status = 'fail' if failed else 'tight' if applicable and target > scale_max * .9 else 'pass'
-    reason = ('横長コマで頭部・必要な手/小物・文字領域を保持するため身体範囲を広げます。'
+    reason = ('横長コマで頭部・必要な手/小物・文字領域を保持するため、close-upからmediumへ身体範囲を広げます。'
+              if wide_multi_requirement else
+              '横長コマで頭部・必要な手/小物・文字領域を保持するため身体範囲を広げます。'
               if effective != requested else '')
     return {'requested_shot_type': requested, 'effective_shot_type': effective,
             'shot_adjustment_reason': reason, 'required_body_extent': extent,

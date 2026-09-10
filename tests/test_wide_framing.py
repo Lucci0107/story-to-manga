@@ -21,7 +21,7 @@ def test_wide_required_content_relaxes_close_shot():
     f = d['composition_feasibility']
     assert f['requested_feasibility'] == 'fail'
     assert f['requested_shot_type'] == 'close_up'
-    assert f['effective_shot_type'] == 'medium_close'
+    assert f['effective_shot_type'] == 'medium'
     assert f['shot_adjustment_reason']
     assert f['subject_scale_target'] < .60
     assert .38 <= d['camera_framing']['face_center_y'] <= .50
@@ -36,8 +36,8 @@ def test_prompt_uses_effective_saved_shot():
     panel = planned()
     saved = json.loads(json.dumps(panel))
     prompt = compose_panel_prompt(saved, [], SETTINGS)
-    assert 'ショット: medium_close' in prompt
-    assert 'head height must be about 38%' in prompt
+    assert 'ショット: medium' in prompt
+    assert 'head height must be about 30%' in prompt
     assert saved == panel
 
 
@@ -83,7 +83,7 @@ def test_database_roundtrip_preserves_effective_composition(tmp_path, monkeypatc
     loaded = db.get_project(project['id'], user['id'])
     assert loaded['storyboard'] == saved['storyboard']
     panel = loaded['storyboard'][0]['panels'][2]
-    assert panel['panel_direction']['camera_framing']['effective_shot_type'] == 'medium_close'
+    assert panel['panel_direction']['camera_framing']['effective_shot_type'] == 'medium'
     assert direction_is_ready(panel, loaded['settings'])
     frozen = deepcopy(loaded['storyboard'][0])
     frozen['panels'][2]['image_url'] = '/media/test/nonexistent.png'

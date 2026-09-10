@@ -2,6 +2,13 @@
 
 更新日: 2026-09-11
 
+## 横長コマの追加フレーミング校正（2026-09-11、実画像は再生成せず）
+
+- 代表1コマの生成画像で髪が上端に接したため、追加課金は行わず生成前判定だけを調整。横長（比率1.6以上）で頭・手・重要器具を同時に要求する場合は、要求がclose_upまたはmedium_closeでも有効ショットをmediumへ引き、頭部高の目標を30%へ下げる。顔中心を約0.38へ置き、chest_handsの身体範囲・手/器具・文字予約領域を保持する。
+- `requested_shot_type`、`effective_shot_type`、`shot_adjustment_reason`、subject scale、head/face/hand/prop/text領域をPanelDirectionへ保存し、promptは保存済みeffective shotから組み立てる。PDF/Preview/ZIPの補正や画像後処理、既存原画の差し替えは行っていない。
+- 構造テストと全回帰 **261 passed（29.75秒）**。既存の顔のみ近景、意図的tight/extreme crop、非人物コマの扱いは維持。今回の代表画像は既に1回生成済みで、追加生成・残り10コマ・本番変更は未実施。
+- IMPLEMENTED_NEEDS_VALIDATION: mediumへの自動緩和が実画像で頭頂・顔・手・器具・文字領域を同時に守るか。BLOCKED: 同じ失敗クラスの新規代表1コマ有料再検証には別途明示承認が必要。保護フォルダは未変更・未追跡。
+
 ## 横長・手/器具・文字領域の代表1コマ検証（2026-09-11、視覚ゲート未達）
 
 - 明示承認に基づき、新規非本番Project `70cc522f-1b6f-4db1-a216-a2bc16f8c646` の `validation-3-3` だけを1回生成。新規Projectの専用assetへ保存し、既存6コマ・過去校正画像・本番Project・既存履歴は変更・上書きしていない。追加生成、Retry、残り10コマ、merge、push、deployは行っていない。

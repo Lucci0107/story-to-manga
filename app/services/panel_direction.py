@@ -96,6 +96,7 @@ def plan_panel_direction(panel, settings):
         framing.update(feasibility)
         framing['shot_type'] = feasibility['effective_shot_type']
         framing['body_extent_requirement'] = feasibility['required_body_extent']
+        framing['minimum_headroom'] = framing['headroom_target_min']
         target = (framing['headroom_target_min'] + framing['headroom_target_max']) / 2
         scale = feasibility['subject_scale_target']
         # 顔だけ下へずらさず、頭部全体を縮尺から配置する。手/器具は下段に残す。
