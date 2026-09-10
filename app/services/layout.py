@@ -23,6 +23,8 @@ from .composition import (
 )
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 from .text_composition import separate_text_from_unverified_artwork
+from .visual_style import apply_text_direction, resolve_visual_style
+from .panel_direction import plan_panel_direction, direction_is_ready
 
 
 LAYOUT_VERSION = 2
@@ -249,6 +251,7 @@ def _rows_for_panels(
     panels: Sequence[Mapping[str, Any]],
     *,
     force_dominant: bool = True,
+    dominant_index: int | None = None,
 ) -> List[List[int]]:
     count = len(panels)
     pattern = _base_pattern(template, count)
@@ -263,8 +266,8 @@ def _rows_for_panels(
     if template == TEMPLATE_FOUR_PANEL or count < 3 or not force_dominant:
         return rows
     scores = [panel_importance(panel) for panel in panels]
-    highlight = max(range(count), key=lambda index: (scores[index], index))
-    if scores[highlight] < IMPORTANCE_SCORES["high"]:
+    highlight = dominant_index if dominant_index is not None else max(range(count), key=lambda index: (scores[index], index))
+    if dominant_index is None and scores[highlight] < IMPORTANCE_SCORES["high"]:
         return rows
     for row_index, row in enumerate(rows):
         if highlight not in row or len(row) == 1:
@@ -310,8 +313,9 @@ def _physical_boxes_for_row(
     y: float,
     height: float,
     uniform: bool,
+    gap: float = PANEL_GAP,
 ) -> Dict[int, Dict[str, float]]:
-    available_width = 1 - PAGE_SIDE_MARGIN * 2 - PANEL_GAP * max(0, len(indices) - 1)
+    available_width = 1 - PAGE_SIDE_MARGIN * 2 - gap * max(0, len(indices) - 1)
     if uniform:
         raw_weights = [1.0] * len(indices)
     else:
@@ -334,7 +338,7 @@ def _physical_boxes_for_row(
             "height": _round(height),
             "column": physical_column,
         }
-        x += width + PANEL_GAP
+        x += width + gap
     return result
 
 
@@ -386,6 +390,8 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
             if isinstance(panel, Mapping)
         ],
     }
+    if any(panel.get("dialogue_types") or panel.get("sfx_types") for panel in page.get("panels", [])):
+        payload["text_semantics"] = [{"dialogue_types": panel.get("dialogue_types"), "sfx_types": panel.get("sfx_types")} for panel in page.get("panels", [])]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
@@ -569,12 +575,14 @@ def reflow_page(
     language = canonicalize_stored_settings(settings).get("language")
     composition_version = _requested_composition_version(next_page, settings) if enable_composition else 2
     semantic_mode = composition_version >= SEMANTIC_COMPOSITION_VERSION
+    panel_gap = resolve_visual_style(settings or {})["gutter_width"] if semantic_mode else PANEL_GAP
     family = semantic_page_family(next_page) if semantic_mode else ""
     dominant_index = semantic_dominant_panel_index(next_page) if semantic_mode else None
     rows = _rows_for_panels(
         template,
         panels,
         force_dominant=not semantic_mode or dominant_index is not None,
+        dominant_index=dominant_index,
     )
     row_weights = _row_base_weights(template, len(rows))
     for row_index, indices in enumerate(rows):
@@ -598,7 +606,7 @@ def reflow_page(
                 # 少コマページで主役が半ページを超えないよう、面積差を保ったまま上限を置く。
                 row_weights[row_index] = min(row_weights[row_index], max(other_weights) * 1.15)
     top_margin = 0.075 if semantic_mode and int(page.get("page_number", 1) or 1) == 1 and page.get("title") else PAGE_TOP_MARGIN
-    total_height = 1 - top_margin - PAGE_BOTTOM_MARGIN - PANEL_GAP * max(0, len(rows) - 1)
+    total_height = 1 - top_margin - PAGE_BOTTOM_MARGIN - panel_gap * max(0, len(rows) - 1)
     weight_total = sum(row_weights) or 1.0
     row_heights = [total_height * weight / weight_total for weight in row_weights]
     if semantic_mode and rows:
@@ -620,6 +628,7 @@ def reflow_page(
             y,
             row_height,
             template == TEMPLATE_FOUR_PANEL,
+            gap=panel_gap,
         )
         for panel_index in indices:
             box = boxes[panel_index]
@@ -654,7 +663,7 @@ def reflow_page(
                 geometry["bleed"] = bool(next_page.get("page_number", 1) == 1 and len(panels) == 1)
                 geometry["gutter"] = {
                     "type": "diagonal" if shape != "rectangle" else "normal",
-                    "width": _round(0.010 if shape != "rectangle" else PANEL_GAP),
+                    "width": _round(panel_gap),
                 }
                 geometry["semantic_family"] = family if semantic_mode else ""
                 geometry["dominant"] = bool(semantic_mode and dominant_index == panel_index)
@@ -690,7 +699,25 @@ def reflow_page(
                 protected_zones=geometry.get("protected_zones") if semantic_mode else None,
             )
             if semantic_mode:
-                separate_layout = separate_text_from_unverified_artwork(panels[panel_index], geometry, str(language))
+                current_panel = panels[panel_index]
+                planned = current_panel.get("panel_direction")
+                if not current_panel.get("image_url"):
+                    planned = plan_panel_direction(current_panel, settings or {})
+                    current_panel["panel_direction"] = planned
+                if planned and (not current_panel.get("image_url") or direction_is_ready(current_panel, settings or {})):
+                    current_panel["text_layout"] = deepcopy(planned["text_layout"])
+                    geometry["protected_zones"] = deepcopy(planned["protected_zones"])
+                    geometry["text_safe_zones"] = {item["item_id"]: item for item in planned["reserved_text_zones"]}
+                    geometry["crop_anchor_x"] = planned["crop_anchor"]["x"]
+                    geometry["crop_anchor_y"] = planned["crop_anchor"]["y"]
+                    geometry["allow_breakout"] = False
+                elif planned:
+                    # 生成済み画像の旧構図と新しい本文を無理に合わせない。
+                    current_panel["panel_direction"] = {**planned, "status": "needs_revision"}
+                    current_panel["text_layout"]["warnings"].append("生成時の構図と現在の設定が異なります。人物位置を確認して再設計してください。")
+                    for item in current_panel["text_layout"]["items"]:
+                        item["overflow"] = True
+                separate_layout = None if planned else separate_text_from_unverified_artwork(current_panel, geometry, str(language))
                 if separate_layout:
                     panels[panel_index]["text_layout"] = separate_layout
                     geometry["artwork_viewport"] = separate_layout["artwork_viewport"]
@@ -699,8 +726,9 @@ def reflow_page(
                     geometry["shape"] = "rectangle"
                     geometry["shape_reason"] = ""
                     geometry["polygon_points"] = shape_points(box, "rectangle")
+                apply_text_direction(panels[panel_index], settings or {})
             geometries.append(geometry)
-        y += row_height + PANEL_GAP
+        y += row_height + panel_gap
 
     signature = _page_signature(next_page, settings)
     next_page["layout_version"] = LAYOUT_VERSION

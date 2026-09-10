@@ -482,6 +482,8 @@ def queue_panels(
 ) -> Dict[str, Any]:
     """対象コマをキューへ入れ、実行中の重複リクエストを除外する。"""
 
+    from .services.panel_direction import direction_is_ready
+
     storyboard = project.get("storyboard", []) or []
     selected = set(panel_ids)
     candidates: List[Dict[str, Any]] = []
@@ -499,6 +501,8 @@ def queue_panels(
         if status == "failed" and not retry_failed and not force:
             skipped.append(str(panel.get("id")))
             continue
+        if (panel.get("panel_direction") or (_page.get("composition") or {}).get("style_profile")) and not direction_is_ready(panel, project.get("settings") or {}):
+            raise HTTPException(status_code=422, detail="生成前の構図が未確定または文字領域が不足しています。ネームの文字量・コマ面積を調整し、配置を再計算してください。画像生成は開始していません。")
         panel["generation_status"] = "queued"
         panel["generation_error"] = None
         candidates.append(panel)
@@ -560,6 +564,10 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             time.sleep(0.18)
             latest = db.get_project(project_id, user_id) or project
             _latest_page, latest_panel = find_panel(latest, str(job["target_id"]))
+            from .services.panel_direction import direction_is_ready
+
+            if (latest_panel.get("panel_direction") or (_latest_page.get("composition") or {}).get("style_profile")) and not direction_is_ready(latest_panel, latest.get("settings") or {}):
+                raise ArtworkGenerationError("構図が変更されました。画像生成前に配置を再計算してください。")
             knowledge_context = retrieve_knowledge_context(
                 project_id,
                 user_id,
@@ -570,6 +578,9 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                 ),
             )
             model_settings = project_ai_model_settings(latest, user_id)
+            from .services.model_registry import model_for_task
+
+            latest_panel["generation_image_model"] = model_for_task(model_settings, "image")
             provider = get_ai_provider(model_settings)
             prompt_source = latest_panel.get("prompt_source", "generated")
             if getattr(provider, "uses_external_api", False) and prompt_source != "user":
@@ -591,6 +602,11 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     )
                     record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
             latest_panel["generation_prompt"] = append_knowledge_prompt(base_prompt, knowledge_context)
+            if latest_panel.get("panel_direction"):
+                from .services.ai_pipeline import compose_panel_prompt
+
+                # LLMの要約や手入力Promptから確定構図が脱落しないよう、生成境界で付加する。
+                latest_panel["generation_prompt"] += "\n確定済み構図・描画条件:\n" + compose_panel_prompt(latest_panel, latest.get("characters") or [], latest.get("settings") or {})
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
             # 外部画像APIの待機中も、Jobが生きていることを記録する。
             db.touch_generation_job(job_id)

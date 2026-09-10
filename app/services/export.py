@@ -275,7 +275,7 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
         composition = composition_for_page(page)
         c.setPageSize(A4)
         if int(composition.get("composition_version", 1) or 1) >= 2:
-            measured = any((panel.get("text_layout") or {}).get("placement_mode") == "reserved_text_band" for panel in page.get("panels", []))
+            measured = bool(composition.get("style_profile")) or any((panel.get("text_layout") or {}).get("placement_mode") == "reserved_text_band" for panel in page.get("panels", []))
             if measured:
                 # 実測文字のページはPreview/ZIPと同じピクセルを利用する。
                 # A4用に再描画するとcropと字形が変わるため、ページ比率も揃える。
@@ -377,6 +377,17 @@ def _pil_panel_image(
     if source is None:
         placeholder = Image.new("RGB", (max(1, width), max(1, height)), (224, 223, 216))
         draw = ImageDraw.Draw(placeholder)
+        direction = panel.get("panel_direction") or {}
+        if direction:
+            for key, label, color in (("character_zone", "人物", "#e4eadf"), ("face_safe_zone", "顔", "#c1d8cf"), ("important_prop_zone", "手・重要小物", "#d2dce6")):
+                zone = direction.get(key) or {}
+                if not zone:
+                    continue
+                x, y = zone["x"] * width, zone["y"] * height
+                right, bottom = x + zone["width"] * width, y + zone["height"] * height
+                draw.rectangle((x, y, right, bottom), fill=color, outline="#66776e", width=1)
+                draw.text(((x + right) / 2, (y + bottom) / 2), label, fill="#273b32", font=_load_page_font(max(10, min(17, width // 20))), anchor="mm")
+            return placeholder
         draw.text((width // 2, height // 2), "ARTWORK", fill=(85, 87, 82), font=_load_page_font(18), anchor="mm")
         return placeholder
     source = _crop_image_to_box(source, width, height, "fill", crop_anchor_x, crop_anchor_y)
@@ -468,6 +479,11 @@ def _draw_text_item(
     height: int,
 ) -> None:
     """Panel内外どちらの文字要素にも同じ描画スタイルを適用する。"""
+
+    from .direction_render import draw_directed_text
+
+    if draw_directed_text(draw, item, left, top, width, height):
+        return
 
     item_type = str(item.get("type", "bubble"))
     text = str(item.get("text", ""))
@@ -586,7 +602,8 @@ def _render_composition_png(
     draw = ImageDraw.Draw(image)
     for geometry in geometry_lookup.values():
         points = normalize_polygon(geometry.get("polygon_points"), geometry)
-        draw.line([(round(point[0] * width), round(point[1] * height)) for point in [*points, points[0]]], fill=(24, 25, 23, 255), width=max(2, round(width * 0.003)))
+        border = (composition.get("style_profile") or {}).get("panel_border", 2.7)
+        draw.line([(round(point[0] * width), round(point[1] * height)) for point in [*points, points[0]]], fill=(24, 25, 23, 255), width=max(1, round(width / PAGE_SIZE[0] * border)))
 
     # Breakoutは元Artworkを再利用し、画像生成や外部サービスを追加で呼ばない。
     # 文字が人物の前景に来るよう、BreakoutをPanel内の文字より先に描く。

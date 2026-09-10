@@ -24,6 +24,15 @@ from app.services.layout import ensure_page_layout, reflow_page, repair_storyboa
 from app.services.storage import LocalFileStorage
 
 
+def test_explicit_dominant_controls_row_instead_of_importance_tie():
+    from app.services.layout import _rows_for_panels, TEMPLATE_ACTION
+
+    panels = [{"id": str(index), "importance": "high"} for index in range(6)]
+    rows = _rows_for_panels(TEMPLATE_ACTION, panels, dominant_index=2)
+    assert [2] in rows
+    assert [index for row in rows for index in row] == list(range(6))
+
+
 def _page(
     *,
     layout: str = "conversation",

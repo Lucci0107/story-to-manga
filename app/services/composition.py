@@ -849,7 +849,19 @@ def build_page_composition(
     """指定Versionに応じてv2互換または意味的v3を作る。"""
 
     if composition_version >= SEMANTIC_COMPOSITION_VERSION:
-        return _build_v3_page_composition(page, geometries, settings)
+        from .visual_style import resolve_visual_style
+
+        composition = _build_v3_page_composition(page, geometries, settings)
+        composition["style_profile"] = resolve_visual_style(settings or {})
+        composition["page_direction"] = {
+            "page_role": str(page.get("page_role") or composition["semantic_family"]),
+            "dominant_panel": composition["dominant_panel_id"],
+            "panel_count": len(geometries),
+            "reading_order": [item.get("panel_id") for item in geometries],
+            "panel_area_weights": {str(item.get("panel_id")): _round(_float(item.get("width")) * _float(item.get("height"))) for item in geometries},
+            "status": "needs_revision" if any((panel.get("panel_direction") or {}).get("status") == "needs_revision" for panel in page.get("panels", [])) else "ready",
+        }
+        return composition
     return _build_v2_page_composition(page, geometries, settings)
 
 

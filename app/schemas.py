@@ -696,6 +696,9 @@ def normalize_storyboard(
                 "face_position": str(raw_panel.get("face_position") or "")[:80],
                 "text_safe_zones": raw_panel.get("text_safe_zones") if isinstance(raw_panel.get("text_safe_zones"), dict) else {},
                 "protected_zones": raw_panel.get("protected_zones") if isinstance(raw_panel.get("protected_zones"), list) else [],
+                "dialogue_types": [str(value)[:32] for value in raw_panel.get("dialogue_types", [])[:16]] if isinstance(raw_panel.get("dialogue_types"), list) else [],
+                "sfx_types": [str(value)[:32] for value in raw_panel.get("sfx_types", [])[:16]] if isinstance(raw_panel.get("sfx_types"), list) else [],
+                "panel_direction": raw_panel.get("panel_direction") if isinstance(raw_panel.get("panel_direction"), dict) else None,
             }
             for field in list_fields:
                 source = raw_panel.get(field, [])

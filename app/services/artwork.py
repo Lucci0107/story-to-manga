@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 from io import BytesIO
 import re
 from pathlib import PurePosixPath
@@ -17,6 +18,7 @@ from urllib.parse import urlparse
 from PIL import Image, ImageColor, ImageDraw
 
 from ..config import get_settings
+from .artwork_geometry import artwork_generation_size, generation_canvas_zones
 from .openai_client import OpenAIRequestError, request_bytes, request_json
 from .model_registry import is_allowed_image_model, model_for_task, new_generation_metadata
 from .storage import StorageError, StorageService, get_storage
@@ -173,15 +175,15 @@ def save_openai_image(
     requested_model = model_id if is_allowed_image_model(str(model_id or "")) else runtime.openai_image_model
     if not is_allowed_image_model(str(requested_model)):
         requested_model = "gpt-image-2"
-    geometry = panel.get("geometry") if isinstance(panel.get("geometry"), dict) else {}
-    try:
-        ratio = float(geometry.get("width", 1) or 1) / max(float(geometry.get("height", 1) or 1), 0.01)
-    except (TypeError, ValueError):
-        ratio = 1.0
-    generation_size = "1536x1024" if ratio >= 1.45 else "1024x1536" if ratio <= 0.72 else "1024x1024"
+    generation_size = artwork_generation_size(panel, str(requested_model))
+    prompt = panel.get("generation_prompt") or "漫画のコマ。文字は描かない。"
+    if panel.get("panel_direction"):
+        canvas_plan = generation_canvas_zones(panel, str(requested_model))
+        prompt += "\nActual generation canvas (authoritative): " + json.dumps(canvas_plan, ensure_ascii=False)
+        panel["panel_direction"]["generation_canvas"] = canvas_plan
     payload = {
         "model": requested_model,
-        "prompt": panel.get("generation_prompt") or "漫画のコマ。文字は描かない。",
+        "prompt": prompt,
         "size": generation_size,
         "quality": "low",
     }

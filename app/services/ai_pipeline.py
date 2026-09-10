@@ -14,6 +14,8 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config import get_settings
+from .artwork_geometry import artwork_aspect_ratio, generation_canvas_zones
+from .visual_style import resolve_visual_style
 from ..schemas import normalize_analysis, normalize_characters, normalize_storyboard
 from .openai_client import OpenAIRequestError, parse_json_text, request_json, response_output_text
 from .model_registry import (
@@ -141,6 +143,9 @@ PANEL_SCHEMA: Dict[str, Any] = {
         "dialogue": {"type": "array", "items": {"type": "string"}},
         "narration": {"type": "array", "items": {"type": "string"}},
         "sfx": {"type": "array", "items": {"type": "string"}},
+        "dialogue_types": {"type": "array", "items": {"type": "string", "enum": ["normal", "thought", "shout", "whisper", "weak", "comedic_reaction", "announcement"]}},
+        "sfx_types": {"type": "array", "items": {"type": "string", "enum": ["footstep", "impact", "stop", "ambient", "mechanical", "heartbeat", "door", "rustle", "comedic_reaction", "other"]}},
+        "character_position": {"type": "string", "enum": ["left", "right", "center", ""]},
         "panel_role": {"type": "string"},
         "scene_type": {
             "type": "string",
@@ -158,6 +163,9 @@ PANEL_SCHEMA: Dict[str, Any] = {
         "dialogue",
         "narration",
         "sfx",
+        "dialogue_types",
+        "sfx_types",
+        "character_position",
         "panel_role",
         "scene_type",
         "importance",
@@ -505,37 +513,32 @@ def compose_panel_prompt(
             f"小物 {character.get('accessories', '')}; 特徴 {character.get('distinguishing_features', '')}; "
             f"制約 {character.get('negative_constraints', '')}"
         )
-    style_labels = {
-        "dynamic": "動きのある少年漫画風の演出",
-        "elegant": "繊細で余白のある少女漫画風の演出",
-        "cinematic": "映画的な陰影と画面構成",
-        "comedy": "表情豊かでテンポのよいコメディ演出",
-        "minimal": "線と余白を活かしたミニマルな演出",
-        "webtoon": "縦読みを意識した明快なコマ構成",
-    }
+    style_profile = resolve_visual_style(settings)
     mode = "白黒" if settings.get("color_mode") == "bw" else "カラー"
     geometry = panel.get("geometry") if isinstance(panel.get("geometry"), dict) else {}
     panel_shape = str(geometry.get("shape") or panel.get("panel_shape") or "rectangle")
-    try:
-        target_ratio = float(geometry.get("width", 1) or 1) / max(float(geometry.get("height", 1) or 1), 0.01)
-    except (TypeError, ValueError):
-        target_ratio = 1.0
-    crop_anchor = f"{panel.get('crop_anchor_x', geometry.get('crop_anchor_x', 'center'))}/{panel.get('crop_anchor_y', geometry.get('crop_anchor_y', 'middle'))}"
+    target_ratio = artwork_aspect_ratio(panel)
+    crop_anchor = f"{geometry.get('crop_anchor_x', panel.get('crop_anchor_x', 'center'))}/{geometry.get('crop_anchor_y', panel.get('crop_anchor_y', 'middle'))}"
     breakout_intent = "前景の人物または髪を最終ページでPanel境界から少し出せる構図" if geometry.get("allow_breakout") or panel.get("allow_breakout") else "人物はPanel内の安全領域に収める構図"
     semantic_family = str(geometry.get("semantic_family") or panel.get("semantic_family") or "dialogue")
     shape_reason = str(geometry.get("shape_reason") or panel.get("shape_reason") or "").strip()
     text_safe_zones = geometry.get("text_safe_zones") or panel.get("text_safe_zones") or {}
     reserved_text = json.dumps(text_safe_zones, ensure_ascii=False, separators=(",", ":")) if isinstance(text_safe_zones, dict) else "{}"
+    direction = panel.get("panel_direction") or {}
+    planned_regions = json.dumps({key: direction.get(key) for key in ("character_zone", "face_safe_zone", "important_prop_zone", "important_hand_zone", "reserved_text_zones", "crop_anchor")}, ensure_ascii=False, separators=(",", ":")) if direction else "{}"
+    canvas_regions = json.dumps(generation_canvas_zones(panel), ensure_ascii=False, separators=(",", ":")) if direction else "{}"
     return (
         f"出力言語: {order_context['language_name']}。ページの読順: {order_context['panel_reading_order']}。"
         f"吹き出しの読順: {order_context['bubble_reading_order']}。"
-        f"{mode}、{style_labels.get(settings.get('visual_style'), '映画的な画面構成')}。"
+        f"{mode}、{style_profile['artwork_tone']}。"
         f"ショット: {panel.get('shot_type', '')}。舞台: {panel.get('background', '')}。"
         f"行動: {panel.get('action', '')}。表情: {panel.get('expression', '')}。"
         f"登場人物: {' / '.join(identities)}。"
         f"Panel geometry: {panel_shape}, target aspect ratio {target_ratio:.2f}:1, crop anchor {crop_anchor}, {breakout_intent}。"
         f"Semantic family: {semantic_family}。shape reason: {shape_reason or 'rectangle default'}。"
         f"Reserved text safe zones (panel-relative): {reserved_text}。予約領域は背景を静かに保ち、顔・重要な手・小物を置かない。"
+        f"Confirmed PanelDirection (panel-relative): {planned_regions}。人物・顔・重要小物は指定領域へ配置し、文字予約領域は利用できる静かな背景として描く。白い文字帯や枠は描かない。"
+        f"Generation canvas coordinates: {canvas_regions}。最終crop後に指定構図になるよう、この生成キャンバス座標に従う。頭頂・顎・重要な手指を全てfinal_crop_windowの内側へ収め、その境界から十分に離す。外周は切り落とし用の背景のみ描く。"
         "顔と重要な小物は安全領域に置き、中央固定のパスポート構図や左右の空レターボックスを避ける。"
         "文字や吹き出しは描かず、後工程で合成する。"
     )
@@ -1027,6 +1030,8 @@ class OpenAIProvider(DemoAIProvider):
             "languageとreading_directionは入力されたProjectルールをそのまま返し、AIの判断で変更しないでください。"
             "各PageとPanelへ役割・scene_type・importanceを設定してください。通常ページは均等タイルを避け、"
             "感情、衝撃、決着、reveal、climaxの重要Panelを大きく扱えるlayoutを選んでください。"
+            "dialogue_typesとsfx_typesは対応する本文配列と同じ順序・同じ件数で意味を分類してください。通常発話はnormal、心の声はthoughtとし、感嘆符だけを理由にshoutへしないでください。"
+            "character_positionは人物と文字の共存を考えて指定します。セリフは読みやすい量にし、長い説明を小コマへ詰め込まないでください。"
         )
         target_pages = max(1, min(120, int(settings.get("target_page_count", 8))))
         batch_size = getattr(get_settings(), "storyboard_batch_pages", 8)

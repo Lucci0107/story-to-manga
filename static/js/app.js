@@ -1878,9 +1878,11 @@
         const referenceLabel = (panel.knowledge_refs || []).map(function (ref) { return (ref.title || "Knowledge") + " v" + (ref.version_number || "?"); }).join(", ");
         const generationModel = panel.generation_metadata?.actual_model ? " / 実行モデル: " + escapeHtml(panel.generation_metadata.actual_model) + (panel.generation_metadata.fallback ? "（Astraからフォールバック）" : "") : "";
         const geometry = item.page.composition?.panels?.find(function (entry) { return String(entry.panel_id) === String(panel.id); }) || panel.geometry || {};
-        const geometryLabel = geometry.shape ? " / " + escapeHtml(geometry.shape) + " / " + (Number(geometry.width || 0) / Math.max(Number(geometry.height || 1), .01)).toFixed(2) + ":1" : "";
+        const geometryLabel = geometry.shape ? " / " + escapeHtml(geometry.shape) + " / " + (Number(geometry.width || 0) * 900 / Math.max(Number(geometry.height || 1) * 1200, 1)).toFixed(2) + ":1" : "";
+        const direction = panel.panel_direction;
+        const directionLabel = direction ? " / 構図: " + (direction.status === "ready" ? "生成前に設計済み" : "要修正（文字領域不足）") + " / 演出: " + escapeHtml(direction.visual_style?.display_name || "") : "";
         const metadata = 'ページ ' + escapeHtml(item.page.page_number) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + geometryLabel + ' / Revision ' + escapeHtml(panel.revision || 0) + generationModel + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "") + (panel.generation_error ? " / " + escapeHtml(panel.generation_error) : "");
-        return '<div class="generation-panel-row"><div class="generation-thumb">' + thumb + '</div><div><strong>' + escapeHtml(panel.description || "コマの説明") + '</strong><small>' + metadata + '</small></div><span class="panel-status panel-status-' + escapeAttr(status) + '">' + escapeHtml(panelStatusLabels[status] || status) + '</span>' + action + '</div>';
+        return '<div class="generation-panel-row"><div class="generation-thumb">' + thumb + '</div><div><strong>' + escapeHtml(panel.description || "コマの説明") + '</strong><small>' + metadata + directionLabel + '</small></div><span class="panel-status panel-status-' + escapeAttr(status) + '">' + escapeHtml(panelStatusLabels[status] || status) + '</span>' + action + '</div>';
       }).join("");
     }
 
@@ -1893,7 +1895,7 @@
       const aggregate = snapshot.active && snapshot.total ? snapshot : { total: panels.length, completed: generated, generating: 0, waiting: 0, failed: failed };
       const globalStatus = snapshot.active ? '<div class="generation-global-status" role="status" aria-live="polite"><strong>' + aggregate.completed + ' / ' + aggregate.total + ' 完了</strong><span>' + (aggregate.generating ? '生成中 ' + aggregate.generating + ' ・ ' : '') + (aggregate.waiting ? '待機 ' + aggregate.waiting + ' ・ ' : '') + (aggregate.failed ? '失敗 ' + aggregate.failed : '処理を継続しています') + '</span>' + (snapshot.current_page && snapshot.current_panel ? '<span>現在：ページ' + escapeHtml(snapshot.current_page) + '・コマ' + escapeHtml(snapshot.current_panel) + '</span>' : '') + '</div>' : '';
       const disabled = panelBusy ? " disabled" : "";
-      const layoutPreview = panels.length && state.storyboard?.[0]?.composition ? '<section class="surface-panel generation-layout-preview"><div class="generation-toolbar"><div><strong>画像生成前のページ配置</strong><p>台形・面積差・Breakout候補を先に確認できます。</p></div></div>' + pageStage(state.storyboard[0]) + '</section>' : '';
+      const layoutPreview = panels.length && state.storyboard?.[0]?.composition ? '<section class="surface-panel generation-layout-preview"><div class="generation-toolbar"><div><strong>画像生成前のページ設計</strong><p>主役コマの面積、人物・顔・小物と文字の予約領域を確認してください。未生成部分の色付き領域は設計図で、画像ではありません。</p></div></div>' + state.storyboard.map(function (page, index) { return '<details' + (index === 0 ? ' open' : '') + '><summary>ページ ' + escapeHtml(page.page_number) + ' の設計</summary>' + pageStage(page) + '</details>'; }).join('') + '</section>' : '';
       content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding">' + renderPanelRecoveryNotice() + '<div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all' + disabled + '>未生成をまとめて生成</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary">' + layoutPreview + '<div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
       content.querySelector("[data-generate-all]")?.addEventListener("click", function () { queueGeneration([], false, false); });
       content.querySelector("[data-retry-failed]")?.addEventListener("click", function () { queueGeneration([], true, false); });
@@ -2087,7 +2089,7 @@
 
     function pageStage(page) {
       if (!page) return '<div class="preview-frame-wrap"><p>ページがありません</p></div>';
-      if ((page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
+      if (page.composition?.style_profile || (page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
         // 文字の実測配置をブラウザで再解釈せず、PDF・ZIPと同一の描画結果を表示する。
         const src = "/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(page.id) + "/composition.png?v=" + encodeURIComponent(state.updated_at || "");
         const transcript = (page.panels || []).map(function (panel, index) { return "コマ" + (index + 1) + " " + [...(panel.dialogue || []), ...(panel.narration || [])].join(" "); }).join("。 ");
