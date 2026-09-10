@@ -2,6 +2,15 @@
 
 更新日: 2026-09-11
 
+## 横長コマの身体範囲・有効ショット判定（2026-09-11、無課金構造検証）
+
+- IN_PROGRESS起点: 6e1233fから生成前処理のみ変更。CONFIRMED_COMPLETEとして保存/再読込と共通rendererを保護し、PDF/Preview/ZIP・crop・DB実装は変更しない。FAILEDの実画像頭頂切れは、今回の構造テストで解消済みとは扱わない。
+- 横長比率1.6以上の頭部保持構図に、頭部高/画像高を単位とするsubject scale予算を追加。頭部・身体範囲・人数・文字面積から要求ショットの可否を推定し、収まらないclose_upをmedium_close/medium等へ引く。requested/effective shot、理由、required_body_extent、scale最大/目標、構造スコアをPanelDirectionへ保存。元のshot/action/dialogue/人物/小物/styleは変更しない。
+- 失敗クラスの構造検証: 要求close_upはfail、有効medium_closeはpass。頭部高目標60%→38%、顔中心y≈0.38、chest_handsの身体範囲、手/器具領域と既存の実測・折返し済み文字予約領域を保持。顔位置だけ下へずらさず頭部寸法も縮小。promptは保存されたeffective shotとscale/body extentを使用。身体範囲または文字が収まらなければneeds_revisionとなり、既存の生成前gateで停止。
+- 顔のみの横長close_upと意図的extreme/tight cropは維持。明示的required_body_extentは必要範囲を狭める用途には使わない。今回のスコアは幾何的な予測であり、実顔検出・実画像品質保証ではない。自動のページ面積変更や新しい文字配置エンジンは追加せず、解消できない文字不足は停止する。
+- 無課金の隔離DBテストで、保存/再読込後の全storyboard一致とeffective shot/ready状態を確認。既存画像を持つ保存済みページの暗黙reflow禁止も維持。全回帰 **261 passed（35.68秒）**、最後のwarning文言変更後の対象回帰10件成功、compileall/diff check成功。compileallはOSキャッシュ書込制限を受けたため、書込可能な/tmpのpycache指定で再実行し成功。
+- IMPLEMENTED_NEEDS_VALIDATION: 新しい身体範囲指定への実画像追従。BLOCKED: 別の非本番Project/revisionで代表1コマを新規生成する課金承認。今回有料生成0件、既存QA/本番データの変更0件。Browser UIの追加検証なし（UI/renderer変更なし）、完成4ページゲート未達。残り10コマ・merge・push・CI/deploy・Production QAは進めない。保護フォルダ未変更・未追跡。
+
 ## 保存済み構図照合後の限定2コマ検証（2026-09-11、視覚ゲート未達）
 
 - 明示承認に基づき、新規非本番Project `c64f0300-1c31-4d19-93ce-d53bec9572e7` でmedium_close人物1コマと手/器具close_up1コマを各1回生成。既存6コマ・過去の校正画像・本番Projectは変更せず、排他マーカーとRetryなしで2回に限定。追加生成・main反映・merge・deployなし。

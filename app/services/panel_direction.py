@@ -9,6 +9,7 @@ from .text_composition import body_font, wrap_text
 from .visual_style import resolve_visual_style, text_direction
 from .in_world_text import resolve_in_world_text
 from .framing import resolve_head_framing
+from .framing_feasibility import resolve_feasibility
 from .reading_order import canonicalize_stored_settings
 
 
@@ -27,6 +28,8 @@ def direction_fingerprint(panel, settings):
     for key in ('head_visible', 'hands_required', 'props_required'):
         if isinstance(panel.get(key), bool):
             values[key] = panel[key]
+    if panel.get('required_body_extent'):
+        values['required_body_extent'] = panel['required_body_extent']
     geometry = panel.get("geometry") or {}
     values["geometry"] = {key: geometry.get(key) for key in ("x", "y", "width", "height", "shape", "polygon_points")}
     canonical = canonicalize_stored_settings(settings)
@@ -88,7 +91,44 @@ def plan_panel_direction(panel, settings):
             items.append(item)
             zones.append({**rect, "type": kind, "item_id": item["id"]})
             cursor += box_height + 0.025
-    ready = not any(item["overflow"] for item in items)
+    feasibility = resolve_feasibility(framing, width / height, len(panel.get('characters') or []), zones, character_zone, panel.get('required_body_extent'))
+    if feasibility['applicable']:
+        framing.update(feasibility)
+        framing['shot_type'] = feasibility['effective_shot_type']
+        framing['body_extent_requirement'] = feasibility['required_body_extent']
+        target = (framing['headroom_target_min'] + framing['headroom_target_max']) / 2
+        scale = feasibility['subject_scale_target']
+        # 顔だけ下へずらさず、頭部全体を縮尺から配置する。手/器具は下段に残す。
+        head_zone.update(y=target, height=scale, width=min(.40, scale * .72 / (width / height)))
+        face_zone.update(y=target + scale * .27, height=scale * .65, width=head_zone['width'])
+        if feasibility['effective_shot_type'] != feasibility['requested_shot_type']:
+            head_zone['y'] = max(target, .38 - scale * .595)
+            face_zone['y'] = head_zone['y'] + scale * .27
+        framing['face_center_y'] = face_zone['y'] + face_zone['height'] / 2
+        framing['face_safe_zone'] = deepcopy(face_zone)
+        framing['top_safe_zone']['height'] = head_zone['y']
+        protected = deepcopy(panel.get('protected_zones') or [face_zone, prop_zone, hand_zone, head_zone])
+        body_bottom = head_zone['y'] + feasibility['subject_scale_target'] * feasibility['body_head_units']
+        if body_bottom > .96:
+            feasibility['composition_feasibility'] = 'fail'
+        framing['composition_feasibility'] = feasibility['composition_feasibility']
+        for item in items:
+            item['overflow'] = item['overflow'] or any(
+                item['x'] < z['x'] + z['width'] and item['x'] + item['width'] > z['x']
+                and item['y'] < z['y'] + z['height'] and item['y'] + item['height'] > z['y'] for z in protected)
+    feasibility['scores'] = {
+        'headroom': int(not framing['preserve_entire_head'] or head_zone['y'] >= framing['headroom_target_min']),
+        'face_scale': int(feasibility['subject_scale_target'] >= .18),
+        'hand_visibility': int(hand_zone['y'] + hand_zone['height'] <= .96),
+        'prop_visibility': int(prop_zone['y'] + prop_zone['height'] <= .96),
+        'text_space': int(not any(i['overflow'] for i in items)),
+        'shot_feasibility': int(feasibility['composition_feasibility'] != 'fail')}
+    ready = not any(item["overflow"] for item in items) and feasibility['composition_feasibility'] != 'fail'
+    warnings = []
+    if any(item['overflow'] for item in items):
+        warnings.append('生成前の文字領域が不足しています。コマ拡大・ページ分割または文字量を調整してください。')
+    if feasibility['composition_feasibility'] == 'fail':
+        warnings.append('頭部・必要な手や小物を安全に収められません。生成前に人物配置またはコマ面積を見直してください。')
     framing['text_reserved_zones'] = deepcopy(zones)
     return {"version": 1, "status": "ready" if ready else "needs_revision",
             "in_world_text": resolve_in_world_text(panel),
@@ -96,12 +136,13 @@ def plan_panel_direction(panel, settings):
             "geometry": deepcopy(geometry), "character_zone": character_zone,
             "head_safe_zone": head_zone if framing['preserve_entire_head'] else None,
             "camera_framing": framing,
+            "composition_feasibility": feasibility,
             "face_safe_zone": face_zone, "important_prop_zone": prop_zone, "important_hand_zone": hand_zone,
             "protected_zones": protected, "reserved_text_zones": zones,
             "crop_anchor": {"x": "right" if character_right else "left", "y": "middle"},
             "visual_style": profile, "breakout_policy": {"enabled": False, "reason": "専用前景素材と実画像の人物位置確認が必要"},
             "text_layout": {"version": 3, "placement_mode": "pre_generation_plan", "items": items,
-                            "style_profile": profile, "warnings": [] if ready else ["生成前の文字領域が不足しています。コマ拡大・ページ分割または文字量を調整してください。"]}}
+                            "style_profile": profile, "warnings": warnings}}
 
 
 def direction_is_ready(panel, settings):

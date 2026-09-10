@@ -42,12 +42,16 @@ def resolve_head_framing(panel):
 
 def head_framing_prompt(panel):
     """人物なし原画に人物の追加を誘発しない。"""
-    framing = resolve_head_framing(panel)
+    framing = (panel.get('panel_direction') or {}).get('camera_framing') or resolve_head_framing(panel)
     if framing['intentional_crop']:
         return 'Intentional dramatic crop: preserve the explicitly requested shot; normal headroom is not required. Keep story-critical features and text-safe zones readable. '
     if not framing['preserve_entire_head']:
         return ''
-    return (f"Framing priority: shot={framing['shot_type']}; use a head-and-shoulders portrait for close shots, not an extreme facial crop. "
+    scale = framing.get('subject_scale_target')
+    budget = (f"Required body extent={framing.get('required_body_extent')}; head height must be about {scale:.0%} of image height, not a frame-filling face. " if scale else '')
+    extent_instruction = ('follow the planned body extent' if scale and framing.get('required_body_extent') not in {'face_only', 'head_shoulders'}
+                          else 'use a head-and-shoulders portrait for close shots')
+    return (budget + f"Framing priority: shot={framing['shot_type']}; {extent_instruction}, not an extreme facial crop. "
             f"Keep the entire hair, hat or surgical-cap silhouette inside head_safe_zone, with a visually natural {framing['headroom_target_min']:.0%}-{framing['headroom_target_max']:.0%} top margin. "
             'No accidental crown crop, forehead crop, hair-top crop, or face pushed against the image top edge. '
             'Keep the face readable and large; do not shrink the subject excessively. Do not sacrifice important hands or props to create headroom. '
