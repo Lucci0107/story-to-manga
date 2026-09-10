@@ -8,6 +8,7 @@ from .composition import PAGE_SIZE
 from .text_composition import body_font, wrap_text
 from .visual_style import resolve_visual_style, text_direction
 from .in_world_text import resolve_in_world_text
+from .framing import resolve_head_framing
 from .reading_order import canonicalize_stored_settings
 
 
@@ -20,6 +21,9 @@ def direction_fingerprint(panel, settings):
     # 未指定の旧コマの署名を変えず、明示された背景文字の変更だけを検出する。
     if panel.get("in_world_text_policy") not in {None, "abstract_only"} or panel.get("in_world_exact_text"):
         values["in_world_text"] = resolve_in_world_text(panel)
+    if panel.get("intentional_head_crop") or panel.get("intentional_crop_reason"):
+        values["intentional_head_crop"] = bool(panel.get("intentional_head_crop"))
+        values["intentional_crop_reason"] = str(panel.get("intentional_crop_reason") or "")
     geometry = panel.get("geometry") or {}
     values["geometry"] = {key: geometry.get(key) for key in ("x", "y", "width", "height", "shape", "polygon_points")}
     canonical = canonicalize_stored_settings(settings)
@@ -42,10 +46,11 @@ def plan_panel_direction(panel, settings):
         character_zone["x"] = 0.27
     face_zone = {"x": character_zone["x"] + 0.04, "y": 0.12, "width": 0.36, "height": 0.38}
     head_zone = {"x": character_zone["x"] + 0.02, "y": 0.08, "width": 0.40, "height": 0.46}
+    framing = resolve_head_framing(panel)
     prop_zone = {"x": character_zone["x"] + 0.03, "y": 0.56, "width": 0.38, "height": 0.30}
     raised_hand = any(word in str(panel.get("action", "")) for word in ("手を挙げ", "手を上げ", "raise", "wave"))
     hand_zone = {"x": character_zone["x"], "y": 0.08 if raised_hand else 0.56, "width": 0.16, "height": 0.25}
-    protected = deepcopy(panel.get("protected_zones") or ([face_zone, head_zone, prop_zone, hand_zone] if panel.get("characters") else []))
+    protected = deepcopy(panel.get("protected_zones") or ([face_zone, prop_zone, hand_zone] + ([head_zone] if framing['preserve_entire_head'] else []) if panel.get("characters") else []))
     items, zones = [], []
     cursor = 0.04
     for kind, key in (("bubble", "dialogue"), ("narration", "narration"), ("sfx", "sfx")):
@@ -82,9 +87,8 @@ def plan_panel_direction(panel, settings):
             "in_world_text": resolve_in_world_text(panel),
             "source": "pre_generation_plan", "fingerprint": direction_fingerprint(panel, settings),
             "geometry": deepcopy(geometry), "character_zone": character_zone,
-            "head_safe_zone": head_zone,
-            "camera_framing": {"preserve_entire_head": True, "minimum_headroom": 0.08,
-                               "close_up_treatment": "head_and_shoulders_with_headroom"},
+            "head_safe_zone": head_zone if framing['preserve_entire_head'] else None,
+            "camera_framing": framing,
             "face_safe_zone": face_zone, "important_prop_zone": prop_zone, "important_hand_zone": hand_zone,
             "protected_zones": protected, "reserved_text_zones": zones,
             "crop_anchor": {"x": "right" if character_right else "left", "y": "middle"},

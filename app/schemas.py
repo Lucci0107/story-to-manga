@@ -701,6 +701,8 @@ def normalize_storyboard(
                 "panel_direction": raw_panel.get("panel_direction") if isinstance(raw_panel.get("panel_direction"), dict) else None,
                 "in_world_text_policy": raw_panel.get("in_world_text_policy") if raw_panel.get("in_world_text_policy") in {"none", "abstract_only", "intentional_exact_text"} else "abstract_only",
                 "in_world_exact_text": str(raw_panel.get("in_world_exact_text") or "")[:200],
+                "intentional_head_crop": raw_panel.get("intentional_head_crop") is True,
+                "intentional_crop_reason": str(raw_panel.get("intentional_crop_reason") or "")[:160],
             }
             for field in list_fields:
                 source = raw_panel.get(field, [])

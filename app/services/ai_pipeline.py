@@ -17,6 +17,7 @@ from ..config import get_settings
 from .artwork_geometry import artwork_aspect_ratio, generation_canvas_zones
 from .visual_style import resolve_visual_style
 from .in_world_text import in_world_text_prompt
+from .framing import head_framing_prompt
 from ..schemas import normalize_analysis, normalize_characters, normalize_storyboard
 from .openai_client import OpenAIRequestError, parse_json_text, request_json, response_output_text
 from .model_registry import (
@@ -544,10 +545,10 @@ def compose_panel_prompt(
         f"Semantic family: {semantic_family}。shape reason: {shape_reason or 'rectangle default'}。"
         f"Reserved text safe zones (panel-relative): {reserved_text}。予約領域は背景を静かに保ち、顔・重要な手・小物を置かない。"
         f"Confirmed PanelDirection (panel-relative): {planned_regions}。人物・顔・重要小物は指定領域へ配置し、文字予約領域は利用できる静かな背景として描く。白い文字帯や枠は描かない。"
-        f"Generation canvas coordinates: {canvas_regions}。最終crop後に指定構図になるよう、この生成キャンバス座標に従う。頭頂・顎・重要な手指を全てfinal_crop_windowの内側へ収め、その境界から十分に離す。外周は切り落とし用の背景のみ描く。"
+        f"Generation canvas coordinates: {canvas_regions}。最終crop後に指定構図になるよう、この生成キャンバス座標とcamera_framingに従う。重要な手指・小物はfinal_crop_windowの内側へ収める。"
         "顔と重要な小物は安全領域に置き、中央固定のパスポート構図や左右の空レターボックスを避ける。"
-        "Framing priority: for a close-up, use a head-and-shoulders portrait, not an extreme facial crop. Keep the entire hair silhouette inside head_safe_zone, with at least 8% background headroom above the highest hair. Zoom out before cutting hair, chin, or an important hand. This overrides a tight close-up interpretation. "
-        "文字や吹き出しは描かず、後工程で合成する。"
+        + head_framing_prompt(panel)
+        + "文字や吹き出しは描かず、後工程で合成する。"
         + in_world_text_prompt(panel)
     )
 
