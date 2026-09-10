@@ -2,6 +2,15 @@
 
 更新日: 2026-09-11
 
+## 横長・手/器具・文字領域の代表1コマ検証（2026-09-11、視覚ゲート未達）
+
+- 明示承認に基づき、新規非本番Project `70cc522f-1b6f-4db1-a216-a2bc16f8c646` の `validation-3-3` だけを1回生成。新規Projectの専用assetへ保存し、既存6コマ・過去校正画像・本番Project・既存履歴は変更・上書きしていない。追加生成、Retry、残り10コマ、merge、push、deployは行っていない。
+- 課金前にDB保存→再読込を行い、requested=`close_up`、effective=`medium_close`、調整理由あり、`subject_scale_target=0.38`、head safe zone高=`0.38`、顔/手/器具/予約文字領域を確認。保存済みPanelDirectionからpromptを作成・再読込し、描画中のreflowを禁止した状態でPreview/PDF/ZIPを生成した。
+- 生成画像は要求サイズ `1440×720`（Panel比率 `2.0031:1`）で保存。横長のmedium-close相当として、顔は十分読め、手と器具は保持され、右側に吹き出し用の静かな領域が残り、漫画調の描線と陰影を維持。偶発的な可読背景文字は目視で認めない（OCR保証ではない）。
+- **FAILED:** 原画の髪の最上部が画像上端に接しており、頭頂に自然な余白がない。画像上端の暗部画素も連続しており、PDF/Previewの後処理ではない生成段階のフレーミング不良と判定。顔・手・器具・文字領域を保ったまま、subject scaleとface centerをさらに安全側へ調整する必要がある。今回の1コマは頭頂・顔・手・器具・文字領域の同時合格条件を満たさない。
+- Preview/PDF/ZIPは保存済みCompositionを再計算せず共有し、4ページPNG・PDF埋込RGB画像・ZIP PNGのピクセル一致を確認。成果物は `/tmp/manga-readable-qa.HNAykr/reconstructed/wide-one-after.pdf`、同名ZIP、`wide-one-after-1.png`〜`4.png`、原画は同QAルートの `assets/70cc522f-1b6f-4db1-a216-a2bc16f8c646/`。これは構図経路と出力 parity の証拠であり、完成4ページの視覚合格ではない。
+- 全回帰 **261 passed（29.46秒）**。保護フォルダ `MANGA_KNOWLEDGE_CATEGORIZED_PACK/` は未変更・未追跡。今回の実画像失敗を隠すPDF補正やrenderer変更は行わない。次の再開地点は、同じ失敗クラスに対する生成前の人物縮尺・頭部領域・顔位置・横長パネルの組み合わせ再設計であり、新たな有料生成には別途明示承認が必要。
+
 ## 横長コマの身体範囲・有効ショット判定（2026-09-11、無課金構造検証）
 
 - IN_PROGRESS起点: 6e1233fから生成前処理のみ変更。CONFIRMED_COMPLETEとして保存/再読込と共通rendererを保護し、PDF/Preview/ZIP・crop・DB実装は変更しない。FAILEDの実画像頭頂切れは、今回の構造テストで解消済みとは扱わない。
