@@ -99,11 +99,14 @@ def plan_panel_direction(panel, settings):
         framing['minimum_headroom'] = framing['headroom_target_min']
         target = (framing['headroom_target_min'] + framing['headroom_target_max']) / 2
         scale = feasibility['subject_scale_target']
+        if feasibility['wide_multi_requirement']:
+            # 横長の多要素コマは人物領域自体を下げ、上側を実際の空き帯として予約する。
+            character_zone.update(y=feasibility['subject_zone_y'], height=.75)
         # 顔だけ下へずらさず、頭部全体を縮尺から配置する。手/器具は下段に残す。
         head_zone.update(y=target, height=scale, width=min(.40, scale * .72 / (width / height)))
         face_zone.update(y=target + scale * .27, height=scale * .65, width=head_zone['width'])
         if feasibility['effective_shot_type'] != feasibility['requested_shot_type']:
-            head_zone['y'] = max(target, .38 - scale * .595)
+            head_zone['y'] = max(target, feasibility['head_zone_top_target'])
             face_zone['y'] = head_zone['y'] + scale * .27
         framing['face_center_y'] = face_zone['y'] + face_zone['height'] / 2
         framing['face_safe_zone'] = deepcopy(face_zone)

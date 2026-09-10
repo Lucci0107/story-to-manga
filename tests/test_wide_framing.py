@@ -24,6 +24,9 @@ def test_wide_required_content_relaxes_close_shot():
     assert f['effective_shot_type'] == 'medium'
     assert f['shot_adjustment_reason']
     assert f['subject_scale_target'] < .60
+    assert f['wide_multi_requirement'] and f['subject_zone_y'] == .16
+    assert d['character_zone']['y'] == .16
+    assert d['head_safe_zone']['y'] >= .22
     assert .38 <= d['camera_framing']['face_center_y'] <= .50
     assert d['camera_framing']['hands_required'] and d['camera_framing']['props_required']
     assert d['reserved_text_zones'] and d['important_hand_zone'] and d['important_prop_zone']

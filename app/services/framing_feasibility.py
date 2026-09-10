@@ -52,5 +52,8 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
             'requested_feasibility': 'fail' if applicable and initial > scale_max else 'pass',
             'composition_feasibility': status, 'text_area_ratio': text_area,
             'applicable': applicable, 'aspect_ratio': ratio,
+            'wide_multi_requirement': wide_multi_requirement,
+            'subject_zone_y': .16 if wide_multi_requirement else .06,
+            'head_zone_top_target': .22 if wide_multi_requirement else SHOT_RANGES[effective][0],
             'headroom_target_min': SHOT_RANGES[effective][0],
             'headroom_target_max': SHOT_RANGES[effective][1]}
