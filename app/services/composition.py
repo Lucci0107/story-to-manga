@@ -940,6 +940,13 @@ def composition_quality_issues(page: Mapping[str, Any]) -> List[Dict[str, str]]:
     page_number = str(page.get("page_number", ""))
     panels = [item for item in composition.get("panels", []) if isinstance(item, Mapping)]
     issues: List[Dict[str, str]] = []
+    # 目視で確認した背景文字だけを報告する。未確認を自動検出済みと偽らない。
+    for source in page.get("panels", []):
+        review = source.get("in_world_text_review") or {}
+        if review.get("incidental_generated_text") is True:
+            issues.append({"key": f"INCIDENTAL_GENERATED_TEXT-{source.get('id')}",
+                           "label": "背景に意図しない生成文字があります",
+                           "detail": "看板・ラベル等の文字を目視で確認しました。生成前の背景文字方針を見直してください。"})
     if len(panels) != len([item for item in page.get("panels", []) if isinstance(item, Mapping)]):
         issues.append({"key": f"composition-panel-count-{page_number}", "label": f"ページ{page_number}のComposition", "detail": "PanelとCompositionの件数が一致しません。"})
         return issues

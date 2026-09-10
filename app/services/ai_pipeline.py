@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ..config import get_settings
 from .artwork_geometry import artwork_aspect_ratio, generation_canvas_zones
 from .visual_style import resolve_visual_style
+from .in_world_text import in_world_text_prompt
 from ..schemas import normalize_analysis, normalize_characters, normalize_storyboard
 from .openai_client import OpenAIRequestError, parse_json_text, request_json, response_output_text
 from .model_registry import (
@@ -145,6 +146,8 @@ PANEL_SCHEMA: Dict[str, Any] = {
         "sfx": {"type": "array", "items": {"type": "string"}},
         "dialogue_types": {"type": "array", "items": {"type": "string", "enum": ["normal", "thought", "shout", "whisper", "weak", "comedic_reaction", "announcement"]}},
         "sfx_types": {"type": "array", "items": {"type": "string", "enum": ["footstep", "impact", "stop", "ambient", "mechanical", "heartbeat", "door", "rustle", "comedic_reaction", "other"]}},
+        "in_world_text_policy": {"type": "string", "enum": ["none", "abstract_only", "intentional_exact_text"]},
+        "in_world_exact_text": {"type": "string"},
         "character_position": {"type": "string", "enum": ["left", "right", "center", ""]},
         "panel_role": {"type": "string"},
         "scene_type": {
@@ -165,6 +168,8 @@ PANEL_SCHEMA: Dict[str, Any] = {
         "sfx",
         "dialogue_types",
         "sfx_types",
+        "in_world_text_policy",
+        "in_world_exact_text",
         "character_position",
         "panel_role",
         "scene_type",
@@ -542,6 +547,7 @@ def compose_panel_prompt(
         f"Generation canvas coordinates: {canvas_regions}。最終crop後に指定構図になるよう、この生成キャンバス座標に従う。頭頂・顎・重要な手指を全てfinal_crop_windowの内側へ収め、その境界から十分に離す。外周は切り落とし用の背景のみ描く。"
         "顔と重要な小物は安全領域に置き、中央固定のパスポート構図や左右の空レターボックスを避ける。"
         "文字や吹き出しは描かず、後工程で合成する。"
+        + in_world_text_prompt(panel)
     )
 
 
@@ -1032,6 +1038,7 @@ class OpenAIProvider(DemoAIProvider):
             "各PageとPanelへ役割・scene_type・importanceを設定してください。通常ページは均等タイルを避け、"
             "感情、衝撃、決着、reveal、climaxの重要Panelを大きく扱えるlayoutを選んでください。"
             "dialogue_typesとsfx_typesは対応する本文配列と同じ順序・同じ件数で意味を分類してください。通常発話はnormal、心の声はthoughtとし、感嘆符だけを理由にshoutへしないでください。"
+            "背景文字はin_world_text_policy=abstract_onlyを標準とし、物語上必要な正確な文言がある場合だけintentional_exact_textとin_world_exact_textを指定してください。文言は画像生成ではなく後工程の合成用データです。"
             "character_positionは人物と文字の共存を考えて指定します。セリフは読みやすい量にし、長い説明を小コマへ詰め込まないでください。"
         )
         target_pages = max(1, min(120, int(settings.get("target_page_count", 8))))

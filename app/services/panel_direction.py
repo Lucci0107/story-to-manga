@@ -7,6 +7,7 @@ import json
 from .composition import PAGE_SIZE
 from .text_composition import body_font, wrap_text
 from .visual_style import resolve_visual_style, text_direction
+from .in_world_text import resolve_in_world_text
 from .reading_order import canonicalize_stored_settings
 
 
@@ -16,6 +17,9 @@ def direction_fingerprint(panel, settings):
         "dialogue", "narration", "sfx", "dialogue_types", "sfx_types", "characters",
         "character_position", "subject_position", "shot_type", "action", "background",
         "expression", "protected_zones", "text_safe_zones")}
+    # 未指定の旧コマの署名を変えず、明示された背景文字の変更だけを検出する。
+    if panel.get("in_world_text_policy") not in {None, "abstract_only"} or panel.get("in_world_exact_text"):
+        values["in_world_text"] = resolve_in_world_text(panel)
     geometry = panel.get("geometry") or {}
     values["geometry"] = {key: geometry.get(key) for key in ("x", "y", "width", "height", "shape", "polygon_points")}
     canonical = canonicalize_stored_settings(settings)
@@ -74,6 +78,7 @@ def plan_panel_direction(panel, settings):
             cursor += box_height + 0.025
     ready = not any(item["overflow"] for item in items)
     return {"version": 1, "status": "ready" if ready else "needs_revision",
+            "in_world_text": resolve_in_world_text(panel),
             "source": "pre_generation_plan", "fingerprint": direction_fingerprint(panel, settings),
             "geometry": deepcopy(geometry), "character_zone": character_zone,
             "face_safe_zone": face_zone, "important_prop_zone": prop_zone, "important_hand_zone": hand_zone,
