@@ -3,11 +3,11 @@
 from copy import deepcopy
 from typing import Any, Mapping
 
-STYLE_VERSION = 1
+STYLE_VERSION = 2
 STYLES = {
     "dynamic": ("躍動", "動きのある少年漫画風の演出", 1.0, "#273b65"),
     "elegant": ("繊細", "繊細で余白のある少女漫画風の演出", 0.5, "#925575"),
-    "cinematic": ("映画的", "映画的な陰影と画面構成", 0.35, "#303944"),
+    "cinematic": ("映画的", "描線のある漫画イラスト。映画的な陰影と画面構成を漫画の線画と塗りで表現し、実写写真にはしない", 0.35, "#303944"),
     "comedy": ("コメディ", "表情豊かでテンポのよいコメディ演出", 1.0, "#ad376d"),
     "minimal": ("ミニマル", "線と余白を活かしたミニマルな演出", 0.15, "#333333"),
     "webtoon": ("縦読み", "縦読みを意識した明快なコマ構成", 0.7, "#36537b"),
@@ -71,7 +71,8 @@ def text_direction(item: Mapping[str, Any], profile: Mapping[str, Any], explicit
         strong = family in {"impact", "stop", "comedic_reaction"}
         result.update(family=family, shape="none", tail="none", fill=profile["accent"],
                       size_scale=1.25 if strong else 0.85 if family in {"ambient", "rustle", "footstep"} else 1.0,
-                      text_stroke=1 if strong and energy >= 0.7 else 0,
+                      text_stroke=2 if strong and energy >= 0.7 else 1,
+                      text_stroke_fill="#ffffff",
                       repetition=family in {"footstep", "heartbeat"})
     elif kind == "narration":
         result.update(family="narration", shape="box", tail="none",

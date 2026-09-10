@@ -530,7 +530,8 @@ def compose_panel_prompt(
     return (
         f"出力言語: {order_context['language_name']}。ページの読順: {order_context['panel_reading_order']}。"
         f"吹き出しの読順: {order_context['bubble_reading_order']}。"
-        f"{mode}、{style_profile['artwork_tone']}。"
+        f"{mode}の漫画コマ用イラスト、{style_profile['artwork_tone']}。"
+        "Medium: hand-drawn manga illustration with visible ink contours and illustrated shading, not a photograph or live-action film still. "
         f"ショット: {panel.get('shot_type', '')}。舞台: {panel.get('background', '')}。"
         f"行動: {panel.get('action', '')}。表情: {panel.get('expression', '')}。"
         f"登場人物: {' / '.join(identities)}。"

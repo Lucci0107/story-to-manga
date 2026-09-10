@@ -65,5 +65,6 @@ def draw_directed_text(draw, item, left, top, width, height):
     ty = top + (body_bottom - top - (bounds[3] - bounds[1])) / 2 - bounds[1]
     draw.multiline_text((tx, ty), wrapped, font=font, fill=fill, spacing=2,
                         align="left" if kind == "narration" else "center",
-                        stroke_width=int(token.get("text_stroke", 0)))
+                        stroke_width=int(token.get("text_stroke", 0)),
+                        stroke_fill=token.get("text_stroke_fill", fill))
     return True
