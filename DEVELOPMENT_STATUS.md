@@ -1,6 +1,17 @@
 # Story to Manga 開発状況
 
-更新日: 2026-09-10
+更新日: 2026-09-11
+
+## 実状態再監査・校正失敗の切り分け（2026-09-11、未リリース）
+
+- 起点は専用ブランチ715b818、追跡ファイルclean。fetch後origin/main=06c478b、remote-only 0/local-only 9。mainの最新CI34362218932はsuccess。本番公開smokeはhealth/login/CSS/JSすべてHTTP200。これは専用ブランチが本番反映された証拠ではありません。
+- 直前の承認で校正2コマは実行済み。新規非本番Project `a552ab08-50a5-4b1b-be48-96be7edc71d2`、medium_close人物と手/器具close_upを各1回。追加生成はしていません。手/器具コマは頭頂切れが再発し、校正の視覚ゲートはFAILED。既存6コマと以前の頭上余白QAは未変更。
+- 実データ監査で校正手順の不備を確認。ショット変更後のdb.update_projectはレイアウトを正規化して返すが、校正スクリプトが返却値を使わず、保存前のgeometryを画像生成へ渡していた。保存済みの近景コマはneeds_revision/文字overflow。過去に見たローカル描画だけを正しい保存状態の証拠にはしません。
+- 実装側にも画像生成後のensure_page_layoutが署名差分でPreview/Exportの配置を暗黙再計算する問題を確認。保存済みstyle付きCompositionと原画があるページは配置を維持し、QAで不一致を報告する最小修正を追加。明示reflow/repairの経路は維持。保存前にshotを確定し、保存された設計を使う正常手順も回帰テスト化。
+- 今回の校正ProjectのPDF/ZIPは保存済み文字overflowにより拒否されることを確認。整合成功とは記録しません。修正後のローカルBrowserでも文字領域不足/書出し不可を表示し、console error/warning 0。無理なPDF補正や既存QAデータの差し替えはしません。
+- 最終全回帰 **253 passed**、JS構文/compileall/diff check/pip check成功。依存関係変更・追加の有料API呼び出しなし。
+- CONFIRMED_COMPLETE: 旧mainのCI/公開smoke、無関係な既存機能。IMPLEMENTED_NEEDS_VALIDATION: ショット別headroomの実画像追従。FAILED: 最新校正の頭頂/保存設計/Exportゲート。IN_PROGRESS: 暗黙再配置の局所修正。BLOCKED: 新規有料校正・未生成10コマの課金承認。NOT_STARTED: 完成4ページの合格後の統合/CI/Render/本番QA。NOT_APPLICABLE: 新規provider/DB/hosting移行。
+- 次の再開地点は「shot確定→ページ再設計→保存返却値/再読込の構図照合→課金前assert→新規の限定校正」。元画像や既存Projectを破壊せず、完成4ページ合格までmainへ反映しません。保護フォルダは未変更・未追跡。
 
 ## ショット別headroom校正（2026-09-10、新規2コマ承認待ち）
 

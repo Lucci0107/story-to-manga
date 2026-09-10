@@ -792,6 +792,13 @@ def ensure_page_layout(
 ) -> Dict[str, Any]:
     if _stored_geometry_is_current(page, settings):
         return deepcopy(dict(page))
+    panels = page.get('panels') or []
+    if (isinstance(page.get('composition'), Mapping)
+            and page['composition'].get('style_profile')
+            and any(panel.get('image_url') and panel.get('panel_direction') for panel in panels)
+            and all(isinstance(panel.get('geometry'), Mapping) for panel in panels)):
+        # 原画生成後の表示/Exportで形状を暗黙に変えない。明示再計算はreflow_pageを使用。
+        return deepcopy(dict(page))
     return reflow_page(page, settings, enable_composition=enable_composition)
 
 
@@ -861,6 +868,9 @@ def page_layout_issues(page: Mapping[str, Any], settings: Mapping[str, Any] | No
     geometries = layout.get("panels", []) if isinstance(layout, Mapping) else []
     template = str(layout.get("template", "")) if isinstance(layout, Mapping) else ""
     panels = [panel for panel in page.get("panels", []) if isinstance(panel, Mapping)]
+    if any(panel.get('image_url') and panel.get('panel_direction') for panel in panels) and not _stored_geometry_is_current(page, settings):
+        issues.append({'key': f'layout-stale-planned-{page_number}', 'label': '生成前のページ設計と編集内容が一致しません',
+                       'detail': '保存済みの配置を維持しています。画像生成前の構図を確認し、必要なら明示的に配置を再計算してください。'})
     if len(geometries) != len(panels):
         return [{"key": f"layout-missing-{page_number}", "label": f"ページ{page_number}のレイアウト", "detail": "保存済みのPanel geometryが不足しています。"}]
     areas = [float(item.get("area", 0)) for item in geometries if isinstance(item, Mapping)]
