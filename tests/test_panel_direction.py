@@ -71,12 +71,12 @@ def test_close_up_plans_whole_head_before_generation():
     item['shot_type'] = 'close-up'
     item['panel_direction'] = plan_panel_direction(item, {})
     direction = item['panel_direction']
-    assert direction['head_safe_zone']['y'] >= 0.08
+    assert .03 <= direction['head_safe_zone']['y'] <= .07
     assert direction['camera_framing']['preserve_entire_head']
     assert 'head_safe_zone' in generation_canvas_zones(item)['regions']
     prompt = compose_panel_prompt(item, [], {})
     assert 'head-and-shoulders portrait' in prompt
-    assert '8% background headroom' in prompt
+    assert '3%-7% top margin' in prompt
 
 
 @pytest.mark.parametrize("kind", ["normal", "thought", "shout", "whisper", "weak", "comedic_reaction", "announcement"])

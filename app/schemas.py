@@ -703,6 +703,9 @@ def normalize_storyboard(
                 "in_world_exact_text": str(raw_panel.get("in_world_exact_text") or "")[:200],
                 "intentional_head_crop": raw_panel.get("intentional_head_crop") is True,
                 "intentional_crop_reason": str(raw_panel.get("intentional_crop_reason") or "")[:160],
+                "head_visible": raw_panel.get("head_visible") if isinstance(raw_panel.get("head_visible"), bool) else None,
+                "hands_required": raw_panel.get("hands_required") if isinstance(raw_panel.get("hands_required"), bool) else None,
+                "props_required": raw_panel.get("props_required") if isinstance(raw_panel.get("props_required"), bool) else None,
             }
             for field in list_fields:
                 source = raw_panel.get(field, [])

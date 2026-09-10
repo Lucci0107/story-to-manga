@@ -2,6 +2,13 @@
 
 更新日: 2026-09-10
 
+## ショット別headroom校正（2026-09-10、新規2コマ承認待ち）
+
+- 一律8%からショット別範囲へ変更。full_body/medium=6〜10%、medium_close=5〜9%、close_up=3〜7%。tight_close_upは意図的cropと理由があるときだけ0〜4%、それ以外は通常close_up。extreme_close_up/頭が見えないコマは通常頭上余白の対象外。
+- camera_framingへshot_type/head_visible/上下限/top_safe_zone/face_safe_zone/body_extent_requirement/hands_required/props_required/text_reserved_zonesを保持し、プロンプトへ渡します。顔を過小化しない、手/器具や文字領域を犠牲にしない、頭頂を上端へ押し込まない優先順を明記。新規頭部領域の位置もショット範囲から決定。
+- 内部headroom_statusはPASS/TIGHT_BUT_ACCEPTABLE/FAIL_CROP_RISK/NOT_APPLICABLE。余白の目視測定が未入力ならNoneとし自動合格にしません。顔の大きさや手/小物の品質は別途目視が必要で、この数値判定だけでは完成合格にしません。
+- 全回帰 **251 passed**、JS構文/compileall/diff check成功。今回の有料生成は0件。medium-close人物と手/小物付きclose shotの新しい2コマ校正には、過去と別の明示承認が必要という指示に従い停止。既存6コマ・前回2コマ・本番・保護フォルダは未変更。追加10コマ、merge、CI、Render、本番QAは未実施。
+
 ## 頭上余白の実画像2コマ検証（2026-09-10、部分改善・未リリース）
 
 - 明示承認に基づき、別の非本番Project `e2573974-9113-4af6-8658-53cde47a3ac1` で近景validation-2-3、手/器具validation-3-3の2コマだけを生成。各1回、Retryなし、排他マーカーあり。旧Project/既存6コマの更新・削除・差し替えなし。

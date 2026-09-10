@@ -24,6 +24,9 @@ def direction_fingerprint(panel, settings):
     if panel.get("intentional_head_crop") or panel.get("intentional_crop_reason"):
         values["intentional_head_crop"] = bool(panel.get("intentional_head_crop"))
         values["intentional_crop_reason"] = str(panel.get("intentional_crop_reason") or "")
+    for key in ('head_visible', 'hands_required', 'props_required'):
+        if isinstance(panel.get(key), bool):
+            values[key] = panel[key]
     geometry = panel.get("geometry") or {}
     values["geometry"] = {key: geometry.get(key) for key in ("x", "y", "width", "height", "shape", "polygon_points")}
     canonical = canonicalize_stored_settings(settings)
@@ -45,8 +48,11 @@ def plan_panel_direction(panel, settings):
     if "center" in position or "中央" in position:
         character_zone["x"] = 0.27
     face_zone = {"x": character_zone["x"] + 0.04, "y": 0.12, "width": 0.36, "height": 0.38}
-    head_zone = {"x": character_zone["x"] + 0.02, "y": 0.08, "width": 0.40, "height": 0.46}
     framing = resolve_head_framing(panel)
+    target = (framing['headroom_target_min'] + framing['headroom_target_max']) / 2
+    head_zone = {"x": character_zone["x"] + 0.02, "y": target, "width": 0.40, "height": 0.46}
+    framing['top_safe_zone'] = {"x": character_zone['x'], "y": 0, "width": character_zone['width'], "height": target}
+    framing['face_safe_zone'] = deepcopy(face_zone)
     prop_zone = {"x": character_zone["x"] + 0.03, "y": 0.56, "width": 0.38, "height": 0.30}
     raised_hand = any(word in str(panel.get("action", "")) for word in ("手を挙げ", "手を上げ", "raise", "wave"))
     hand_zone = {"x": character_zone["x"], "y": 0.08 if raised_hand else 0.56, "width": 0.16, "height": 0.25}
@@ -83,6 +89,7 @@ def plan_panel_direction(panel, settings):
             zones.append({**rect, "type": kind, "item_id": item["id"]})
             cursor += box_height + 0.025
     ready = not any(item["overflow"] for item in items)
+    framing['text_reserved_zones'] = deepcopy(zones)
     return {"version": 1, "status": "ready" if ready else "needs_revision",
             "in_world_text": resolve_in_world_text(panel),
             "source": "pre_generation_plan", "fingerprint": direction_fingerprint(panel, settings),
