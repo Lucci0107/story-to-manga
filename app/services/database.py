@@ -7,13 +7,34 @@ PostgreSQLへ切り替えられる境界を提供する。
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Optional, Set
 from urllib.parse import unquote, urlparse
 
 from ..config import Settings, get_settings
+
+
+logger = logging.getLogger(__name__)
+
+# Renderの永続ディスクなど、WAL切替が拒否される環境では既存の
+# journal modeを維持する。接続ごとに切替を試みて起動を不安定にしないため、
+# プロセス内でDBパスごとの結果を記憶する。
+_SQLITE_JOURNAL_MODE_CACHE: dict[str, str] = {}
+_SQLITE_JOURNAL_MODE_LOCK = threading.Lock()
+_SQLITE_BUSY_TIMEOUT_MS = 20_000
+_SQLITE_SAFE_FALLBACK_MODES = {"delete", "truncate", "persist", "memory", "wal"}
+_SQLITE_WAL_FALLBACK_ERRORS = (
+    "disk i/o error",
+    "database is locked",
+    "database table is locked",
+    "readonly database",
+    "attempt to write a readonly database",
+    "database or disk is full",
+)
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -63,6 +84,98 @@ def _split_sql_script(script: str) -> Iterable[str]:
         clean = statement.strip()
         if clean:
             yield clean
+
+
+def _sqlite_cache_key(database_path: Path) -> str:
+    """SQLiteのjournal modeキャッシュ用に安定したキーを返す。"""
+
+    if str(database_path) == ":memory:":
+        return ":memory:"
+    return str(database_path.resolve())
+
+
+def _sqlite_current_journal_mode(raw_connection: Any) -> str:
+    """接続中のSQLiteが現在使っているjournal modeを取得する。"""
+
+    row = raw_connection.execute("PRAGMA journal_mode").fetchone()
+    if not row:
+        return ""
+    return str(row[0]).strip().lower()
+
+
+def _is_wal_activation_error(error: sqlite3.OperationalError) -> bool:
+    """WAL切替だけを安全にフォールバックできる環境エラーか判定する。"""
+
+    message = str(error).strip().lower()
+    return any(fragment in message for fragment in _SQLITE_WAL_FALLBACK_ERRORS)
+
+
+def _sqlite_fallback_journal_mode(current_mode: str) -> str:
+    """既存モードを優先し、不明な場合だけ安全なDELETEを選ぶ。"""
+
+    if current_mode in _SQLITE_SAFE_FALLBACK_MODES:
+        return current_mode
+    return "delete"
+
+
+def _configure_sqlite_journal_mode(raw_connection: Any, database_path: Path) -> str:
+    """WALを優先し、切替に限って既存の互換モードへフォールバックする。
+
+    journal modeはデータベース単位の設定なので、同一プロセス内で一度
+    negotiationしたパスは再度WALへ切り替えない。WAL以外のOperationalError
+    （破損など）はここで握り潰さず、そのまま起動失敗として扱う。
+    """
+
+    cache_key = _sqlite_cache_key(database_path)
+    with _SQLITE_JOURNAL_MODE_LOCK:
+        cached_mode = _SQLITE_JOURNAL_MODE_CACHE.get(cache_key)
+        if cached_mode:
+            return cached_mode
+
+        current_mode = _sqlite_current_journal_mode(raw_connection)
+        # :memory: はWAL非対応であり、既存のmemoryモードをそのまま使う。
+        if current_mode == "memory":
+            _SQLITE_JOURNAL_MODE_CACHE[cache_key] = current_mode
+            return current_mode
+
+        try:
+            result = raw_connection.execute("PRAGMA journal_mode = WAL").fetchone()
+            selected_mode = str(result[0]).strip().lower() if result else "wal"
+            if selected_mode == "wal":
+                _SQLITE_JOURNAL_MODE_CACHE[cache_key] = selected_mode
+                return selected_mode
+            # SQLiteが例外を出さず既存モードを返した場合も、互換モードとして扱う。
+            selected_mode = _sqlite_fallback_journal_mode(selected_mode or current_mode)
+            logger.warning(
+                "SQLite WALを有効化できないため、互換journal modeを使用します"
+            )
+        except sqlite3.OperationalError as error:
+            if not _is_wal_activation_error(error):
+                raise
+            selected_mode = _sqlite_fallback_journal_mode(current_mode)
+            logger.warning(
+                "SQLite WALを有効化できないため、互換journal modeへフォールバックします"
+            )
+
+        if selected_mode != current_mode:
+            # fallback自身の失敗はDB障害としてそのまま伝播させる。
+            result = raw_connection.execute(
+                f"PRAGMA journal_mode = {selected_mode.upper()}"
+            ).fetchone()
+            selected_mode = str(result[0]).strip().lower() if result else selected_mode
+        if selected_mode not in _SQLITE_SAFE_FALLBACK_MODES:
+            raise sqlite3.OperationalError("SQLite journal modeを検証できません")
+        _SQLITE_JOURNAL_MODE_CACHE[cache_key] = selected_mode
+        return selected_mode
+
+
+def _validate_sqlite_connection(raw_connection: Any) -> None:
+    """フォールバック後もDBの基本読込が可能か非破壊で確認する。"""
+
+    row = raw_connection.execute("SELECT 1").fetchone()
+    if not row or int(row[0]) != 1:
+        raise sqlite3.DatabaseError("SQLiteの基本検証に失敗しました")
+    raw_connection.execute("PRAGMA schema_version").fetchone()
 
 
 class DatabaseConnection:
@@ -127,11 +240,23 @@ class SQLiteDatabase(DatabaseBackend):
     def connect(self) -> DatabaseConnection:
         if str(self.database_path) != ":memory:":
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        raw = sqlite3.connect(self.database_path, timeout=20)
-        raw.row_factory = sqlite3.Row
-        raw.execute("PRAGMA foreign_keys = ON")
-        raw.execute("PRAGMA journal_mode = WAL")
-        return DatabaseConnection(raw, self.backend_name, self)
+        raw: Any = None
+        try:
+            raw = sqlite3.connect(self.database_path, timeout=20)
+            raw.row_factory = sqlite3.Row
+            raw.execute("PRAGMA foreign_keys = ON")
+            raw.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+            _configure_sqlite_journal_mode(raw, self.database_path)
+            raw.execute("PRAGMA synchronous = NORMAL")
+            _validate_sqlite_connection(raw)
+            return DatabaseConnection(raw, self.backend_name, self)
+        except Exception:
+            if raw is not None:
+                try:
+                    raw.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
 
     def table_columns(self, connection: DatabaseConnection, table_name: str) -> Set[str]:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_name):
