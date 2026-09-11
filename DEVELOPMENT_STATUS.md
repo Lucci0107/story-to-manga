@@ -2,6 +2,13 @@
 
 更新日: 2026-09-11
 
+## 生成前fallback統合後のRender再デプロイ状態（2026-09-11、外部デプロイ失敗・Production QA保留）
+
+- `f0733dd`（横長多要素Panelの生成前INFEASIBLE判定、課金前hard-block、局所Panel split fallback）を`main`へfast-forward統合し、originへpushしました。GitHub Actions `34609010504` はsuccessです。
+- Render自動deployment `dep-dai0q715efls738ifc00`（GitHub deployment `6394944020`）はfailureとなり、公開URLは複数回の再確認でもHTTP 502（`x-render-routing: dynamic-paid-error`）でした。RenderのDashboardログは既存認証なしでは取得せず、秘密情報の入力・表示・保存は行っていません。
+- ローカルのproduction相当import、uvicorn起動、health、全回帰 **281 passed**、compileall、JavaScript構文、pip check、diff checkは成功しています。したがって現時点の未達はRenderの外部デプロイ／実行インスタンス状態であり、Production smoke・Production Browser QAは未実施です。
+- 本番Project・既存画像・設定・履歴、非本番16コマ検証成果物、`MANGA_KNOWLEDGE_CATEGORIZED_PACK/` は変更していません。Render plan／Persistent Disk／DB／Storageも変更していません。
+
 ## 横長多要素コマの生成前安全fallback（2026-09-11、課金停止・統合前）
 
 - 3回のoverscan/safe-crop実画像検証で、横長・全頭・手・重要器具・セリフ領域を一枚へ詰め込む要求は、モデルが頭頂または手元を安定して守れない既知の制約と判定しました。追加の有料生成は行わず、同じpromptの反復も停止しています。
