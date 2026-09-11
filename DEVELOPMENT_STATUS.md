@@ -2,6 +2,16 @@
 
 更新日: 2026-09-11
 
+## Overscan / safe-crop 実画像ゲート（2026-09-11、3回上限で不合格・リリース停止）
+
+- ユーザー承認済みの非本番 `wide_multi_element` 検証を、新規Project `57669768-5296-431e-9f38-eb406960b39f`（Attempt 1）、`05881da2-3c6e-4502-9dcf-54fb831ffd86`（Attempt 2）、`63fab1a7-9791-46be-934b-4a41b8f3f1d5`（Attempt 3）で各1回実施しました。合計3回で承認上限に達し、既存16コマ・過去検証画像・本番Project/画像・設定・履歴は変更せず、既存assetも上書きしていません。保護フォルダ `MANGA_KNOWLEDGE_CATEGORIZED_PACK/` は未変更・未追跡です。
+- Attempt 1 は旧 `3:2` source（1248×832）と保存crop `y=.108,height=.74882`を検証。sourceでは頭頂が残っていましたが、final cropの上端が髪より下にあり、最終コマで頭頂を切りました。`CROPPED`相当として不合格です。
+- 原因分類後、`4fece64`でsource上端をfinal cropへ含めるtop-anchor、shot-aware headroom target、縦長sourceの構造を修正しました。Attempt 2（1120×896、約5:4）は頭頂を保持しましたが、final cropの下端で手・器具が欠落しました。
+- `5f5ff78`でsourceを`3:2`（1248×832）へ戻し、人物占有率とfinal crop下端（約75% source）をpromptへ明示しました。Attempt 3は頭・顔・手・器具をsource内では描きましたが、保存されたfinal cropでは手・器具の下側が切れ、髪も上端に近く`HEALTHY`になりませんでした。3回とも漫画調、横長比率、セリフ用空間、偶発的背景文字抑制は確認できましたが、頭頂と手・器具を同時に健康に収めるHARD GATEは未達です。
+- 各Attemptで保存→再読込したCompositionを使用し、描画時のreflowを禁止。Preview、PDF、ZIPは同一保存cropを使い、4ページのPreview PNG＝ZIP PNG＝PDF埋込画像ピクセル一致を確認しました。これは出力経路のparity合格であり、生成構図の品質合格ではありません。
+- 課金生成はここで停止します。同じoverscan微調整の4回目や残り10コマの生成、既存16コマの再生成は行いません。`WIDE_MULTI_ELEMENT_HEADROOM` は `CONFIRMED_FIXED` にせず、既知のモデル追従限界として扱います。安全なfallback候補は、(1) riskyな横長・頭/手/器具/文字の同時要求を自動抑制、(2) より広い有効shotまたはPanel分割を要求、(3) ユーザー調整cropを提供、です。
+- 製品回帰は **269 passed**。compileall、`node --check static/js/app.js`、`pip check`、`git diff --check`も成功。HARD GATE不合格のため、merge、main反映、GitHub CI、Render deploy、Production QAは停止しています。既存本番データは未変更です。
+
 ## 横長多要素の最新占有率修正：代表1コマ実画像ゲート（2026-09-11、HARD GATE失敗・overscan構造実装済み・実画像待ち）
 
 - ユーザーの最終承認に基づき、別の非本番Project `b9f39dc6-884e-4b5e-b9ab-5e1458f8d2bd` の `validation-3-3` だけを1回生成しました。既存の16コマ検証Project、過去の検証画像、本番Project・画像・履歴は変更せず、Retryや他コマの生成も行っていません。生成物は専用の検証assetへ保存し、既存ファイルの上書きを防止しました。
