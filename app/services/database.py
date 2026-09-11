@@ -191,7 +191,16 @@ def _validate_sqlite_connection(raw_connection: Any) -> None:
     row = raw_connection.execute("SELECT 1").fetchone()
     if not row or int(row[0]) != 1:
         raise sqlite3.DatabaseError("SQLiteの基本検証に失敗しました")
-    raw_connection.execute("PRAGMA schema_version").fetchone()
+    try:
+        raw_connection.execute("PRAGMA schema_version").fetchone()
+    except sqlite3.OperationalError as error:
+        if not _is_wal_activation_error(error):
+            raise
+        # schema_versionは診断用の読み取りであり、ストレージ制約時も
+        # SELECT 1が成功していれば接続自体は継続できる。
+        logger.warning(
+            "SQLite schema_versionを取得できないため、基本接続検証をSELECT 1のみで完了します"
+        )
 
 
 def _configure_sqlite_synchronous(raw_connection: Any) -> None:

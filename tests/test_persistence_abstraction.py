@@ -47,11 +47,13 @@ class _FakeSQLiteConnection:
         wal_error: str | None = None,
         journal_read_error: str | None = None,
         synchronous_error: str | None = None,
+        schema_error: str | None = None,
     ) -> None:
         self.journal_mode = journal_mode
         self.wal_error = wal_error
         self.journal_read_error = journal_read_error
         self.synchronous_error = synchronous_error
+        self.schema_error = schema_error
         self.calls: list[str] = []
         self.row_factory: object = None
         self.closed = False
@@ -75,6 +77,8 @@ class _FakeSQLiteConnection:
         if normalized == "select 1":
             return _FakeCursor((1,))
         if normalized == "pragma schema_version":
+            if self.schema_error:
+                raise sqlite3.OperationalError(self.schema_error)
             return _FakeCursor((1,))
         if normalized == "pragma foreign_keys":
             return _FakeCursor((1,))
@@ -182,6 +186,22 @@ def test_sqlite_synchronous_disk_error_keeps_default_and_starts(
             assert connection.execute("SELECT 1").fetchone()[0] == 1
 
     assert any("synchronous設定" in record.message for record in caplog.records)
+
+
+def test_sqlite_schema_version_disk_error_keeps_select_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """schema_versionだけがI/O失敗してもSELECT 1検証を維持して起動する。"""
+
+    database_service._SQLITE_JOURNAL_MODE_CACHE.clear()
+    raw = _FakeSQLiteConnection(schema_error="disk I/O error")
+    monkeypatch.setattr(database_service.sqlite3, "connect", lambda *args, **kwargs: raw)
+
+    with caplog.at_level(logging.WARNING, logger=database_service.logger.name):
+        with SQLiteDatabase(tmp_path / "story.sqlite3").connect() as connection:
+            assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+    assert any("schema_version" in record.message for record in caplog.records)
 
 
 def test_sqlite_wal_unrelated_operational_error_is_not_swallowed(
