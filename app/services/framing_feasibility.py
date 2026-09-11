@@ -56,11 +56,14 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
     failed = applicable and (target > scale_max or target < .18 or text_area > .50)
     status = 'fail' if failed else 'tight' if applicable and target > scale_max * .9 else 'pass'
     composition_mode = 'wide_multi_element' if wide_multi_requirement else 'standard'
-    subject_height = round(min(.68, max(.55, target * BODY_HEAD_UNITS[extent] + .04)), 4) if wide_multi_requirement else None
+    # 横長多要素では、人物全体がフレーム高を埋めるとモデルが頭頂を
+    # 上端へ押し付けやすい。bbox上端を頭頂帯の近くへ下げ、占有高を
+    # およそ58%へ抑えて、顔・手・器具・文字領域を同じ画面へ収める。
+    subject_height = round(min(.62, max(.55, target * BODY_HEAD_UNITS[extent] - .03)), 4) if wide_multi_requirement else None
     # テキスト側と反対に人物bboxを置き、上側・下側・横の余白を同時に残す。
     subject_x = character_zone['x']
     subject_width = character_zone['width']
-    subject_bbox = ({'x': subject_x, 'y': .16, 'width': subject_width, 'height': subject_height}
+    subject_bbox = ({'x': subject_x, 'y': .22, 'width': subject_width, 'height': subject_height}
                     if wide_multi_requirement else None)
     head_clearance = ({'min': .22, 'target': .24, 'max': .34, 'state': 'PLANNED'}
                       if wide_multi_requirement else None)
@@ -78,7 +81,7 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
             'subject_height_ratio_target': subject_height,
             'subject_width_ratio_target': subject_width if wide_multi_requirement else None,
             'subject_center_x': round(subject_x + subject_width / 2, 4) if wide_multi_requirement else None,
-            'subject_center_y': round(.16 + subject_height / 2, 4) if wide_multi_requirement else None,
+            'subject_center_y': round(.22 + subject_height / 2, 4) if wide_multi_requirement else None,
             'head_clearance': head_clearance,
             'head_top_min': .22 if wide_multi_requirement else None,
             'head_top_target': .24 if wide_multi_requirement else None,
@@ -87,7 +90,7 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
             'composition_feasibility': status, 'text_area_ratio': text_area,
             'applicable': applicable, 'aspect_ratio': ratio,
             'wide_multi_requirement': wide_multi_requirement,
-            'subject_zone_y': .16 if wide_multi_requirement else .06,
+            'subject_zone_y': .22 if wide_multi_requirement else .06,
             'head_zone_top_target': .22 if wide_multi_requirement else SHOT_RANGES[effective][0],
             'headroom_target_min': SHOT_RANGES[effective][0],
             'headroom_target_max': SHOT_RANGES[effective][1]}

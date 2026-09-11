@@ -25,12 +25,12 @@ def test_wide_required_content_relaxes_close_shot():
     assert f['effective_shot_type'] == 'medium'
     assert f['shot_adjustment_reason']
     assert f['subject_scale_target'] < .60
-    assert f['wide_multi_requirement'] and f['subject_zone_y'] == .16
+    assert f['wide_multi_requirement'] and f['subject_zone_y'] == .22
     assert f['composition_mode'] == 'wide_multi_element'
     assert .55 <= f['subject_height_ratio_target'] <= .68
-    assert f['subject_bbox_target']['y'] == .16
+    assert f['subject_bbox_target']['y'] == .22
     assert f['head_clearance']['target'] == .24
-    assert d['character_zone']['y'] == .16
+    assert d['character_zone']['y'] == .22
     assert d['head_safe_zone']['y'] == pytest.approx(f['head_clearance']['target'])
     assert .38 <= d['camera_framing']['face_center_y'] <= .50
     assert d['camera_framing']['hands_required'] and d['camera_framing']['props_required']
@@ -64,7 +64,7 @@ def test_prompt_uses_effective_saved_shot():
     prompt = compose_panel_prompt(saved, [], SETTINGS)
     assert 'ショット: medium' in prompt
     assert 'Holistic composition: wide landscape upper-torso medium-wide manga panel' in prompt
-    assert 'height=0.66' in prompt
+    assert 'height=0.58' in prompt
     assert saved == panel
 
 
