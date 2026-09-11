@@ -105,7 +105,7 @@ def test_sqlite_wal_is_preferred_and_connection_pragmas_are_preserved(tmp_path: 
 def test_sqlite_wal_disk_error_falls_back_without_repeating_switch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """WALのdisk I/Oだけを既存DELETEへフォールバックし、次の接続で再試行しない。"""
+    """WALのdisk I/O時は既存DELETEを維持し、次の接続で再試行しない。"""
 
     database_service._SQLITE_JOURNAL_MODE_CACHE.clear()
     first = _FakeSQLiteConnection(wal_error="disk I/O error")
@@ -121,7 +121,7 @@ def test_sqlite_wal_disk_error_falls_back_without_repeating_switch(
             assert connection.execute("SELECT 1").fetchone()[0] == 1
 
     assert first.journal_mode == "delete"
-    assert any("互換journal mode" in record.message for record in caplog.records)
+    assert any("既存journal modeを維持" in record.message for record in caplog.records)
     assert any("PRAGMA journal_mode = WAL" == statement for statement in first.calls)
     assert not any("journal_mode = WAL" in statement for statement in second.calls)
 
@@ -142,10 +142,10 @@ def test_sqlite_wal_error_keeps_existing_wal_mode(
     assert not any("journal_mode = DELETE" in statement for statement in raw.calls)
 
 
-def test_sqlite_wal_and_mode_read_disk_errors_use_delete_fallback(
+def test_sqlite_wal_and_mode_read_disk_errors_keep_existing_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """WALと現在モードの読取がともにI/O失敗でもDELETEを試す。"""
+    """WALと現在モードの読取がともにI/O失敗でも再書換えせず起動する。"""
 
     database_service._SQLITE_JOURNAL_MODE_CACHE.clear()
     raw = _FakeSQLiteConnection(
@@ -158,8 +158,8 @@ def test_sqlite_wal_and_mode_read_disk_errors_use_delete_fallback(
     with SQLiteDatabase(tmp_path / "story.sqlite3").connect() as connection:
         assert connection.execute("SELECT 1").fetchone()[0] == 1
 
-    assert raw.journal_mode == "delete"
-    assert any("PRAGMA journal_mode = DELETE" == statement for statement in raw.calls)
+    assert raw.journal_mode == ""
+    assert not any("PRAGMA journal_mode = DELETE" == statement for statement in raw.calls)
 
 
 def test_sqlite_wal_unrelated_operational_error_is_not_swallowed(

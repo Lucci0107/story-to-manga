@@ -27,6 +27,10 @@ _SQLITE_JOURNAL_MODE_CACHE: dict[str, str] = {}
 _SQLITE_JOURNAL_MODE_LOCK = threading.Lock()
 _SQLITE_BUSY_TIMEOUT_MS = 20_000
 _SQLITE_SAFE_FALLBACK_MODES = {"delete", "truncate", "persist", "memory", "wal"}
+_SQLITE_JOURNAL_MODE_UNMANAGED = "unmanaged"
+_SQLITE_KNOWN_JOURNAL_MODES = _SQLITE_SAFE_FALLBACK_MODES | {
+    _SQLITE_JOURNAL_MODE_UNMANAGED,
+}
 _SQLITE_WAL_FALLBACK_ERRORS = (
     "disk i/o error",
     "database is locked",
@@ -132,6 +136,7 @@ def _configure_sqlite_journal_mode(raw_connection: Any, database_path: Path) -> 
         if cached_mode:
             return cached_mode
 
+        current_mode = ""
         try:
             result = raw_connection.execute("PRAGMA journal_mode = WAL").fetchone()
             selected_mode = str(result[0]).strip().lower() if result else "wal"
@@ -142,33 +147,39 @@ def _configure_sqlite_journal_mode(raw_connection: Any, database_path: Path) -> 
             if selected_mode in _SQLITE_SAFE_FALLBACK_MODES:
                 _SQLITE_JOURNAL_MODE_CACHE[cache_key] = selected_mode
                 return selected_mode
-            selected_mode = "delete"
             logger.warning(
-                "SQLite WALを有効化できないため、互換journal modeを使用します"
+                "SQLite WALの実効モードを判定できないため、journal modeを変更せず接続を継続します"
             )
+            selected_mode = _SQLITE_JOURNAL_MODE_UNMANAGED
         except sqlite3.OperationalError as error:
             if not _is_wal_activation_error(error):
                 raise
             # WAL切替に失敗した場合だけ既存モードを確認する。確認自体が
-            # 同じ環境エラーなら、DELETEを明示して安全な互換モードを試す。
+            # 同じ環境エラーなら、別モードへの書換えを行わず既存状態を維持する。
             try:
                 current_mode = _sqlite_current_journal_mode(raw_connection)
             except sqlite3.OperationalError as mode_error:
                 if not _is_wal_activation_error(mode_error):
                     raise
-                current_mode = ""
-            selected_mode = _sqlite_fallback_journal_mode(current_mode)
+                logger.warning(
+                    "SQLite WALを有効化できずjournal modeも確認できないため、既存状態を変更せず接続を継続します"
+                )
+                _SQLITE_JOURNAL_MODE_CACHE[cache_key] = _SQLITE_JOURNAL_MODE_UNMANAGED
+                return _SQLITE_JOURNAL_MODE_UNMANAGED
+            if current_mode in _SQLITE_SAFE_FALLBACK_MODES:
+                # 現在モードが取得できた場合は、既に有効なモードをそのまま利用する。
+                logger.warning(
+                    "SQLite WALを有効化できないため、既存journal modeを維持します"
+                )
+                _SQLITE_JOURNAL_MODE_CACHE[cache_key] = current_mode
+                return current_mode
             logger.warning(
-                "SQLite WALを有効化できないため、互換journal modeへフォールバックします"
+                "SQLite WALを有効化できずjournal modeを確定できないため、既存状態を変更せず接続を継続します"
             )
+            _SQLITE_JOURNAL_MODE_CACHE[cache_key] = _SQLITE_JOURNAL_MODE_UNMANAGED
+            return _SQLITE_JOURNAL_MODE_UNMANAGED
 
-        if selected_mode != current_mode:
-            # fallback自身の失敗はDB障害としてそのまま伝播させる。
-            result = raw_connection.execute(
-                f"PRAGMA journal_mode = {selected_mode.upper()}"
-            ).fetchone()
-            selected_mode = str(result[0]).strip().lower() if result else selected_mode
-        if selected_mode not in _SQLITE_SAFE_FALLBACK_MODES:
+        if selected_mode not in _SQLITE_KNOWN_JOURNAL_MODES:
             raise sqlite3.OperationalError("SQLite journal modeを検証できません")
         _SQLITE_JOURNAL_MODE_CACHE[cache_key] = selected_mode
         return selected_mode
