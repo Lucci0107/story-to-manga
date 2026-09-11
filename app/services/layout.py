@@ -25,6 +25,11 @@ from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 from .text_composition import separate_text_from_unverified_artwork
 from .visual_style import apply_text_direction, resolve_visual_style
 from .panel_direction import plan_panel_direction, direction_is_ready
+from .composition_fallback import (
+    COMPLEXITY_INFEASIBLE,
+    apply_fallbacks_to_panels,
+    panel_spatial_complexity,
+)
 
 
 LAYOUT_VERSION = 2
@@ -360,6 +365,16 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
         "bubble_breakout_reason": page.get("bubble_breakout_reason"),
         "page_overlay_text": page.get("page_overlay_text"),
         "page_overlay_reason": page.get("page_overlay_reason"),
+        "composition_fallback_notice": page.get("composition_fallback_notice"),
+        "composition_fallbacks": [
+            {
+                "original_panel_id": item.get("original_panel_id"),
+                "fallback_type": item.get("fallback_type"),
+                "generated_panel_ids": item.get("generated_panel_ids"),
+            }
+            for item in (page.get("composition_fallbacks") or [])
+            if isinstance(item, Mapping)
+        ],
         "language": canonicalize_stored_settings(settings).get("language"),
         "composition_version": settings.get("composition_version") if isinstance(settings, Mapping) else None,
         "panels": [
@@ -385,6 +400,14 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
                 "face_position": panel.get("face_position"),
                 "text_safe_zones": panel.get("text_safe_zones"),
                 "protected_zones": panel.get("protected_zones"),
+                "fallback_applied": panel.get("fallback_applied"),
+                "fallback_type": panel.get("fallback_type"),
+                "fallback_reason": panel.get("fallback_reason"),
+                "original_panel_id": panel.get("original_panel_id"),
+                "generated_panel_ids": panel.get("generated_panel_ids"),
+                "composition_complexity": panel.get("composition_complexity"),
+                "composition_complexity_level": panel.get("composition_complexity_level"),
+                "feasibility_status": panel.get("feasibility_status"),
             }
             for panel in page.get("panels", [])
             if isinstance(panel, Mapping)
@@ -562,6 +585,7 @@ def reflow_page(
     settings: Mapping[str, Any],
     *,
     enable_composition: bool = True,
+    _allow_fallback: bool = True,
 ) -> Dict[str, Any]:
     """一つのPageだけを再計算し、Artwork情報はそのまま維持する。"""
 
@@ -571,10 +595,10 @@ def reflow_page(
         if not str(panel.get("id") or "").strip():
             panel["id"] = f"layout-panel-{panel_index}"
     next_page["panels"] = panels
-    template = select_layout_template(next_page)
-    language = canonicalize_stored_settings(settings).get("language")
     composition_version = _requested_composition_version(next_page, settings) if enable_composition else 2
     semantic_mode = composition_version >= SEMANTIC_COMPOSITION_VERSION
+    template = select_layout_template(next_page)
+    language = canonicalize_stored_settings(settings).get("language")
     panel_gap = resolve_visual_style(settings or {})["gutter_width"] if semantic_mode else PANEL_GAP
     family = semantic_page_family(next_page) if semantic_mode else ""
     dominant_index = semantic_dominant_panel_index(next_page) if semantic_mode else None
@@ -730,6 +754,34 @@ def reflow_page(
             geometries.append(geometry)
         y += row_height + panel_gap
 
+    # 先に通常のページgeometryを仮計算してから過密判定する。これにより、
+    # 入力時にgeometryがまだ無い新規Storyboardでも、dominant panelの実比率を
+    # 基準に安全な分割を選べる。分割後はこの関数を一度だけ再実行する。
+    if semantic_mode and _allow_fallback:
+        transformed, fallback_records = apply_fallbacks_to_panels(
+            panels,
+            language=str(canonicalize_stored_settings(settings).get("language", "ja")),
+            allow_split=True,
+        )
+        if fallback_records:
+            recompute_page = deepcopy(next_page)
+            recompute_page["panels"] = transformed
+            recompute_page["composition_fallbacks"] = fallback_records[:8]
+            recompute_page["composition_fallback_notice"] = (
+                "このコマは情報量が多いため、読みやすさを優先して顔・セリフと手・器具の2コマへ分割しました。"
+            )
+            # 旧geometry/compositionを引き継がず、分割後のPanelだけを
+            # 同じSemantic Layoutで局所的に再配置する。
+            recompute_page.pop("layout_geometry", None)
+            recompute_page.pop("composition", None)
+            recompute_page.pop("composition_version", None)
+            return reflow_page(
+                recompute_page,
+                settings,
+                enable_composition=enable_composition,
+                _allow_fallback=False,
+            )
+
     signature = _page_signature(next_page, settings)
     next_page["layout_version"] = LAYOUT_VERSION
     next_page["layout_geometry"] = {
@@ -776,6 +828,17 @@ def _stored_geometry_is_current(page: Mapping[str, Any], settings: Mapping[str, 
     if requested_version >= SEMANTIC_COMPOSITION_VERSION and layout.get("semantic_policy_version") != SEMANTIC_POLICY_VERSION:
         return False
     panels = page.get("panels", [])
+    # 保存済みgeometryが最新でも、未生成の過密Panelはそのまま課金工程へ
+    # 進めない。次のreflowでsplit fallbackを適用し、保存済み構図を更新する。
+    if requested_version >= SEMANTIC_COMPOSITION_VERSION:
+        if any(
+            isinstance(panel, Mapping)
+            and not str(panel.get("image_url") or "").strip()
+            and not panel.get("fallback_applied")
+            and panel_spatial_complexity(panel).get("level") == COMPLEXITY_INFEASIBLE
+            for panel in panels
+        ):
+            return False
     return bool(panels) and all(
         isinstance(panel, Mapping)
         and isinstance(panel.get("geometry"), Mapping)

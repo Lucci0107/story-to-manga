@@ -156,6 +156,10 @@ PANEL_SCHEMA: Dict[str, Any] = {
             "enum": ["establishing", "dialogue", "action", "emotional", "exposition", "climax", "transition", "reveal", "reaction"],
         },
         "importance": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+        "head_visible": {"type": "boolean"},
+        "hands_required": {"type": "boolean"},
+        "props_required": {"type": "boolean"},
+        "required_body_extent": {"type": "string", "enum": ["face_only", "head_shoulders", "upper_torso", "chest_hands", "torso_hands", "full_body"]},
     },
     "required": [
         "description",

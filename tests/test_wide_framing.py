@@ -118,9 +118,18 @@ def test_database_roundtrip_preserves_effective_composition(tmp_path, monkeypatc
     saved = db.update_project(project['id'], user['id'], settings=SETTINGS, storyboard=[page])
     loaded = db.get_project(project['id'], user['id'])
     assert loaded['storyboard'] == saved['storyboard']
-    panel = loaded['storyboard'][0]['panels'][2]
-    assert panel['panel_direction']['camera_framing']['effective_shot_type'] == 'medium'
+    # 横長・頭・手・器具・文字の過密条件は、mediumへ押し込まず
+    # 顔/セリフと手/器具の子コマへ分割した構図を保存する。
+    split_panels = loaded['storyboard'][0]['panels']
+    panel = split_panels[2]
+    assert panel['fallback_applied']
+    assert panel['panel_role'] == 'fallback_face_dialogue'
+    assert panel['panel_direction']['camera_framing']['effective_shot_type'] == 'medium_close'
     assert direction_is_ready(panel, loaded['settings'])
+    detail = split_panels[3]
+    assert detail['panel_role'] == 'fallback_hands_prop_detail'
+    assert detail['panel_direction']['camera_framing']['head_visible'] is False
+    assert direction_is_ready(detail, loaded['settings'])
     frozen = deepcopy(loaded['storyboard'][0])
     frozen['panels'][2]['image_url'] = '/media/test/nonexistent.png'
     assert ensure_page_layout(frozen, loaded['settings']) == frozen

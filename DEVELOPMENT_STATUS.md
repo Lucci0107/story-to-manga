@@ -2,6 +2,15 @@
 
 更新日: 2026-09-11
 
+## 横長多要素コマの生成前安全fallback（2026-09-11、課金停止・統合前）
+
+- 3回のoverscan/safe-crop実画像検証で、横長・全頭・手・重要器具・セリフ領域を一枚へ詰め込む要求は、モデルが頭頂または手元を安定して守れない既知の制約と判定しました。追加の有料生成は行わず、同じpromptの反復も停止しています。
+- `composition_fallback.py` に生成前の空間複雑度判定（LOW/MEDIUM/HIGH/INFEASIBLE）を追加。比率・頭部・手・器具・文字予約領域・ショットを評価し、INFEASIBLEなPanelは課金Job作成前とWorker実行前の二重hard-blockで止めます。通常Panelとlegacy v2、既存Artworkは従来のDIRECT経路を維持します。
+- fallbackはショット緩和・文字領域移動・geometry候補を順に再評価し、なお不可能な場合は顔/セリフと手/器具の連続2コマへ局所分割します。子コマへ`original_panel_id`、`generated_panel_ids`、`original_story_intent`、試行理由、fallback種別を保存し、顔コマへ本文、手元コマへSFXを保持。日本語RTL／英語LTRの論理読順を配列順で維持し、子コマのPanelDirectionを再計画します。
+- DB再読込時に保存済みの未生成過密Panelを見落とさず、既存Artworkが混在するPageでも未生成Panelだけを変換します。Preview／PDF／ZIPは既存の共通Composition sourceをそのまま利用し、ページ通知「情報量が多いため…2コマへ分割しました」をStoryboard画面へ表示します。
+- synthetic／DB roundtrip／既存Artwork保護／Job hard-block／分割lineage／Preview経路を回帰化。全回帰 **281 passed**、compileall、`node --check static/js/app.js`、`pip check`、`git diff --check` 成功。ローカルBrowserでは日本語RTLの5コマ再構成、分割通知、Preview遷移、ページ画像取得を確認済み。課金生成・本番Project変更・merge・deployは未実施です。
+- この修正により、解決不能な一枚構図を無理に生成せず、意味を保った読みやすい漫画構成へ変換します。保護フォルダ `MANGA_KNOWLEDGE_CATEGORIZED_PACK/` は未変更・未追跡のままです。
+
 ## Overscan / safe-crop 実画像ゲート（2026-09-11、3回上限で不合格・リリース停止）
 
 - ユーザー承認済みの非本番 `wide_multi_element` 検証を、新規Project `57669768-5296-431e-9f38-eb406960b39f`（Attempt 1）、`05881da2-3c6e-4502-9dcf-54fb831ffd86`（Attempt 2）、`63fab1a7-9791-46be-934b-4a41b8f3f1d5`（Attempt 3）で各1回実施しました。合計3回で承認上限に達し、既存16コマ・過去検証画像・本番Project/画像・設定・履歴は変更せず、既存assetも上書きしていません。保護フォルダ `MANGA_KNOWLEDGE_CATEGORIZED_PACK/` は未変更・未追跡です。

@@ -45,6 +45,9 @@ def validation_pages():
                            "characters": [] if (number, index) in {(1, 4), (4, 4)} else ["架空の医師" if (number, index) not in {(2, 2), (3, 4)} else "架空の看護師"],
                            "character_position": "left", "shot_type": "close-up" if (number, index) in {(2, 3), (3, 2)} else "medium shot",
                            "importance": importance, "scene_type": family,
+                           # 検証Fixtureでは手・器具を「必要条件」として扱う
+                           # Panelだけをテスト側で明示的に有効化する。
+                           "hands_required": False, "props_required": False,
                            "dialogue": [dialogue] if dialogue else [], "dialogue_types": [semantic] if dialogue else [],
                            "narration": ["判断を重ね、次の一歩へ。"] if (number, index) == (4, 4) else [],
                            "sfx": [sfx] if sfx else [], "sfx_types": [sound] if sfx else [],

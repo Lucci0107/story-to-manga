@@ -513,6 +513,82 @@ def normalize_generation_metadata(value: Any) -> Optional[Dict[str, Any]]:
     return normalized
 
 
+def _normalize_composition_fallback(value: Any) -> Optional[Dict[str, Any]]:
+    """生成前の局所再構成lineageを、表示・再読込に必要な範囲だけ保持する。"""
+
+    if not isinstance(value, dict):
+        return None
+    result: Dict[str, Any] = {}
+    for key in ("original_panel_id", "role"):
+        if value.get(key) is not None:
+            result[key] = str(value.get(key))[:120]
+    return result or None
+
+
+def _normalize_fallback_attempts(value: Any) -> List[Dict[str, Any]]:
+    """自動緩和の履歴から内部promptや本文を持ち込まず、判定メタデータだけ保存する。"""
+
+    if not isinstance(value, list):
+        return []
+    result: List[Dict[str, Any]] = []
+    for item in value[:8]:
+        if not isinstance(item, dict):
+            continue
+        entry: Dict[str, Any] = {}
+        for key in ("type", "status", "requested", "effective", "reason"):
+            if item.get(key) is not None:
+                entry[key] = str(item.get(key))[:160]
+        if "would_be_feasible" in item:
+            entry["would_be_feasible"] = bool(item.get("would_be_feasible"))
+        result.append(entry)
+    return result
+
+
+def _normalize_story_intent(value: Any) -> Dict[str, Any]:
+    """Panel分割の起点を、追跡に必要な本文項目だけに限定して保持する。"""
+
+    if not isinstance(value, dict):
+        return {}
+    result: Dict[str, Any] = {}
+    for key in ("description", "action", "expression", "shot_type"):
+        if value.get(key) not in (None, ""):
+            result[key] = str(value.get(key))[:500]
+    for key in ("characters", "dialogue", "narration", "sfx"):
+        raw = value.get(key)
+        if isinstance(raw, list):
+            result[key] = [str(entry)[:500] for entry in raw[:16] if str(entry).strip()]
+    return result
+
+
+def _normalize_fallback_records(value: Any) -> List[Dict[str, Any]]:
+    """Page単位の再構成履歴から、UIとlineageに必要な情報だけを保持する。"""
+
+    if not isinstance(value, list):
+        return []
+    result: List[Dict[str, Any]] = []
+    for item in value[:8]:
+        if not isinstance(item, dict):
+            continue
+        entry: Dict[str, Any] = {
+            "original_panel_id": str(item.get("original_panel_id") or "")[:120],
+            "fallback_applied": bool(item.get("fallback_applied", False)),
+            "fallback_type": str(item.get("fallback_type") or "")[:40],
+            "fallback_reason": str(item.get("fallback_reason") or "")[:240],
+            "generated_panel_ids": [str(value)[:120] for value in (item.get("generated_panel_ids") or [])[:8] if str(value).strip()],
+            "attempts": _normalize_fallback_attempts(item.get("attempts")),
+            "original_story_intent": _normalize_story_intent(item.get("original_story_intent")),
+        }
+        complexity = item.get("complexity")
+        if isinstance(complexity, dict):
+            entry["complexity"] = {
+                "score": _bounded_int(complexity.get("score", 0), 0, 0, 100),
+                "level": str(complexity.get("level") or "")[:20],
+                "feasibility_status": str(complexity.get("feasibility_status") or "")[:24],
+            }
+        result.append(entry)
+    return result
+
+
 def _normalized_ratio(value: Any, fallback: float = 0.5) -> float:
     try:
         number = float(value)
@@ -706,6 +782,21 @@ def normalize_storyboard(
                 "head_visible": raw_panel.get("head_visible") if isinstance(raw_panel.get("head_visible"), bool) else None,
                 "hands_required": raw_panel.get("hands_required") if isinstance(raw_panel.get("hands_required"), bool) else None,
                 "props_required": raw_panel.get("props_required") if isinstance(raw_panel.get("props_required"), bool) else None,
+                "required_body_extent": str(raw_panel.get("required_body_extent") or "")[:32] if str(raw_panel.get("required_body_extent") or "") in {"face_only", "head_shoulders", "upper_torso", "chest_hands", "torso_hands", "full_body"} else None,
+                # 過密Panelを生成前に分割した場合のlineageと判定を保持する。
+                "fallback_applied": bool(raw_panel.get("fallback_applied", False)),
+                "fallback_type": str(raw_panel.get("fallback_type") or "")[:40],
+                "fallback_reason": str(raw_panel.get("fallback_reason") or "")[:240],
+                "original_panel_id": str(raw_panel.get("original_panel_id") or "")[:120],
+                "generated_panel_ids": [str(entry)[:120] for entry in (raw_panel.get("generated_panel_ids") or [])[:8] if str(entry).strip()] if isinstance(raw_panel.get("generated_panel_ids"), list) else [],
+                "original_story_intent": _normalize_story_intent(raw_panel.get("original_story_intent")),
+                "fallback_lineage": _normalize_composition_fallback(raw_panel.get("fallback_lineage")),
+                "fallback_attempts": _normalize_fallback_attempts(raw_panel.get("fallback_attempts")),
+                "composition_complexity": _bounded_int(raw_panel.get("composition_complexity", 0), 0, 0, 100),
+                "composition_complexity_level": str(raw_panel.get("composition_complexity_level") or "")[:20],
+                "feasibility_status": str(raw_panel.get("feasibility_status") or "")[:24],
+                "feasibility_reasons": [str(entry)[:200] for entry in (raw_panel.get("feasibility_reasons") or [])[:8] if str(entry).strip()] if isinstance(raw_panel.get("feasibility_reasons"), list) else [],
+                "fallback_recommendation": str(raw_panel.get("fallback_recommendation") or "")[:40],
             }
             for field in list_fields:
                 source = raw_panel.get(field, [])
@@ -738,6 +829,8 @@ def normalize_storyboard(
                 "bubble_breakout_reason": str(item.get("bubble_breakout_reason") or "")[:160],
                 "page_overlay_text": str(item.get("page_overlay_text") or "")[:120],
                 "page_overlay_reason": str(item.get("page_overlay_reason") or "")[:160],
+                "composition_fallback_notice": str(item.get("composition_fallback_notice") or "")[:240],
+                "composition_fallbacks": _normalize_fallback_records(item.get("composition_fallbacks")),
                 "panels": panels,
                 "composition": normalized_composition,
             }

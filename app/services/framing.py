@@ -28,13 +28,25 @@ def resolve_head_framing(panel):
         canonical = 'close_up'
     minimum, maximum = SHOT_RANGES[canonical] if visible else (0, 0)
     requirements = str(panel.get('action') or '') + str(panel.get('description') or '')
+    explicit_hands = panel.get('hands_required')
+    explicit_props = panel.get('props_required')
+    hands_required = (
+        bool(explicit_hands)
+        if isinstance(explicit_hands, bool)
+        else any(w in requirements for w in ('手', 'hand', '器具'))
+    )
+    props_required = (
+        bool(explicit_props)
+        if isinstance(explicit_props, bool)
+        else any(w in requirements for w in ('器具', '小物', 'instrument', 'prop'))
+    )
     return {'preserve_entire_head': visible and not intentional,
             'shot_type': canonical, 'head_visible': visible,
             'headroom_target_min': minimum, 'headroom_target_max': maximum,
             'minimum_headroom': minimum,
             'body_extent_requirement': 'full_body' if canonical == 'full_body' else 'shoulders_and_required_hands' if canonical in {'close_up', 'medium_close'} else 'preserve_requested_shot',
-            'hands_required': panel.get('hands_required') is True or any(w in requirements for w in ('手', 'hand', '器具')),
-            'props_required': panel.get('props_required') is True or any(w in requirements for w in ('器具', '小物', 'instrument', 'prop')),
+            'hands_required': hands_required,
+            'props_required': props_required,
             'intentional_crop': intentional,
             'reason': 'explicit extreme close-up' if extreme and visible else reason if intentional else '',
             'close_up_treatment': 'head_and_shoulders_with_headroom' if visible and not intentional else 'preserve_requested_shot'}

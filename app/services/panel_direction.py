@@ -12,6 +12,7 @@ from .framing import resolve_head_framing
 from .framing_feasibility import resolve_feasibility
 from .reading_order import canonicalize_stored_settings
 from .artwork_geometry import generation_canvas_is_feasible, resolve_generation_strategy
+from .composition_fallback import panel_spatial_complexity, COMPLEXITY_INFEASIBLE
 
 
 def direction_fingerprint(panel, settings):
@@ -31,6 +32,9 @@ def direction_fingerprint(panel, settings):
             values[key] = panel[key]
     if panel.get('required_body_extent'):
         values['required_body_extent'] = panel['required_body_extent']
+    for key in ("fallback_applied", "fallback_type", "original_panel_id", "generated_panel_ids"):
+        if panel.get(key) is not None:
+            values[key] = panel.get(key)
     geometry = panel.get("geometry") or {}
     values["geometry"] = {key: geometry.get(key) for key in ("x", "y", "width", "height", "shape", "polygon_points")}
     canonical = canonicalize_stored_settings(settings)
@@ -93,6 +97,7 @@ def plan_panel_direction(panel, settings):
             zones.append({**rect, "type": kind, "item_id": item["id"]})
             cursor += box_height + 0.025
     feasibility = resolve_feasibility(framing, width / height, len(panel.get('characters') or []), zones, character_zone, panel.get('required_body_extent'))
+    spatial_complexity = panel_spatial_complexity(panel)
     body_bottom = None
     if feasibility['applicable']:
         framing.update(feasibility)
@@ -174,6 +179,8 @@ def plan_panel_direction(panel, settings):
     debug_geometry = {
         'composition_mode': feasibility['composition_mode'],
         'panel_aspect_ratio': feasibility['aspect_ratio'],
+        'spatial_complexity': deepcopy(spatial_complexity),
+        'fallback_required': spatial_complexity['level'] == COMPLEXITY_INFEASIBLE,
         'subject_bbox_target': deepcopy(feasibility['subject_bbox_target']),
         'subject_occupancy_target': feasibility['subject_height_ratio_target'],
         'head_clearance': deepcopy(feasibility['head_clearance']),
@@ -193,6 +200,13 @@ def plan_panel_direction(panel, settings):
             "head_safe_zone": head_zone if framing['preserve_entire_head'] else None,
             "camera_framing": framing,
             "composition_feasibility": feasibility,
+            "composition_complexity": spatial_complexity["score"],
+            "composition_complexity_level": spatial_complexity["level"],
+            "feasibility_status": spatial_complexity["feasibility_status"],
+            "feasibility_reasons": spatial_complexity["reasons"],
+            "fallback_recommendation": (
+                "panel_split" if spatial_complexity["level"] == COMPLEXITY_INFEASIBLE else "none"
+            ),
             "composition_debug": debug_geometry,
             "generation_strategy": generation_strategy,
             "composition_mode": feasibility['composition_mode'],

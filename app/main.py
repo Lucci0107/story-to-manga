@@ -483,6 +483,7 @@ def queue_panels(
     """対象コマをキューへ入れ、実行中の重複リクエストを除外する。"""
 
     from .services.panel_direction import direction_is_ready
+    from .services.composition_fallback import panel_spatial_complexity, COMPLEXITY_INFEASIBLE
 
     storyboard = project.get("storyboard", []) or []
     selected = set(panel_ids)
@@ -501,6 +502,24 @@ def queue_panels(
         if status == "failed" and not retry_failed and not force:
             skipped.append(str(panel.get("id")))
             continue
+        # 過密な横長コマは、分割などの生成前変換が完了するまで課金APIへ送らない。
+        # 画像付き既存Panelや分割後の子Panelには適用しない。
+        semantic_version = 0
+        try:
+            semantic_version = int((project.get("settings") or {}).get("composition_version") or 0)
+        except (TypeError, ValueError):
+            semantic_version = 0
+        if semantic_version >= 3 and not panel.get("image_url") and not panel.get("fallback_applied"):
+            complexity = panel_spatial_complexity(panel)
+            if complexity.get("level") == COMPLEXITY_INFEASIBLE:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "横長コマの情報量が多く、画像生成前の構図が実行不能です。"
+                        "顔・セリフと手・器具のPanel分割またはコマ面積の再計算を行ってください。"
+                        "画像生成は開始していません。"
+                    ),
+                )
         if (panel.get("panel_direction") or (_page.get("composition") or {}).get("style_profile")) and not direction_is_ready(panel, project.get("settings") or {}):
             raise HTTPException(status_code=422, detail="生成前の構図が未確定または文字領域が不足しています。ネームの文字量・コマ面積を調整し、配置を再計算してください。画像生成は開始していません。")
         panel["generation_status"] = "queued"
@@ -565,6 +584,18 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             latest = db.get_project(project_id, user_id) or project
             _latest_page, latest_panel = find_panel(latest, str(job["target_id"]))
             from .services.panel_direction import direction_is_ready
+            from .services.composition_fallback import panel_spatial_complexity, COMPLEXITY_INFEASIBLE
+
+            try:
+                semantic_version = int((latest.get("settings") or {}).get("composition_version") or 0)
+            except (TypeError, ValueError):
+                semantic_version = 0
+            if semantic_version >= 3 and not latest_panel.get("fallback_applied") and not latest_panel.get("image_url"):
+                complexity = panel_spatial_complexity(latest_panel)
+                if complexity.get("level") == COMPLEXITY_INFEASIBLE:
+                    raise ArtworkGenerationError(
+                        "横長コマの情報量が多く、生成前の構図分割が必要です。画像生成は開始していません。"
+                    )
 
             if (latest_panel.get("panel_direction") or (_latest_page.get("composition") or {}).get("style_profile")) and not direction_is_ready(latest_panel, latest.get("settings") or {}):
                 raise ArtworkGenerationError("構図が変更されました。画像生成前に配置を再計算してください。")
