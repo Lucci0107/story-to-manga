@@ -9,7 +9,7 @@
 - 実画像は漫画調で、顔・両手・重要な器具・右側のセリフ用静かな領域を保持し、人物を不自然に縮小してはいません。偶発的な可読背景文字は目視で認めません（OCR保証ではありません）。ただし髪の最上部は画像上端から約2px（約0.28%）で、頭頂は切れていないものの`CRAMPED`／`FAIL_CROP_RISK`相当です。保存した24%の頭頂クリアランスに追従せず、HARD GATE（自然な頭上余白）に不合格と判定しました。
 - Preview、PDF、ZIPは同一の保存済みCompositionを使用し、Preview PNG＝ZIP PNG＝PDF埋込画像の一致を確認しました。これは出力経路のparity合格であり、生成段階の頭上余白不良を合格へ変えるものではありません。検証成果物は `/tmp/manga-readable-qa.HNAykr/final_headroom_validation/` に保持しています。
 - 原因はPDF/Previewの後処理ではなく、横長・頭・手・器具・文字領域を同時に要求した直接生成でモデルが人物の上端位置を無視する構図追従不足です。これを受け、今回のコード変更で`wide_multi_element`だけに生成時`overscan_safe_crop`を追加しました。最終Panelより縦長のsource比率、上下overscan、保存済みfinal crop、必須領域包含検査、source asset保持、Preview/PDF/ZIP共通描画を実装し、通常コマはDIRECTのままです。構造実装は完了しましたが、実画像での効果はまだ未検証です。今回の失敗を隠すrenderer補正や同一promptの反復は行いません。
-- 全回帰は **268 passed**、compileall、`node --check static/js/app.js`、`pip check`、`git diff --check`も成功。直接構図方式の実画像ゲートが失敗しているため、今回のoverscan実装中は有料生成を行わず、残り10コマ、merge、main反映、GitHub CI、Render deploy、Production QAも停止します。新しい実画像検証には、別途ユーザー承認されたbounded scopeが必要です。
+- 全回帰は **269 passed**、compileall、`node --check static/js/app.js`、`pip check`、`git diff --check`も成功。overscan構造実装はコミット`5cbb101`です。直接構図方式の実画像ゲートが失敗しているため、実画像効果の確認までは有料生成を行わず、残り10コマ、merge、main反映、GitHub CI、Render deploy、Production QAも停止します。新しい実画像検証には、別途ユーザー承認されたbounded scopeが必要です。
 - 既存の4ページ16コマ検証成果物と合格済みparity/browser QAの証拠は保持しますが、最新占有率修正の実画像HARD GATE未達を理由にリリース不可とします。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/` は未変更・未追跡のままです。
 
 ## 横長多要素構図v2の実画像バッチ検証（2026-09-11、リリースゲート保留）
