@@ -2,6 +2,14 @@
 
 更新日: 2026-09-11
 
+## WIDE_MULTI_ELEMENT構図v2（2026-09-11、課金前構造PASS）
+
+- 直前の実画像でmediumでも髪が上端へ寄ったため、prompt文言の反復ではなく、横長多要素専用の`wide_multi_element` composition modeを追加。頭・顔・手・重要器具・セリフ領域を同じ人物占有予算の中で配置し、通常のmedium/closeの人物サイズへ戻らないようにした。Preview/PDF/ZIP/render/cropは変更していない。
+- 横長比率1.6以上でhands+propsを要求する場合、requested shotは保持しつつeffective shotは`medium`、`subject_bbox_target={x:0.04,y:0.16,width:0.46,height:0.655}`（高さ55〜68%範囲）、head clearance `{min:0.22,target:0.24,max:0.34}`、head safe zone`y=0.22/height=0.30`、顔中心約0.398を保存。文字領域は人物の反対側、手/器具は下側へ固定する。
+- PanelDirectionへ`composition_mode`、subject bbox/occupancy、head top min/target/max、縦横fit・head clearance・face scale・hand/prop/text/dialogueの構造スコア、課金前QA用`composition_debug`（promptやsecretを含まない）を追加。promptは「wide landscape upper-torso medium-wide」の一体構図、人物bbox、占有率、上側空き帯、顔/手/器具/セリフの相対配置から生成する。
+- 追加テストでmode選択、bbox/occupancy保存、head clearance（CROPPED/TOUCHING/CRAMPED/HEALTHY）、debug view、promptの構図統合を確認。全回帰 **262 passed（32.56秒）**、compileall（`PYTHONPYCACHEPREFIX=/tmp`）、diff check、pip check成功。
+- **BLOCKED:** 4530992系の失敗画像は未変更・追加生成なし。新しい構造を実画像で確認するには、別Projectの代表1コマ1回の明示承認が必要。残り10コマ、merge、main push、Render deploy、Production QAは停止。保護フォルダは未変更・未追跡。
+
 ## 4530992最終横長1コマ実画像検証（2026-09-11、HARD GATE失敗）
 
 - 明示承認に基づき、Project `32265401-b0d7-45ba-a2b5-371a7ce3c3dd` の `validation-3-3` だけを1回生成。コード側の対象は `4530992`（現HEADはこの記録commitを含む `6d117a9`）。既存画像・過去検証Project・本番Projectを変更せず、Retry/追加課金なし。

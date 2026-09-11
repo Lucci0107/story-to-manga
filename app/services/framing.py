@@ -51,6 +51,17 @@ def head_framing_prompt(panel):
     budget = (f"Required body extent={framing.get('required_body_extent')}; head height must be about {scale:.0%} of image height, not a frame-filling face. " if scale else '')
     extent_instruction = ('follow the planned body extent' if scale and framing.get('required_body_extent') not in {'face_only', 'head_shoulders'}
                           else 'use a head-and-shoulders portrait for close shots')
+    if framing.get('composition_mode') == 'wide_multi_element':
+        bbox = framing.get('subject_bbox_target') or {}
+        clearance = framing.get('head_clearance') or {}
+        return (f"Holistic composition: wide landscape upper-torso medium-wide manga panel. "
+                f"Keep the subject inside the planned bbox x={bbox.get('x', 0):.2f}, y={bbox.get('y', 0):.2f}, "
+                f"width={bbox.get('width', 0):.2f}, height={bbox.get('height', 0):.2f}; do not fill the vertical frame. "
+                f"Keep the entire crown and hair below the top clearance target y={clearance.get('target', .24):.2f} "
+                f"with a visible background band above it. Place the face in the upper-middle, both hands and the important "
+                "instrument in the lower-middle, and keep the opposite lateral area quiet for dialogue. "
+                "This is one coherent upper-torso composition, not separate close-up constraints. "
+                "Do not enlarge the face to fill the panel or crop the crown, hands, instrument, or dialogue area. ")
     return (budget + f"Framing priority: shot={framing['shot_type']}; {extent_instruction}, not an extreme facial crop. "
             f"Keep the entire hair, hat or surgical-cap silhouette inside head_safe_zone, with a visually natural {framing['headroom_target_min']:.0%}-{framing['headroom_target_max']:.0%} top margin. "
             'No accidental crown crop, forehead crop, hair-top crop, or face pushed against the image top edge. '

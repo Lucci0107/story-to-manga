@@ -9,6 +9,21 @@ BODY_HEAD_UNITS = {'face_only': 1, 'head_shoulders': 1.35, 'upper_torso': 1.65,
                    'chest_hands': 2.05, 'torso_hands': 2.35, 'full_body': 4.5}
 
 
+def head_clearance_state(framing, observed_margin=None):
+    """頭頂余白の目視値を、生成前計画とは分けて評価する。"""
+    if not framing.get('head_visible', True) or framing.get('shot_type') == 'extreme_close_up':
+        return 'NOT_APPLICABLE'
+    if observed_margin is None:
+        return 'PLANNED'
+    if observed_margin <= 0:
+        return 'CROPPED'
+    if observed_margin <= .01:
+        return 'TOUCHING'
+    if observed_margin <= .04:
+        return 'CRAMPED'
+    return 'HEALTHY'
+
+
 def resolve_feasibility(framing, ratio, character_count, zones, character_zone, required_extent=None):
     """横長の身体範囲を評価し、必要な場合のみカメラを引く。"""
     requested = framing['shot_type']
@@ -40,16 +55,35 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
     target = HEAD_SCALE[effective]
     failed = applicable and (target > scale_max or target < .18 or text_area > .50)
     status = 'fail' if failed else 'tight' if applicable and target > scale_max * .9 else 'pass'
-    reason = ('横長コマで頭部・必要な手/小物・文字領域を保持するため、close-upからmediumへ身体範囲を広げます。'
+    composition_mode = 'wide_multi_element' if wide_multi_requirement else 'standard'
+    subject_height = round(min(.68, max(.55, target * BODY_HEAD_UNITS[extent] + .04)), 4) if wide_multi_requirement else None
+    # テキスト側と反対に人物bboxを置き、上側・下側・横の余白を同時に残す。
+    subject_x = character_zone['x']
+    subject_width = character_zone['width']
+    subject_bbox = ({'x': subject_x, 'y': .16, 'width': subject_width, 'height': subject_height}
+                    if wide_multi_requirement else None)
+    head_clearance = ({'min': .22, 'target': .24, 'max': .34, 'state': 'PLANNED'}
+                      if wide_multi_requirement else None)
+    reason = ('横長コマで頭部・必要な手/小物・文字領域を保持するため、wide_multi_elementへ構図を広げます。'
               if wide_multi_requirement else
               '横長コマで頭部・必要な手/小物・文字領域を保持するため身体範囲を広げます。'
               if effective != requested else '')
     return {'requested_shot_type': requested, 'effective_shot_type': effective,
+            'composition_mode': composition_mode,
             'shot_adjustment_reason': reason, 'required_body_extent': extent,
             'body_head_units': BODY_HEAD_UNITS[extent],
             'subject_scale_unit': 'head_height/image_height',
             'subject_scale_max': round(scale_max, 4), 'subject_scale_target': target,
-            'requested_feasibility': 'fail' if applicable and initial > scale_max else 'pass',
+            'subject_bbox_target': subject_bbox,
+            'subject_height_ratio_target': subject_height,
+            'subject_width_ratio_target': subject_width if wide_multi_requirement else None,
+            'subject_center_x': round(subject_x + subject_width / 2, 4) if wide_multi_requirement else None,
+            'subject_center_y': round(.16 + subject_height / 2, 4) if wide_multi_requirement else None,
+            'head_clearance': head_clearance,
+            'head_top_min': .22 if wide_multi_requirement else None,
+            'head_top_target': .24 if wide_multi_requirement else None,
+            'head_top_max': .34 if wide_multi_requirement else None,
+            'requested_feasibility': 'fail' if applicable and (initial > scale_max or wide_multi_requirement) else 'pass',
             'composition_feasibility': status, 'text_area_ratio': text_area,
             'applicable': applicable, 'aspect_ratio': ratio,
             'wide_multi_requirement': wide_multi_requirement,

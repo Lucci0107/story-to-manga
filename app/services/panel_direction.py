@@ -92,6 +92,7 @@ def plan_panel_direction(panel, settings):
             zones.append({**rect, "type": kind, "item_id": item["id"]})
             cursor += box_height + 0.025
     feasibility = resolve_feasibility(framing, width / height, len(panel.get('characters') or []), zones, character_zone, panel.get('required_body_extent'))
+    body_bottom = None
     if feasibility['applicable']:
         framing.update(feasibility)
         framing['shot_type'] = feasibility['effective_shot_type']
@@ -101,7 +102,8 @@ def plan_panel_direction(panel, settings):
         scale = feasibility['subject_scale_target']
         if feasibility['wide_multi_requirement']:
             # 横長の多要素コマは人物領域自体を下げ、上側を実際の空き帯として予約する。
-            character_zone.update(y=feasibility['subject_zone_y'], height=.75)
+            bbox = feasibility['subject_bbox_target']
+            character_zone.update(y=bbox['y'], height=min(.78, max(.70, bbox['height'] + .08)), width=bbox['width'])
         # 顔だけ下へずらさず、頭部全体を縮尺から配置する。手/器具は下段に残す。
         head_zone.update(y=target, height=scale, width=min(.40, scale * .72 / (width / height)))
         face_zone.update(y=target + scale * .27, height=scale * .65, width=head_zone['width'])
@@ -120,13 +122,24 @@ def plan_panel_direction(panel, settings):
             item['overflow'] = item['overflow'] or any(
                 item['x'] < z['x'] + z['width'] and item['x'] + item['width'] > z['x']
                 and item['y'] < z['y'] + z['height'] and item['y'] + item['height'] > z['y'] for z in protected)
-    feasibility['scores'] = {
+    scores = {
         'headroom': int(not framing['preserve_entire_head'] or head_zone['y'] >= framing['headroom_target_min']),
         'face_scale': int(feasibility['subject_scale_target'] >= .18),
         'hand_visibility': int(hand_zone['y'] + hand_zone['height'] <= .96),
         'prop_visibility': int(prop_zone['y'] + prop_zone['height'] <= .96),
         'text_space': int(not any(i['overflow'] for i in items)),
-        'shot_feasibility': int(feasibility['composition_feasibility'] != 'fail')}
+        'shot_feasibility': int(feasibility['composition_feasibility'] != 'fail'),
+        'vertical_fit': int(body_bottom is None or body_bottom <= .96),
+        'horizontal_fit': int(feasibility['subject_bbox_target'] is None or
+                              feasibility['subject_bbox_target']['x'] >= 0 and
+                              feasibility['subject_bbox_target']['x'] + feasibility['subject_bbox_target']['width'] <= 1),
+        'head_clearance': int(feasibility['head_clearance'] is None or
+                              feasibility['head_clearance']['target'] >= feasibility['head_clearance']['min']),
+        'dialogue_area': int(not zones or feasibility['text_area_ratio'] <= .50),
+        'subject_occupancy': int(feasibility['subject_height_ratio_target'] is None or
+                                 .55 <= feasibility['subject_height_ratio_target'] <= .68)}
+    feasibility['scores'] = scores
+    feasibility['composition_score'] = round(sum(scores.values()) / len(scores), 3)
     ready = not any(item["overflow"] for item in items) and feasibility['composition_feasibility'] != 'fail'
     warnings = []
     if any(item['overflow'] for item in items):
@@ -134,6 +147,19 @@ def plan_panel_direction(panel, settings):
     if feasibility['composition_feasibility'] == 'fail':
         warnings.append('頭部・必要な手や小物を安全に収められません。生成前に人物配置またはコマ面積を見直してください。')
     framing['text_reserved_zones'] = deepcopy(zones)
+    debug_geometry = {
+        'composition_mode': feasibility['composition_mode'],
+        'panel_aspect_ratio': feasibility['aspect_ratio'],
+        'subject_bbox_target': deepcopy(feasibility['subject_bbox_target']),
+        'subject_occupancy_target': feasibility['subject_height_ratio_target'],
+        'head_clearance': deepcopy(feasibility['head_clearance']),
+        'head_safe_zone': deepcopy(head_zone) if framing['preserve_entire_head'] else None,
+        'face_center_y': framing.get('face_center_y'),
+        'face_safe_zone': deepcopy(face_zone),
+        'important_hand_zone': deepcopy(hand_zone),
+        'important_prop_zone': deepcopy(prop_zone),
+        'dialogue_reserved_zones': deepcopy([z for z in zones if z['type'] == 'bubble']),
+    }
     return {"version": 1, "status": "ready" if ready else "needs_revision",
             "in_world_text": resolve_in_world_text(panel),
             "source": "pre_generation_plan", "fingerprint": direction_fingerprint(panel, settings),
@@ -141,6 +167,10 @@ def plan_panel_direction(panel, settings):
             "head_safe_zone": head_zone if framing['preserve_entire_head'] else None,
             "camera_framing": framing,
             "composition_feasibility": feasibility,
+            "composition_debug": debug_geometry,
+            "composition_mode": feasibility['composition_mode'],
+            "subject_bbox_target": deepcopy(feasibility['subject_bbox_target']),
+            "head_clearance": deepcopy(feasibility['head_clearance']),
             "face_safe_zone": face_zone, "important_prop_zone": prop_zone, "important_hand_zone": hand_zone,
             "protected_zones": protected, "reserved_text_zones": zones,
             "crop_anchor": {"x": "right" if character_right else "left", "y": "middle"},
@@ -153,3 +183,8 @@ def direction_is_ready(panel, settings):
     """古い構図や不足した文字領域のまま課金生成しない。"""
     direction = panel.get("panel_direction") or {}
     return direction.get("status") == "ready" and direction.get("fingerprint") == direction_fingerprint(panel, settings)
+
+
+def composition_debug_view(panel):
+    """課金前QA用の安全領域だけを返し、promptや秘密値は返さない。"""
+    return deepcopy((panel.get('panel_direction') or {}).get('composition_debug') or {})

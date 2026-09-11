@@ -2,7 +2,8 @@
 from copy import deepcopy
 import json
 import pytest
-from app.services.panel_direction import plan_panel_direction, direction_is_ready
+from app.services.panel_direction import plan_panel_direction, direction_is_ready, composition_debug_view
+from app.services.framing_feasibility import head_clearance_state
 from app.services.ai_pipeline import compose_panel_prompt
 from scripts.manga_validation_fixture import SETTINGS, validation_pages
 
@@ -25,11 +26,21 @@ def test_wide_required_content_relaxes_close_shot():
     assert f['shot_adjustment_reason']
     assert f['subject_scale_target'] < .60
     assert f['wide_multi_requirement'] and f['subject_zone_y'] == .16
+    assert f['composition_mode'] == 'wide_multi_element'
+    assert .55 <= f['subject_height_ratio_target'] <= .68
+    assert f['subject_bbox_target']['y'] == .16
+    assert f['head_clearance']['target'] == .24
     assert d['character_zone']['y'] == .16
     assert d['head_safe_zone']['y'] >= .22
     assert .38 <= d['camera_framing']['face_center_y'] <= .50
     assert d['camera_framing']['hands_required'] and d['camera_framing']['props_required']
     assert d['reserved_text_zones'] and d['important_hand_zone'] and d['important_prop_zone']
+    debug = composition_debug_view(panel)
+    assert debug['composition_mode'] == 'wide_multi_element'
+    assert debug['subject_bbox_target'] == f['subject_bbox_target']
+    assert debug['dialogue_reserved_zones']
+    assert f['composition_score'] == 1.0
+    assert all(key in f['scores'] for key in ('vertical_fit', 'horizontal_fit', 'head_clearance', 'dialogue_area', 'subject_occupancy'))
     assert direction_is_ready(panel, SETTINGS)
     assert all(f['scores'].values())
     assert panel['shot_type'] == 'close_up'
@@ -40,7 +51,8 @@ def test_prompt_uses_effective_saved_shot():
     saved = json.loads(json.dumps(panel))
     prompt = compose_panel_prompt(saved, [], SETTINGS)
     assert 'ショット: medium' in prompt
-    assert 'head height must be about 30%' in prompt
+    assert 'Holistic composition: wide landscape upper-torso medium-wide manga panel' in prompt
+    assert 'height=0.66' in prompt
     assert saved == panel
 
 
@@ -69,6 +81,15 @@ def test_planner_does_not_mutate_existing_artwork_or_story():
 def test_excessive_text_still_blocks_generation():
     panel = planned(dialogue=['非常に長いセリフです。' * 100])
     assert not direction_is_ready(panel, SETTINGS)
+
+
+def test_head_clearance_rejects_touching_and_cramped_observations():
+    framing = {'head_visible': True, 'shot_type': 'medium'}
+    assert head_clearance_state(framing, 0) == 'CROPPED'
+    assert head_clearance_state(framing, .01) == 'TOUCHING'
+    assert head_clearance_state(framing, .04) == 'CRAMPED'
+    assert head_clearance_state(framing, .08) == 'HEALTHY'
+    assert head_clearance_state(framing) == 'PLANNED'
 
 
 def test_database_roundtrip_preserves_effective_composition(tmp_path, monkeypatch):
