@@ -35,10 +35,13 @@ def test_wide_multi_element_uses_overscan_source_and_persists_crop_plan():
     assert strategy["strategy"] == OVERSCAN_SAFE_CROP
     assert canvas["strategy"] == OVERSCAN_SAFE_CROP
     assert canvas["source_aspect_ratio"] < canvas["final_panel_aspect_ratio"]
-    assert canvas["overscan"]["top"] >= .05
+    assert canvas["overscan"]["top"] == 0
+    assert canvas["overscan"]["bottom"] >= .25
+    assert canvas["safe_crop_anchor"] == "top"
     assert canvas["safe_crop"] == canvas["final_crop_window"]
     assert canvas["headroom_reference"] == "final_crop"
     assert canvas["headroom_target"] == strategy["headroom_target"]
+    assert canvas["headroom_target"] == 0.08
     assert canvas["safe_crop"]["y"] + canvas["safe_crop"]["height"] <= 1
     assert generation_canvas_is_feasible(panel)
     # 2:1のPanelへ3:2程度のsourceを生成し、上下のsafe marginを確保する。
@@ -85,14 +88,15 @@ def test_saved_crop_is_used_by_preview_pdf_zip_panel_renderer(tmp_path):
     pixels = source.load()
     for y in range(80):
         for x in range(120):
-            pixels[x, y] = (255, 0, 0) if y < 5 else (0, 0, 255) if y >= 75 else (0, 255, 0)
+            pixels[x, y] = (0, 0, 255) if y >= 75 else (255, 0, 0) if y < 5 else (0, 255, 0)
     output = BytesIO()
     source.save(output, format="PNG")
     storage.put_bytes(key, output.getvalue(), content_type="image/png")
     rendered = _pil_panel_image({"id": "p"}, panel, 200, 100, storage)
     assert rendered.size == (200, 100)
-    # 保存cropの上端を使うため、source最上段の赤いoverscanは出力に残らない。
-    assert rendered.getpixel((100, 0)) != (255, 0, 0)
+    # top-anchorの保存cropではsource最上段を保持し、下側overscanだけを捨てる。
+    assert rendered.getpixel((100, 0)) == (255, 0, 0)
+    assert rendered.getpixel((100, 99)) != (0, 0, 255)
 
 
 def test_generation_strategy_is_in_saved_panel_direction():

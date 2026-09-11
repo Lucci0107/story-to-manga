@@ -536,9 +536,12 @@ def compose_panel_prompt(
     canvas_plan = generation_canvas_zones(panel) if direction else {}
     strategy_instruction = ""
     if canvas_plan.get("strategy") == "overscan_safe_crop":
+        headroom_target = float(canvas_plan.get("headroom_target") or .08)
         strategy_instruction = (
             "Generation strategy: overscan_safe_crop. Generate the complete intended manga composition inside the persisted safe-crop region, "
-            "with additional disposable margin outside that region. Keep the crown, face, hands, instrument and quiet dialogue area inside the "
+            "with additional disposable margin outside that region. The final crop is top-anchored for this wide multi-element case: "
+            f"keep a clean {headroom_target:.0%}–{headroom_target + .04:.0%} background band above the crown inside the final crop, place the crown below the source top edge, "
+            "and use the extra lower canvas as disposable margin. Keep the crown, face, hands, instrument and quiet dialogue area inside the "
             "inner final crop; do not place story-critical content near the source canvas boundary. The final panel is the saved crop, not the source border. "
         )
     return (

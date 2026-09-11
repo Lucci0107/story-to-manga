@@ -92,5 +92,6 @@ def resolve_feasibility(framing, ratio, character_count, zones, character_zone, 
             'wide_multi_requirement': wide_multi_requirement,
             'subject_zone_y': .22 if wide_multi_requirement else .06,
             'head_zone_top_target': .22 if wide_multi_requirement else SHOT_RANGES[effective][0],
+            'headroom_target': round((SHOT_RANGES[effective][0] + SHOT_RANGES[effective][1]) / 2, 4),
             'headroom_target_min': SHOT_RANGES[effective][0],
             'headroom_target_max': SHOT_RANGES[effective][1]}

@@ -73,9 +73,11 @@ def _wide_multi_element(panel: Mapping[str, Any], direction: Mapping[str, Any], 
 
 def _preferred_overscan_source_ratio(final_ratio: float) -> float:
     """最終コマより縦に余裕のある、APIが扱える現実的なsource比率を返す。"""
-    # 2:1の代表ケースでは3:2 sourceとなり、上下の使い捨て余白を確保する。
-    # 比率1.6付近では過度な上下cropにならない範囲でさらに縦を確保する。
-    return round(max(1.0, min(1.5, final_ratio * 0.75)), 4)
+    # 2:1の代表ケースでは約5:4 sourceとし、モデルが縦方向に構図を
+    # 取り直せるだけの高さを確保する。source上端は捨てない（モデルが
+    # 頭を上へ寄せても、final cropで頭頂を切らない）ため、余分な高さは
+    # 原則として下側のoverscanへ回す。
+    return round(max(1.2, min(1.35, final_ratio * 0.625)), 4)
 
 
 def _safe_crop_for_ratio(final_ratio: float, source_ratio: float, head_target: float) -> dict:
@@ -83,10 +85,12 @@ def _safe_crop_for_ratio(final_ratio: float, source_ratio: float, head_target: f
     if source_ratio <= 0 or final_ratio <= 0 or source_ratio >= final_ratio:
         return {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
     crop_height = max(0.01, min(1.0, source_ratio / final_ratio))
-    margin = max(0.0, 1.0 - crop_height)
-    # 頭頂がsource上端へ寄る失敗を吸収するため、top overscanを明示的に残す。
-    top = min(margin * 0.46, max(0.08, float(head_target) * 0.45))
-    top = round(max(0.0, min(margin, top)), 5)
+    # 直前の実画像では、モデルがsource上端付近へ髪を配置したため、
+    # top overscanをfinal cropから捨てる方式が頭頂cropを起こした。
+    # 横長多要素のsafe cropは上端をfinal cropへ含め、余分な高さを下側へ
+    # 残す。head_targetはprompt/zone設計で使い、危険な固定top offsetには
+    # 変換しない。
+    top = 0.0
     return {"x": 0.0, "y": top, "width": 1.0, "height": round(crop_height, 5)}
 
 
@@ -112,7 +116,13 @@ def resolve_generation_strategy(panel: Mapping[str, Any]) -> dict:
     framing = direction.get("camera_framing")
     framing = framing if isinstance(framing, Mapping) else direction
     head_clearance = direction.get("head_clearance") or framing.get("head_clearance") or {}
-    head_target = float(head_clearance.get("target", direction.get("head_top_target", 0.24)) or 0.24)
+    # head_clearance.targetはPanel内のhead zone開始位置であり、画像上端からの
+    # 余白率とは別物。safe-crop/promptへはshot-awareなheadroom targetを渡す。
+    head_target = float(
+        direction.get("headroom_target")
+        or framing.get("headroom_target")
+        or ((framing.get("headroom_target_min", .06) + framing.get("headroom_target_max", .10)) / 2)
+    )
     source_ratio = _preferred_overscan_source_ratio(ratio)
     crop = _safe_crop_for_ratio(ratio, source_ratio, head_target)
     return {
@@ -126,6 +136,7 @@ def resolve_generation_strategy(panel: Mapping[str, Any]) -> dict:
             "right": round(max(0.0, 1.0 - crop["x"] - crop["width"]), 5),
         },
         "safe_crop": crop,
+        "safe_crop_anchor": "top",
         "headroom_target": round(head_target, 5),
         "required_zones_in_final_crop": {
             key: direction.get(key)
@@ -247,6 +258,7 @@ def generation_canvas_zones(panel: Mapping[str, Any], model_id: str | None = Non
         "overscan": overscan,
         "safe_crop": crop,
         "final_crop_window": crop,
+        "safe_crop_anchor": strategy.get("safe_crop_anchor", "center"),
         "headroom_target": strategy.get("headroom_target"),
         "headroom_reference": "final_crop",
         "required_zones_in_final_crop": required,
@@ -274,7 +286,9 @@ def generation_canvas_is_feasible(panel: Mapping[str, Any], model_id: str | None
     if not bounds_ok or not math.isfinite(crop_ratio) or abs(crop_ratio - target_ratio) > .02:
         return False
     if canvas.get("strategy") == OVERSCAN_SAFE_CROP:
-        if not (float(canvas.get("source_aspect_ratio", 0)) < target_ratio and float((canvas.get("overscan") or {}).get("top", 0)) >= .05):
+        overscan = canvas.get("overscan") or {}
+        total_overscan = sum(float(overscan.get(key, 0) or 0) for key in ("top", "bottom", "left", "right"))
+        if not (float(canvas.get("source_aspect_ratio", 0)) < target_ratio and total_overscan >= .05):
             return False
     # generation_canvas_zonesの領域はsource座標。すべてfinal crop内にある必要がある。
     right = float(crop["x"]) + float(crop["width"])

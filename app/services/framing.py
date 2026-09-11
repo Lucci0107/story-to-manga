@@ -53,13 +53,17 @@ def head_framing_prompt(panel):
                           else 'use a head-and-shoulders portrait for close shots')
     if framing.get('composition_mode') == 'wide_multi_element':
         bbox = framing.get('subject_bbox_target') or {}
-        clearance = framing.get('head_clearance') or {}
+        headroom_min = float(framing.get('headroom_target_min', .06) or .06)
+        headroom_max = float(framing.get('headroom_target_max', .10) or .10)
         return (f"Holistic composition: wide landscape upper-torso medium-wide manga panel. "
                 f"Keep the subject inside the planned bbox x={bbox.get('x', 0):.2f}, y={bbox.get('y', 0):.2f}, "
                 f"width={bbox.get('width', 0):.2f}, height={bbox.get('height', 0):.2f}; do not fill the vertical frame. "
-                f"Keep the entire crown and hair below the top clearance target y={clearance.get('target', .24):.2f} "
-                f"with a visible background band above it. Place the face in the upper-middle, both hands and the important "
+                f"Keep the entire crown and hair below the top edge with a visible {headroom_min:.0%}-{headroom_max:.0%} "
+                f"background band above it. Place the face in the upper-middle, both hands and the important "
                 "instrument in the lower-middle, and keep the opposite lateral area quiet for dialogue. "
+                "The source canvas is intentionally taller than the final panel and includes a saved inner crop. "
+                "Place the crown about 8–12% below the source top, never touching the source edge, and keep the entire "
+                "coherent upper-torso composition inside that inner crop; do not treat the source border as the final panel edge. "
                 "This is one coherent upper-torso composition, not separate close-up constraints. "
                 "Do not enlarge the face to fill the panel or crop the crown, hands, instrument, or dialogue area. ")
     return (budget + f"Framing priority: shot={framing['shot_type']}; {extent_instruction}, not an extreme facial crop. "
