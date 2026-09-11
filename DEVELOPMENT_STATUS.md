@@ -499,6 +499,16 @@
 - Panel Job状態不明修正後のProduction smokeはhealth/login/CSS/JavaScript全項目HTTP 200。既存本番Projectの31コマ／生成済み2枚はreload後も保持され、追加の画像生成は行っていません。
 - Character Bible Job lifecycle修正コミット: `6a3bcdd`、GitHub Actions run `34327735049`（success）、Render deployment `dep-dagh9iss728c73d5tebg`（success）。本番health 200、Production smoke（health／login／CSS／JavaScript）全項目成功。認証済み既存Projectの再読み込みでCharacter画面がstuck表示から再実行可能状態へ復帰することを読み取り専用で確認しました。
 
+## Render Persistent Disk 復旧・読み取り監査（2026-09-12）
+
+- Persistent Disk容量拡張後の最新Render deployment `dep-dai6sg0jo6nc73bl8ei0`（commit `031a255`）は `live`。本番 `/api/health` はHTTP 200で、復旧後のランタイムログにSQLite／disk I/O／Traceback系の再発は確認されませんでした。
+- 本番SSHで読み取り専用監査を実施しました。`/var/data` は `4.9G` 中 `958M` 使用、`4.0G` 空き、使用率20%。inodeは327,680中350使用（1%）で、inode枯渇はありません。
+- 使用内訳は `story-manga/assets` 約693M、`story-manga/exports` 約261M、`story_manga.sqlite3` 5,173,248 bytes（約4.9MiB）。`.db-wal`／`.db-shm` は見つからず、独立した一時ファイル領域も確認されませんでした。最大ファイルはZIP約64MiB、PDF約50MiB、生成PNG各約4MiBです。
+- ファイル削除・DB操作・WAL／SHM操作・権限変更・再起動・再デプロイは行っていません。孤立ファイルかどうかはDB参照関係を変更せずに断定せず、候補として今後の保持ポリシー検討対象とします。
+- `scripts/production_smoke.py --url https://story-to-manga-b6bb.onrender.com` は health／login／CSS／JavaScript の全項目OK。認証済みブラウザで既存Project一覧、既存Project「本番パネル進捗QA」（8ページ／31コマ／2コマ生成済み）、Story Analysis、Character、Storyboard、QA、Preview、Export、Knowledge（1 Document／Version 1 ready）を読み取り確認しました。既存作品の生成・削除・上書きは行っていません。
+- Previewでは生成済み2画像（各1024×1024）の読み込みを確認し、Export画面のPDF／ZIP導線を表示確認しました。新規Export生成はディスク監査を読み取り専用に保つため実行していません。Light／Dark表示を確認後に元へ戻し、ブラウザconsoleログは空でした。既存の390pxモバイルQA記録は維持しています（今回のIAB表示は775px固定のため再エミュレーションは未実施）。
+- 再発防止として、assets／exportsの保持期間・孤立ファイル検出・使用率80%警告／90% critical／95%高コスト処理停止の導入を候補化しました。現時点で自動削除は行いません。
+
 ## 次回セッションの確認
 
 1. `git status --short --branch`で作業ツリーと`origin/main`を確認する
