@@ -132,26 +132,31 @@ def _configure_sqlite_journal_mode(raw_connection: Any, database_path: Path) -> 
         if cached_mode:
             return cached_mode
 
-        current_mode = _sqlite_current_journal_mode(raw_connection)
-        # :memory: はWAL非対応であり、既存のmemoryモードをそのまま使う。
-        if current_mode == "memory":
-            _SQLITE_JOURNAL_MODE_CACHE[cache_key] = current_mode
-            return current_mode
-
         try:
             result = raw_connection.execute("PRAGMA journal_mode = WAL").fetchone()
             selected_mode = str(result[0]).strip().lower() if result else "wal"
             if selected_mode == "wal":
                 _SQLITE_JOURNAL_MODE_CACHE[cache_key] = selected_mode
                 return selected_mode
-            # SQLiteが例外を出さず既存モードを返した場合も、互換モードとして扱う。
-            selected_mode = _sqlite_fallback_journal_mode(selected_mode or current_mode)
+            # SQLiteが例外を出さず既存モードを返した場合は、その実効モードを使う。
+            if selected_mode in _SQLITE_SAFE_FALLBACK_MODES:
+                _SQLITE_JOURNAL_MODE_CACHE[cache_key] = selected_mode
+                return selected_mode
+            selected_mode = "delete"
             logger.warning(
                 "SQLite WALを有効化できないため、互換journal modeを使用します"
             )
         except sqlite3.OperationalError as error:
             if not _is_wal_activation_error(error):
                 raise
+            # WAL切替に失敗した場合だけ既存モードを確認する。確認自体が
+            # 同じ環境エラーなら、DELETEを明示して安全な互換モードを試す。
+            try:
+                current_mode = _sqlite_current_journal_mode(raw_connection)
+            except sqlite3.OperationalError as mode_error:
+                if not _is_wal_activation_error(mode_error):
+                    raise
+                current_mode = ""
             selected_mode = _sqlite_fallback_journal_mode(current_mode)
             logger.warning(
                 "SQLite WALを有効化できないため、互換journal modeへフォールバックします"

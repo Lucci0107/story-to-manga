@@ -4,10 +4,10 @@
 
 ## SQLite WAL切替失敗時の安全な起動fallback（2026-09-12、Render再デプロイ待ち）
 
-- Renderの起動失敗ログで、`db.init_db()`前のSQLite `PRAGMA journal_mode = WAL` が `sqlite3.OperationalError: disk I/O error` を起こしていたことを確認しました。Buildやuvicornの起動方式、RenderのSQLiteパス（`/var/data/story-manga/story_manga.sqlite3`）は変更していません。
-- `app/services/database.py`のSQLite接続を、`foreign_keys`／`busy_timeout`設定後にWALを優先し、WAL切替に限るallowlistエラーだけ既存の互換journal modeへフォールバックするよう修正しました。接続後は`SELECT 1`と`schema_version`を非破壊検証し、DBを開けないエラーや破損エラーは従来どおり起動失敗にします。同一DBパスのjournal mode交渉はプロセス内で再試行しません。
-- WAL成功、disk I/O時のfallback、既存WAL維持、破損／unopenable DBの失敗、foreign_keys／busy_timeoutを回帰テストへ追加。全回帰 **286 passed**、compileall、JavaScript構文、pip check、diff check成功。Renderと同じ`0.0.0.0`起動形式のローカル`/api/health`はHTTP 200です。
-- 本番の失敗デプロイ`dep-dai15b3rjlhs739nqpdg`とHTTP 502は、修正push後のRender自動デプロイで再確認します。本番DB／Persistent Disk／既存Project／画像、保護フォルダ`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更していません。
+- Renderの起動失敗ログで、`db.init_db()`前のSQLite `PRAGMA journal_mode = WAL` 系処理が `sqlite3.OperationalError: disk I/O error` を起こしていたことを確認しました。`c469325`ではWAL試行前の現在モード読み取り（`_sqlite_current_journal_mode`）で同じエラーが発生し、fallbackへ到達していないことをCLIログで特定しました。Buildやuvicornの起動方式、RenderのSQLiteパス（`/var/data/story-manga/story_manga.sqlite3`）は変更していません。
+- `app/services/database.py`のSQLite接続を、WALを先に試し、WAL切替に限るallowlistエラー時だけ既存journal modeを確認する順序へ修正しました。現在モードの確認も同じ許容I/Oエラーなら安全なDELETE fallbackを試し、`foreign_keys`／`busy_timeout`／`synchronous`と`SELECT 1`／`schema_version`の非破壊検証を維持します。DBを開けないエラーや破損エラーは従来どおり起動失敗にします。
+- WAL成功、WALとモード読み取り双方のdisk I/O時fallback、既存WAL維持、破損／unopenable DBの失敗、foreign_keys／busy_timeoutを回帰テストへ追加。全回帰 **287 passed**、compileall、JavaScript構文、pip check、diff check成功。Renderと同じ`0.0.0.0`起動形式のローカル`/api/health`はHTTP 200です。
+- 本番の最新失敗デプロイ`dep-dai3ukjrjlhs739rl1cg`とHTTP 502は、今回の修正push後のRender自動デプロイで再確認します。本番DB／Persistent Disk／既存Project／画像、保護フォルダ`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更していません。
 
 ## 生成前fallback統合後のRender再デプロイ状態（2026-09-11、外部デプロイ失敗・Production QA保留）
 

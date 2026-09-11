@@ -40,9 +40,16 @@ class _FakeCursor:
 class _FakeSQLiteConnection:
     """WAL切替失敗を再現する非永続のSQLite接続double。"""
 
-    def __init__(self, *, journal_mode: str = "delete", wal_error: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        journal_mode: str = "delete",
+        wal_error: str | None = None,
+        journal_read_error: str | None = None,
+    ) -> None:
         self.journal_mode = journal_mode
         self.wal_error = wal_error
+        self.journal_read_error = journal_read_error
         self.calls: list[str] = []
         self.row_factory: object = None
         self.closed = False
@@ -52,6 +59,8 @@ class _FakeSQLiteConnection:
         self.calls.append(statement)
         normalized = " ".join(statement.lower().split())
         if normalized == "pragma journal_mode":
+            if self.journal_read_error:
+                raise sqlite3.OperationalError(self.journal_read_error)
             return _FakeCursor((self.journal_mode,))
         if normalized == "pragma journal_mode = wal":
             if self.wal_error:
@@ -131,6 +140,26 @@ def test_sqlite_wal_error_keeps_existing_wal_mode(
 
     assert raw.journal_mode == "wal"
     assert not any("journal_mode = DELETE" in statement for statement in raw.calls)
+
+
+def test_sqlite_wal_and_mode_read_disk_errors_use_delete_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WALと現在モードの読取がともにI/O失敗でもDELETEを試す。"""
+
+    database_service._SQLITE_JOURNAL_MODE_CACHE.clear()
+    raw = _FakeSQLiteConnection(
+        journal_mode="",
+        wal_error="disk I/O error",
+        journal_read_error="disk I/O error",
+    )
+    monkeypatch.setattr(database_service.sqlite3, "connect", lambda *args, **kwargs: raw)
+
+    with SQLiteDatabase(tmp_path / "story.sqlite3").connect() as connection:
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+    assert raw.journal_mode == "delete"
+    assert any("PRAGMA journal_mode = DELETE" == statement for statement in raw.calls)
 
 
 def test_sqlite_wal_unrelated_operational_error_is_not_swallowed(
