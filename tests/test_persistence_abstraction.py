@@ -46,10 +46,12 @@ class _FakeSQLiteConnection:
         journal_mode: str = "delete",
         wal_error: str | None = None,
         journal_read_error: str | None = None,
+        synchronous_error: str | None = None,
     ) -> None:
         self.journal_mode = journal_mode
         self.wal_error = wal_error
         self.journal_read_error = journal_read_error
+        self.synchronous_error = synchronous_error
         self.calls: list[str] = []
         self.row_factory: object = None
         self.closed = False
@@ -79,6 +81,10 @@ class _FakeSQLiteConnection:
         if normalized == "pragma busy_timeout":
             return _FakeCursor((20_000,))
         if normalized == "pragma synchronous":
+            return _FakeCursor((1,))
+        if normalized == "pragma synchronous = normal":
+            if self.synchronous_error:
+                raise sqlite3.OperationalError(self.synchronous_error)
             return _FakeCursor((1,))
         return _FakeCursor()
 
@@ -160,6 +166,22 @@ def test_sqlite_wal_and_mode_read_disk_errors_keep_existing_state(
 
     assert raw.journal_mode == ""
     assert not any("PRAGMA journal_mode = DELETE" == statement for statement in raw.calls)
+
+
+def test_sqlite_synchronous_disk_error_keeps_default_and_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """synchronous設定だけがI/O失敗してもSQLite既定値で起動する。"""
+
+    database_service._SQLITE_JOURNAL_MODE_CACHE.clear()
+    raw = _FakeSQLiteConnection(synchronous_error="disk I/O error")
+    monkeypatch.setattr(database_service.sqlite3, "connect", lambda *args, **kwargs: raw)
+
+    with caplog.at_level(logging.WARNING, logger=database_service.logger.name):
+        with SQLiteDatabase(tmp_path / "story.sqlite3").connect() as connection:
+            assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+    assert any("synchronous設定" in record.message for record in caplog.records)
 
 
 def test_sqlite_wal_unrelated_operational_error_is_not_swallowed(

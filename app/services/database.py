@@ -194,6 +194,20 @@ def _validate_sqlite_connection(raw_connection: Any) -> None:
     raw_connection.execute("PRAGMA schema_version").fetchone()
 
 
+def _configure_sqlite_synchronous(raw_connection: Any) -> None:
+    """synchronous設定を試み、ストレージ制約時はSQLite既定値を維持する。"""
+
+    try:
+        raw_connection.execute("PRAGMA synchronous = NORMAL")
+    except sqlite3.OperationalError as error:
+        if not _is_wal_activation_error(error):
+            raise
+        # synchronousは接続単位の任意設定であり、失敗時もSQLite既定値で動作できる。
+        logger.warning(
+            "SQLite synchronous設定を適用できないため、SQLite既定値を維持します"
+        )
+
+
 class DatabaseConnection:
     """SQLite/PostgreSQLの差をRepositoryから隠す薄い接続ラッパー。"""
 
@@ -263,7 +277,7 @@ class SQLiteDatabase(DatabaseBackend):
             raw.execute("PRAGMA foreign_keys = ON")
             raw.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
             _configure_sqlite_journal_mode(raw, self.database_path)
-            raw.execute("PRAGMA synchronous = NORMAL")
+            _configure_sqlite_synchronous(raw)
             _validate_sqlite_connection(raw)
             return DatabaseConnection(raw, self.backend_name, self)
         except Exception:

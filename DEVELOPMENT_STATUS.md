@@ -6,8 +6,8 @@
 
 - Render CLIを公式Homebrew版で導入し、既存の認証済みCLIセッションからサービス・deploy・Runtime Logsを秘密値なしで取得できる状態にしました。Build方式、uvicorn起動方式、SQLiteパス（`/var/data/story-manga/story_manga.sqlite3`）は変更していません。
 - 最新失敗デプロイ`dep-dai4tjrrjlhs739t0h90`（`4480e7b`）のRuntime Logsで、WAL失敗後の警告までは到達するものの、明示的な`PRAGMA journal_mode = DELETE`（`_configure_sqlite_journal_mode` line 167）が同じ`sqlite3.OperationalError: disk I/O error`で失敗することを確認しました。これはDB／Persistent Diskの破損を示すログではなく、journal mode切替処理の起動経路が原因です。
-- `app/services/database.py`を、WAL切替に限るallowlistエラー時は取得できた既存journal modeを変更せず維持し、現在モードの照会も同じI/Oエラーなら別モードへの再書換えを行わない`unmanaged`状態として接続を継続するよう最小修正しました。`foreign_keys`／`busy_timeout`／`synchronous`と`SELECT 1`／`schema_version`の非破壊検証を維持し、DBを開けないエラーや破損など許可外のエラーは従来どおり起動失敗にします。
-- WAL成功、既存モード維持、WALとモード読み取り双方のI/O時に再書換えしない経路、破損／unopenable DBの失敗、foreign_keys／busy_timeoutを回帰テストへ追加。全回帰 **287 passed**、compileall、JavaScript構文、pip check、diff check成功。Renderと同じ`0.0.0.0`起動形式のローカル`/api/health`はHTTP 200です。
+- `app/services/database.py`を、WAL切替に限るallowlistエラー時は取得できた既存journal modeを変更せず維持し、現在モードの照会も同じI/Oエラーなら別モードへの再書換えを行わない`unmanaged`状態として接続を継続するよう最小修正しました。Renderログで続けて発生した接続単位の`synchronous = NORMAL` I/Oエラーも、SQLite既定値を維持する任意設定として安全にスキップします。`foreign_keys`／`busy_timeout`と`SELECT 1`／`schema_version`の非破壊検証を維持し、DBを開けないエラーや破損など許可外のエラーは従来どおり起動失敗にします。
+- WAL成功、既存モード維持、WALとモード読み取り双方のI/O時に再書換えしない経路、synchronous設定I/O時の既定値維持、破損／unopenable DBの失敗、foreign_keys／busy_timeoutを回帰テストへ追加。全回帰 **288 passed**、compileall、JavaScript構文、pip check、diff check成功。Renderと同じ`0.0.0.0`起動形式のローカル`/api/health`はHTTP 200です。
 - この修正をpush後にRender自動デプロイと`/api/health` HTTP 200を再確認します。本番DB／Persistent Disk／既存Project／画像、保護フォルダ`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更していません。
 
 ## 生成前fallback統合後のRender再デプロイ状態（2026-09-11、外部デプロイ失敗・Production QA保留）
