@@ -63,7 +63,9 @@ def head_framing_prompt(panel):
                 "instrument in the lower-middle, and keep the opposite lateral area quiet for dialogue. "
                 "The source canvas is intentionally taller than the final panel and includes a saved inner crop. "
                 "Place the crown about 8–12% below the source top, never touching the source edge, and keep the entire "
-                "coherent upper-torso composition inside that inner crop; do not treat the source border as the final panel edge. "
+                "compact upper-torso composition, including both hands and the instrument, above the saved inner crop bottom; "
+                "do not treat the source border as the final panel edge. Keep the visible character height to roughly 55–65% "
+                "of the source and do not enlarge the face to fill the vertical frame. "
                 "This is one coherent upper-torso composition, not separate close-up constraints. "
                 "Do not enlarge the face to fill the panel or crop the crown, hands, instrument, or dialogue area. ")
     return (budget + f"Framing priority: shot={framing['shot_type']}; {extent_instruction}, not an extreme facial crop. "

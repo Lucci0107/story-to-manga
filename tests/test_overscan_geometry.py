@@ -37,6 +37,7 @@ def test_wide_multi_element_uses_overscan_source_and_persists_crop_plan():
     assert canvas["source_aspect_ratio"] < canvas["final_panel_aspect_ratio"]
     assert canvas["overscan"]["top"] == 0
     assert canvas["overscan"]["bottom"] >= .25
+    assert 1.4 <= canvas["source_aspect_ratio"] <= 1.5
     assert canvas["safe_crop_anchor"] == "top"
     assert canvas["safe_crop"] == canvas["final_crop_window"]
     assert canvas["headroom_reference"] == "final_crop"

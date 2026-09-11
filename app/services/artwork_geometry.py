@@ -73,11 +73,11 @@ def _wide_multi_element(panel: Mapping[str, Any], direction: Mapping[str, Any], 
 
 def _preferred_overscan_source_ratio(final_ratio: float) -> float:
     """最終コマより縦に余裕のある、APIが扱える現実的なsource比率を返す。"""
-    # 2:1の代表ケースでは約5:4 sourceとし、モデルが縦方向に構図を
-    # 取り直せるだけの高さを確保する。source上端は捨てない（モデルが
-    # 頭を上へ寄せても、final cropで頭頂を切らない）ため、余分な高さは
-    # 原則として下側のoverscanへ回す。
-    return round(max(1.2, min(1.35, final_ratio * 0.625)), 4)
+    # 2:1の代表ケースでは3:2 sourceとする。5:4まで縦を増やすと、
+    # top-anchorのfinal crop下端が手・器具を切りやすくなるため、sourceの
+    # 縦余裕と必要なbody extentのバランスを優先する。source上端は捨てず、
+    # 余分な高さは下側のoverscanへ回す。
+    return round(max(1.35, min(1.5, final_ratio * 0.75)), 4)
 
 
 def _safe_crop_for_ratio(final_ratio: float, source_ratio: float, head_target: float) -> dict:
