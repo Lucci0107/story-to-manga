@@ -4,7 +4,7 @@ from copy import deepcopy
 import hashlib
 import json
 
-from .composition import PAGE_SIZE
+from .composition import PAGE_SAFE_MARGIN, PAGE_SIZE
 from .text_composition import body_font, wrap_text
 from .visual_style import resolve_visual_style, text_direction
 from .in_world_text import resolve_in_world_text
@@ -179,7 +179,10 @@ def plan_panel_direction(panel, settings):
             "protected_zones": protected, "reserved_text_zones": zones,
             "crop_anchor": {"x": "right" if character_right else "left", "y": "middle"},
             "visual_style": profile, "breakout_policy": {"enabled": False, "reason": "専用前景素材と実画像の人物位置確認が必要"},
-            "text_layout": {"version": 3, "placement_mode": "pre_generation_plan", "items": items,
+            "text_layout": {"version": 3, "placement_mode": "pre_generation_plan",
+                            # 生成前に確定した文字領域はCompositionと同じ4%の
+                            # ページセーフマージンでQA・Preview・Exportが評価する。
+                            "safe_margin": PAGE_SAFE_MARGIN, "items": items,
                             "style_profile": profile, "warnings": warnings}}
 
 

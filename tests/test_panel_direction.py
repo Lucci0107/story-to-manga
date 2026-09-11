@@ -22,6 +22,7 @@ def test_plan_precedes_artwork_and_reserves_real_text():
     direction = item["panel_direction"]
     assert direction["source"] == "pre_generation_plan"
     assert direction["text_layout"]["items"][0]["lines"]
+    assert direction["text_layout"]["safe_margin"] == pytest.approx(0.04)
     assert "artwork_viewport" not in direction["geometry"]
     assert direction["reserved_text_zones"][0]["x"] > direction["face_safe_zone"]["x"] + direction["face_safe_zone"]["width"]
     assert not direction["breakout_policy"]["enabled"]
