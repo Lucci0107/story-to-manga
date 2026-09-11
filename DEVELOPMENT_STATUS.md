@@ -2,6 +2,16 @@
 
 更新日: 2026-09-11
 
+## 横長多要素の最新占有率修正：代表1コマ実画像ゲート（2026-09-11、HARD GATE失敗・リリース停止）
+
+- ユーザーの最終承認に基づき、別の非本番Project `b9f39dc6-884e-4b5e-b9ab-5e1458f8d2bd` の `validation-3-3` だけを1回生成しました。既存の16コマ検証Project、過去の検証画像、本番Project・画像・履歴は変更せず、Retryや他コマの生成も行っていません。生成物は専用の検証assetへ保存し、既存ファイルの上書きを防止しました。
+- 課金前に保存→再読込したPanelDirectionは一致し、`requested_shot_type=close_up`、`effective_shot_type=medium`、`composition_mode=wide_multi_element`、`subject_bbox_target={x:0.04,y:0.22,width:0.46,height:0.585}`、`subject_height_ratio_target=0.585`、`head_clearance.target=0.24`、顔・手・器具・セリフ予約領域、crop anchorを確認しました。生成サイズはPanel比率`2.0031:1`に対して`1440×720`。promptは再読込した保存構図から生成し、後工程で構図を再計算していません。
+- 実画像は漫画調で、顔・両手・重要な器具・右側のセリフ用静かな領域を保持し、人物を不自然に縮小してはいません。偶発的な可読背景文字は目視で認めません（OCR保証ではありません）。ただし髪の最上部は画像上端から約2px（約0.28%）で、頭頂は切れていないものの`CRAMPED`／`FAIL_CROP_RISK`相当です。保存した24%の頭頂クリアランスに追従せず、HARD GATE（自然な頭上余白）に不合格と判定しました。
+- Preview、PDF、ZIPは同一の保存済みCompositionを使用し、Preview PNG＝ZIP PNG＝PDF埋込画像の一致を確認しました。これは出力経路のparity合格であり、生成段階の頭上余白不良を合格へ変えるものではありません。検証成果物は `/tmp/manga-readable-qa.HNAykr/final_headroom_validation/` に保持しています。
+- 全回帰は **263 passed**（今回コード変更なし）、compileall、`node --check static/js/app.js`、`pip check`、`git diff --check`も成功。直接構図方式の実画像ゲートが失敗したため、追加の有料生成、残り10コマ、merge、main反映、GitHub CI、Render deploy、Production QAは停止します。ユーザー承認済みの1回を超える生成は行いません。
+- 原因はPDF/Previewの後処理ではなく、横長・頭・手・器具・文字領域を同時に要求した直接生成でモデルが人物の上端位置を無視する構図追従不足です。次の構造候補は、生成時に意図的な余白を含む`overscan / safe crop`（source compositionとfinal cropを保存）ですが、まだ実装・実画像検証していません。今回の失敗を隠すrenderer補正や同一promptの反復は行いません。
+- 既存の4ページ16コマ検証成果物と合格済みparity/browser QAの証拠は保持しますが、最新占有率修正の実画像HARD GATE未達を理由にリリース不可とします。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/` は未変更・未追跡のままです。
+
 ## 横長多要素構図v2の実画像バッチ検証（2026-09-11、リリースゲート保留）
 
 - 生成前構図の横長多要素モードを、`779218c`で人物占有率`0.55〜0.68`（対象ケースは約`0.585`）、人物領域`y=0.22`、頭頂クリアランス`target=0.24`へ調整し、`abd0c06`で保存済み`head_safe_zone`へ同じ値を適用しました。生成後のRenderer・PDF補正・Preview/PDF/ZIPの再計算は追加していません。
