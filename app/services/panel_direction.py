@@ -99,6 +99,10 @@ def plan_panel_direction(panel, settings):
         framing['body_extent_requirement'] = feasibility['required_body_extent']
         framing['minimum_headroom'] = framing['headroom_target_min']
         target = (framing['headroom_target_min'] + framing['headroom_target_max']) / 2
+        # wide_multi_elementでは通常shotの平均値ではなく、保存済みの
+        # 頭頂クリアランスを実際のhead zoneにも適用する。
+        if feasibility['wide_multi_requirement']:
+            target = feasibility['head_top_target']
         scale = feasibility['subject_scale_target']
         if feasibility['wide_multi_requirement']:
             # 横長の多要素コマは人物領域自体を下げ、上側を実際の空き帯として予約する。

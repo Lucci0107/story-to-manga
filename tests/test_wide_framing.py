@@ -31,7 +31,7 @@ def test_wide_required_content_relaxes_close_shot():
     assert f['subject_bbox_target']['y'] == .16
     assert f['head_clearance']['target'] == .24
     assert d['character_zone']['y'] == .16
-    assert d['head_safe_zone']['y'] >= .22
+    assert d['head_safe_zone']['y'] == pytest.approx(f['head_clearance']['target'])
     assert .38 <= d['camera_framing']['face_center_y'] <= .50
     assert d['camera_framing']['hands_required'] and d['camera_framing']['props_required']
     assert d['reserved_text_zones'] and d['important_hand_zone'] and d['important_prop_zone']
@@ -44,6 +44,18 @@ def test_wide_required_content_relaxes_close_shot():
     assert direction_is_ready(panel, SETTINGS)
     assert all(f['scores'].values())
     assert panel['shot_type'] == 'close_up'
+
+
+def test_wide_required_content_applies_clearance_when_requested_medium():
+    """既にmedium指定でもwide modeの保存構図へ頭頂余白を反映する。"""
+    panel = planned(shot_type='medium shot')
+    d = panel['panel_direction']
+    f = d['composition_feasibility']
+    assert f['composition_mode'] == 'wide_multi_element'
+    assert d['head_safe_zone']['y'] == pytest.approx(f['head_top_target'])
+    assert d['composition_debug']['head_safe_zone']['y'] == pytest.approx(.24)
+    assert d['camera_framing']['top_safe_zone']['height'] == pytest.approx(.24)
+    assert d['camera_framing']['face_center_y'] > .40
 
 
 def test_prompt_uses_effective_saved_shot():
