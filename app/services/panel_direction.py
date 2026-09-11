@@ -11,6 +11,7 @@ from .in_world_text import resolve_in_world_text
 from .framing import resolve_head_framing
 from .framing_feasibility import resolve_feasibility
 from .reading_order import canonicalize_stored_settings
+from .artwork_geometry import generation_canvas_is_feasible, resolve_generation_strategy
 
 
 def direction_fingerprint(panel, settings):
@@ -151,6 +152,24 @@ def plan_panel_direction(panel, settings):
     if feasibility['composition_feasibility'] == 'fail':
         warnings.append('頭部・必要な手や小物を安全に収められません。生成前に人物配置またはコマ面積を見直してください。')
     framing['text_reserved_zones'] = deepcopy(zones)
+    # 生成前にDIRECT/OVERSCANを一度だけ解決し、保存構図へ含める。
+    # Preview/PDF/ZIPは後からこの値を再計算せず、生成時に保存されるcanvasを使う。
+    strategy_input = {
+        **panel,
+        "panel_direction": {
+            "composition_mode": feasibility['composition_mode'],
+            "composition_feasibility": feasibility,
+            "camera_framing": framing,
+            "head_clearance": feasibility.get('head_clearance'),
+            "head_safe_zone": deepcopy(head_zone) if framing['preserve_entire_head'] else None,
+            "face_safe_zone": deepcopy(face_zone),
+            "important_hand_zone": deepcopy(hand_zone),
+            "important_prop_zone": deepcopy(prop_zone),
+            "reserved_text_zones": deepcopy(zones),
+            "wide_multi_requirement": feasibility.get('wide_multi_requirement', False),
+        },
+    }
+    generation_strategy = resolve_generation_strategy(strategy_input)
     debug_geometry = {
         'composition_mode': feasibility['composition_mode'],
         'panel_aspect_ratio': feasibility['aspect_ratio'],
@@ -163,6 +182,7 @@ def plan_panel_direction(panel, settings):
         'important_hand_zone': deepcopy(hand_zone),
         'important_prop_zone': deepcopy(prop_zone),
         'dialogue_reserved_zones': deepcopy([z for z in zones if z['type'] == 'bubble']),
+        'generation_strategy': deepcopy(generation_strategy),
     }
     return {"version": 1, "status": "ready" if ready else "needs_revision",
             "in_world_text": resolve_in_world_text(panel),
@@ -172,6 +192,7 @@ def plan_panel_direction(panel, settings):
             "camera_framing": framing,
             "composition_feasibility": feasibility,
             "composition_debug": debug_geometry,
+            "generation_strategy": generation_strategy,
             "composition_mode": feasibility['composition_mode'],
             "subject_bbox_target": deepcopy(feasibility['subject_bbox_target']),
             "head_clearance": deepcopy(feasibility['head_clearance']),
@@ -189,7 +210,9 @@ def plan_panel_direction(panel, settings):
 def direction_is_ready(panel, settings):
     """古い構図や不足した文字領域のまま課金生成しない。"""
     direction = panel.get("panel_direction") or {}
-    return direction.get("status") == "ready" and direction.get("fingerprint") == direction_fingerprint(panel, settings)
+    return (direction.get("status") == "ready"
+            and direction.get("fingerprint") == direction_fingerprint(panel, settings)
+            and generation_canvas_is_feasible(panel))
 
 
 def composition_debug_view(panel):

@@ -173,6 +173,39 @@ def _crop_image_to_box(
     return image.crop(box)
 
 
+def _crop_persisted_generation_window(image: Image.Image, panel: Mapping[str, Any]) -> Image.Image:
+    """生成時に保存したoverscan sourceのfinal cropだけを適用する。
+
+    新規のoverscan画像はsource assetを保持し、ここでは保存済み正規化座標を
+    読むだけにする。Preview/PDF/ZIPごとに別のcropを再計算しない。
+    """
+    direction = panel.get("panel_direction") if isinstance(panel, Mapping) else None
+    if not isinstance(direction, Mapping):
+        return image
+    canvas = direction.get("generation_canvas")
+    if not isinstance(canvas, Mapping) or str(canvas.get("strategy", "")) != "overscan_safe_crop":
+        return image
+    crop = canvas.get("safe_crop") or canvas.get("final_crop_window")
+    if not isinstance(crop, Mapping):
+        return image
+    try:
+        x, y = float(crop.get("x", 0)), float(crop.get("y", 0))
+        width, height = float(crop.get("width", 1)), float(crop.get("height", 1))
+    except (TypeError, ValueError):
+        return image
+    if not all(math.isfinite(value) for value in (x, y, width, height)):
+        return image
+    if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+        return image
+    if width >= .99999 and height >= .99999 and x <= .00001 and y <= .00001:
+        return image
+    left = max(0, min(image.width - 1, round(x * image.width)))
+    top = max(0, min(image.height - 1, round(y * image.height)))
+    right = max(left + 1, min(image.width, round((x + width) * image.width)))
+    bottom = max(top + 1, min(image.height, round((y + height) * image.height)))
+    return image.crop((left, top, right, bottom))
+
+
 def _panel_asset(
     project: Dict[str, Any],
     panel: Dict[str, Any],
@@ -390,6 +423,7 @@ def _pil_panel_image(
             return placeholder
         draw.text((width // 2, height // 2), "ARTWORK", fill=(85, 87, 82), font=_load_page_font(18), anchor="mm")
         return placeholder
+    source = _crop_persisted_generation_window(source, panel)
     source = _crop_image_to_box(source, width, height, "fill", crop_anchor_x, crop_anchor_y)
     return source.resize((max(1, width), max(1, height)), Image.Resampling.LANCZOS)
 

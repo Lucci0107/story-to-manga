@@ -179,6 +179,11 @@ def save_openai_image(
     prompt = panel.get("generation_prompt") or "漫画のコマ。文字は描かない。"
     if panel.get("panel_direction"):
         canvas_plan = generation_canvas_zones(panel, str(requested_model))
+        # Overscanでは元sourceを破棄せず、同じassetと保存済みcropを後工程へ渡す。
+        canvas_plan["source_asset"] = storage_key
+        canvas_plan["source_asset_role"] = (
+            "overscan_source" if canvas_plan.get("strategy") == "overscan_safe_crop" else "direct_panel_source"
+        )
         prompt += "\nActual generation canvas (authoritative): " + json.dumps(canvas_plan, ensure_ascii=False)
         panel["panel_direction"]["generation_canvas"] = canvas_plan
     payload = {

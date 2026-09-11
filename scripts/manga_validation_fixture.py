@@ -2,7 +2,7 @@
 
 from app.services.layout import reflow_page
 from app.services.panel_direction import direction_is_ready
-from app.services.artwork_geometry import artwork_aspect_ratio, artwork_generation_size
+from app.services.artwork_geometry import artwork_aspect_ratio, artwork_generation_size, generation_canvas_zones
 
 
 SETTINGS = {"language": "ja", "visual_style": "cinematic", "color_mode": "color", "composition_version": 3}
@@ -66,7 +66,10 @@ def preflight(pages):
             size = artwork_generation_size(panel)
             width, height = map(int, size.split("x"))
             assert direction_is_ready(panel, SETTINGS), panel["id"] + ": 構図未確定"
-            assert abs(width / height / ratio - 1) < 0.02, panel["id"] + ": 生成比率不一致"
+            canvas = generation_canvas_zones(panel)
+            crop = canvas.get("safe_crop") or {"width": 1, "height": 1}
+            final_ratio = (width * float(crop.get("width", 1))) / (height * float(crop.get("height", 1)))
+            assert abs(final_ratio / ratio - 1) < 0.02, panel["id"] + ": 最終コマ比率不一致"
             assert not direction["breakout_policy"]["enabled"]
             report.append({"panel_id": panel["id"], "shape": geometry["shape"],
                            "area": round(geometry["width"] * geometry["height"], 4),

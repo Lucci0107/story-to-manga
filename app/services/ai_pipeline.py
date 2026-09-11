@@ -533,6 +533,14 @@ def compose_panel_prompt(
     direction = panel.get("panel_direction") or {}
     planned_regions = json.dumps({key: direction.get(key) for key in ("character_zone", "face_safe_zone", "head_safe_zone", "camera_framing", "important_prop_zone", "important_hand_zone", "reserved_text_zones", "crop_anchor")}, ensure_ascii=False, separators=(",", ":")) if direction else "{}"
     canvas_regions = json.dumps(generation_canvas_zones(panel), ensure_ascii=False, separators=(",", ":")) if direction else "{}"
+    canvas_plan = generation_canvas_zones(panel) if direction else {}
+    strategy_instruction = ""
+    if canvas_plan.get("strategy") == "overscan_safe_crop":
+        strategy_instruction = (
+            "Generation strategy: overscan_safe_crop. Generate the complete intended manga composition inside the persisted safe-crop region, "
+            "with additional disposable margin outside that region. Keep the crown, face, hands, instrument and quiet dialogue area inside the "
+            "inner final crop; do not place story-critical content near the source canvas boundary. The final panel is the saved crop, not the source border. "
+        )
     return (
         f"出力言語: {order_context['language_name']}。ページの読順: {order_context['panel_reading_order']}。"
         f"吹き出しの読順: {order_context['bubble_reading_order']}。"
@@ -546,7 +554,8 @@ def compose_panel_prompt(
         f"Reserved text safe zones (panel-relative): {reserved_text}。予約領域は背景を静かに保ち、顔・重要な手・小物を置かない。"
         f"Confirmed PanelDirection (panel-relative): {planned_regions}。人物・顔・重要小物は指定領域へ配置し、文字予約領域は利用できる静かな背景として描く。白い文字帯や枠は描かない。"
         f"Generation canvas coordinates: {canvas_regions}。最終crop後に指定構図になるよう、この生成キャンバス座標とcamera_framingに従う。重要な手指・小物はfinal_crop_windowの内側へ収める。"
-        "顔と重要な小物は安全領域に置き、中央固定のパスポート構図や左右の空レターボックスを避ける。"
+        + strategy_instruction
+        + "顔と重要な小物は安全領域に置き、中央固定のパスポート構図や左右の空レターボックスを避ける。"
         + head_framing_prompt(panel)
         + "文字や吹き出しは描かず、後工程で合成する。"
         + in_world_text_prompt(panel)
