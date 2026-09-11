@@ -501,7 +501,7 @@
 
 ## Render Persistent Disk 復旧・読み取り監査（2026-09-12）
 
-- Persistent Disk容量拡張後の最新Render deployment `dep-dai6sg0jo6nc73bl8ei0`（commit `031a255`）は `live`。本番 `/api/health` はHTTP 200で、復旧後のランタイムログにSQLite／disk I/O／Traceback系の再発は確認されませんでした。
+- Persistent Disk容量拡張直後の復旧deployment `dep-dai6sg0jo6nc73bl8ei0`（commit `031a255`）に続き、監査記録push後の `dep-dai7fp9srm7s738dsa7g`（commit `436c54f`）も `live`。本番 `/api/health` はHTTP 200で、復旧後のランタイムログにSQLite／disk I/O／Traceback系の再発は確認されませんでした。
 - 本番SSHで読み取り専用監査を実施しました。`/var/data` は `4.9G` 中 `958M` 使用、`4.0G` 空き、使用率20%。inodeは327,680中350使用（1%）で、inode枯渇はありません。
 - 使用内訳は `story-manga/assets` 約693M、`story-manga/exports` 約261M、`story_manga.sqlite3` 5,173,248 bytes（約4.9MiB）。`.db-wal`／`.db-shm` は見つからず、独立した一時ファイル領域も確認されませんでした。最大ファイルはZIP約64MiB、PDF約50MiB、生成PNG各約4MiBです。
 - ファイル削除・DB操作・WAL／SHM操作・権限変更・再起動・再デプロイは行っていません。孤立ファイルかどうかはDB参照関係を変更せずに断定せず、候補として今後の保持ポリシー検討対象とします。
