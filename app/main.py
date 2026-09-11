@@ -71,10 +71,14 @@ from .services.settings_recommendation import (
     recommendation_is_stale,
 )
 from .services.storage import (
+    StorageCapacityError,
     StorageConfigurationError,
     StorageError,
     StorageObjectNotFound,
+    ensure_storage_capacity,
+    find_orphan_storage_objects,
     get_storage,
+    storage_status,
 )
 
 
@@ -266,6 +270,20 @@ def require_project(project_id: str, user_id: str) -> Dict[str, Any]:
     return project
 
 
+def storage_admin_report() -> Dict[str, Any]:
+    """管理者向けの読み取り専用容量・孤児候補レポートを作る。"""
+
+    storage = get_storage()
+    report = storage_status(storage)
+    references = db.list_storage_references()
+    report["orphan_candidates"] = find_orphan_storage_objects(
+        storage,
+        referenced_asset_keys=references.get("assets", []),
+        referenced_export_keys=references.get("exports", []),
+    )
+    return report
+
+
 def project_ai_model_settings(project: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     """既存の環境変数互換を保ちながら、Projectの実効モデルを解決する。"""
 
@@ -438,7 +456,7 @@ def find_panel(project: Dict[str, Any], panel_id: str) -> Tuple[Dict[str, Any], 
 def safe_job_error(exc: Exception) -> str:
     """ログやAPIに本文を含めず、ユーザーが再試行できるエラーへ変換する。"""
 
-    if isinstance(exc, (AIProviderError, ArtworkGenerationError, StoryExtractionError)):
+    if isinstance(exc, (AIProviderError, ArtworkGenerationError, StoryExtractionError, StorageCapacityError)):
         return str(exc)
     return "生成処理でエラーが発生しました。もう一度試してください"
 
@@ -531,6 +549,15 @@ def queue_panels(
         missing = selected - found_ids
         if missing:
             raise HTTPException(status_code=404, detail="指定されたコマが見つかりません")
+
+    if candidates:
+        # Job登録より前に確認し、容量不足でqueued状態や課金API呼出しを残さない。
+        try:
+            ensure_storage_capacity(get_settings().data_dir, operation="image_generation")
+        except StorageCapacityError as exc:
+            raise HTTPException(status_code=507, detail=exc.as_dict()) from exc
+        except StorageError as exc:
+            raise HTTPException(status_code=503, detail="保存領域の状態を確認できないため、生成を開始できません") from exc
 
     jobs: List[Dict[str, Any]] = []
     batch_id = secrets.token_hex(12) if candidates else None
@@ -1157,6 +1184,41 @@ async def admin_status(user=Depends(require_admin)):
     """管理者ログインとserver-side権限確認用の最小エンドポイント。"""
 
     return {"admin": True, "email": user["email"], "role": user["role"]}
+
+
+@app.get("/api/admin/storage")
+async def admin_storage_status(user=Depends(require_admin)):
+    """容量と孤児候補を削除なしで確認する管理者専用API。"""
+
+    del user
+    try:
+        return {"storage": storage_admin_report()}
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail="保存領域の状態を確認できませんでした") from exc
+
+
+@app.get("/admin/storage", response_class=HTMLResponse)
+async def admin_storage_page(request: Request):
+    """容量状況を画面で確認する読み取り専用管理者ページ。"""
+
+    user = optional_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not db.is_admin(user):
+        raise HTTPException(status_code=403, detail="管理者権限が必要です")
+    try:
+        report = storage_admin_report()
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail="保存領域の状態を確認できませんでした") from exc
+    return templates.TemplateResponse(
+        request,
+        "storage_admin.html",
+        {"request": request, "user": dict(user), "storage": report},
+    )
 
 
 def ai_model_settings_response(user_id: str, project: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2099,6 +2161,16 @@ async def api_export(project_id: str, payload: ExportRequest, user=Depends(curre
         storage = get_storage()
     except StorageConfigurationError as exc:
         raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    try:
+        ensure_storage_capacity(
+            storage,
+            operation="pdf_export" if payload.format == "pdf" else "zip_export",
+        )
+    except StorageCapacityError as exc:
+        # DBのExport行を作る前に返すため、失敗時の部分記録も残さない。
+        raise HTTPException(status_code=507, detail=exc.as_dict()) from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail="保存領域の状態を確認できないため、書き出しを開始できません") from exc
     export_record = db.create_export(project_id, payload.format, None, "processing")
     storage_key = storage.export_key(project_id, export_record["id"], payload.format)
     try:
@@ -2111,6 +2183,9 @@ async def api_export(project_id: str, payload: ExportRequest, user=Depends(curre
             content,
             content_type="application/pdf" if payload.format == "pdf" else "application/zip",
         )
+    except StorageCapacityError as exc:
+        db.update_export(export_record["id"], None, "failed")
+        raise HTTPException(status_code=507, detail=exc.as_dict()) from exc
     except CompositionReadabilityError as exc:
         db.update_export(export_record["id"], None, "failed")
         raise HTTPException(status_code=422, detail=str(exc)) from exc

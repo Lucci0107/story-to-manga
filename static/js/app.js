@@ -766,7 +766,11 @@
               : response.status === 404
                 ? "対象のProjectまたはJobが見つかりません"
                 : "サーバーとの通信に失敗しました";
-          throw new WorkspaceApiError(data && data.detail ? data.detail : fallback, response.status, httpErrorCategory(response.status));
+          const detail = data && data.detail;
+          const detailMessage = detail && typeof detail === "object"
+            ? (detail.message || detail.detail || "")
+            : detail;
+          throw new WorkspaceApiError(detailMessage || fallback, response.status, httpErrorCategory(response.status));
         }
         return data;
       } finally {

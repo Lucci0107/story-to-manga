@@ -23,7 +23,13 @@ from reportlab.lib.utils import ImageReader
 from .artwork import render_panel_image
 from .composition import PAGE_SIZE, composition_for_page, moved_text_item_set, normalize_polygon
 from .layout import ensure_page_layout
-from .storage import StorageError, StorageObjectNotFound, StorageService, get_storage
+from .storage import (
+    StorageError,
+    StorageObjectNotFound,
+    StorageService,
+    ensure_storage_capacity,
+    get_storage,
+)
 
 
 FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
@@ -296,8 +302,9 @@ def _draw_pdf_accessible_text(c: canvas.Canvas, project: Mapping[str, Any], page
 def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -> bytes:
     """生成済みパネル画像へアプリ側の文字要素を重ねたPDFを返す。"""
 
-    validate_export_readability(project)
     storage = storage or get_storage()
+    ensure_storage_capacity(storage, operation="pdf_export")
+    validate_export_readability(project)
     width, height = A4
     output = BytesIO()
     c = canvas.Canvas(output, pagesize=A4)
@@ -719,8 +726,9 @@ def render_page_png(
 def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -> bytes:
     """ページ構成、生成画像、編集可能なJSONをStorageからまとめて返す。"""
 
-    validate_export_readability(project)
     storage = storage or get_storage()
+    ensure_storage_capacity(storage, operation="zip_export")
+    validate_export_readability(project)
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         storyboard = [

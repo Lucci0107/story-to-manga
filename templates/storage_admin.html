@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}容量監視 | Story to Manga{% endblock %}
+{% block body_class %}product-page settings-page{% endblock %}
+{% block content %}
+<div class="product-shell compact-shell">
+  <aside class="global-sidebar">
+    <a class="brand-lockup compact" href="/dashboard" aria-label="ダッシュボードへ戻る"><span class="brand-mark">ふ</span><span><strong>Story to Manga</strong><small>制作室</small></span></a>
+    <nav class="global-nav" aria-label="メインナビゲーション">
+      <a class="nav-item" href="/dashboard"><span class="nav-glyph">▦</span>プロジェクト</a>
+      <a class="nav-item" href="/projects/new"><span class="nav-glyph">＋</span>新しい作品</a>
+      <a class="nav-item" href="/knowledge"><span class="nav-glyph">◇</span>Knowledge</a>
+      <a class="nav-item" href="/settings"><span class="nav-glyph">⚙</span>設定</a>
+      <a class="nav-item active" href="/admin/storage"><span class="nav-glyph">▤</span>容量監視</a>
+    </nav>
+    <div class="sidebar-bottom"><button class="nav-item theme-nav" type="button" data-theme-toggle><span class="nav-glyph">◐</span>表示テーマ</button><div class="user-chip"><span class="avatar">{{ user.email[0]|upper }}</span><span>{{ user.email }}</span></div><form method="post" action="/logout"><button class="logout-link" type="submit">ログアウト</button></form></div>
+  </aside>
+  <main class="new-project-main settings-main">
+    <a class="back-link" href="/settings">← 設定へ戻る</a>
+    <div class="new-project-heading"><p class="eyebrow">STORAGE MONITOR</p><h1>保存領域の状態</h1><p>容量と孤児候補を読み取り専用で確認できます。ファイルの自動削除は行いません。</p></div>
+    <div class="settings-stack">
+      <section class="surface-panel panel-padding" aria-labelledby="capacity-heading">
+        <div class="settings-section-heading"><div><p class="eyebrow">CAPACITY</p><h2 id="capacity-heading">現在の使用量</h2></div><span class="settings-badge">{{ storage.status }}</span></div>
+        <div class="stat-rail">
+          <div class="stat-tile"><span>合計</span><strong>{{ storage.total_display }}</strong></div>
+          <div class="stat-tile"><span>使用中</span><strong>{{ storage.used_display }}</strong></div>
+          <div class="stat-tile"><span>空き</span><strong>{{ storage.free_display }}</strong></div>
+          <div class="stat-tile"><span>使用率</span><strong>{{ storage.usage_percent }}%</strong></div>
+        </div>
+        <p class="field-help">80%で警告、90%で重大、95%以上では画像生成・PDF・ZIPの新規書き込みを停止します。</p>
+      </section>
+      <section class="surface-panel panel-padding" aria-labelledby="breakdown-heading">
+        <h2 id="breakdown-heading">保存データの内訳</h2>
+        <div class="settings-row"><span>生成画像（assets）</span><strong>{{ storage.assets_display }}</strong></div>
+        <div class="settings-row"><span>書き出し（exports）</span><strong>{{ storage.exports_display }}</strong></div>
+        <div class="settings-row"><span>SQLiteデータベース</span><strong>{{ storage.database_display }}</strong></div>
+      </section>
+      <section class="surface-panel panel-padding" aria-labelledby="orphan-heading">
+        <h2 id="orphan-heading">孤児候補（報告のみ）</h2>
+        <p class="field-help">DBから参照されていないファイル候補です。削除や変更は行っていません。</p>
+        <div class="settings-row"><span>assets候補</span><strong>{{ storage.orphan_candidates.asset_count }}件 / {{ storage.orphan_candidates.asset_bytes }} bytes</strong></div>
+        <div class="settings-row"><span>exports候補</span><strong>{{ storage.orphan_candidates.export_count }}件 / {{ storage.orphan_candidates.export_bytes }} bytes</strong></div>
+      </section>
+      <section class="surface-panel panel-padding" aria-labelledby="retention-heading">
+        <h2 id="retention-heading">保持方針</h2>
+        <p class="field-help">現在はreport-onlyです。古い書き出し、差し替え済み書き出し、放棄された一時／revisionデータを候補として検討しますが、自動削除は有効化していません。</p>
+      </section>
+    </div>
+  </main>
+</div>
+{% endblock %}

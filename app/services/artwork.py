@@ -21,7 +21,12 @@ from ..config import get_settings
 from .artwork_geometry import artwork_generation_size, generation_canvas_zones
 from .openai_client import OpenAIRequestError, request_bytes, request_json
 from .model_registry import is_allowed_image_model, model_for_task, new_generation_metadata
-from .storage import StorageError, StorageService, get_storage
+from .storage import (
+    StorageError,
+    StorageService,
+    ensure_storage_capacity,
+    get_storage,
+)
 
 
 class ArtworkGenerationError(RuntimeError):
@@ -134,9 +139,12 @@ def save_panel_artwork(
 ) -> str:
     """パネルのrevisionごとにStorageへ保存し、過去生成物を上書きしない。"""
 
+    storage = storage or get_storage()
+    # 外部画像API呼出しとデモ画像の保存を同じ書き込み前ガードへ揃える。
+    # 容量不足時はrevisionを進めず、部分状態を残さない。
+    ensure_storage_capacity(storage, operation="image_generation")
     revision = int(panel.get("revision", 0)) + 1
     panel["revision"] = revision
-    storage = storage or get_storage()
     filename = f"{_slug(str(panel.get('id', 'panel')))}-r{revision}.png"
     storage_key = storage.asset_key(project_id, filename)
     runtime = get_settings()
@@ -172,6 +180,8 @@ def save_openai_image(
 ) -> str:
     """OpenAI Images APIの画像を検証し、Storageへ保存する。"""
 
+    # 直接呼び出されるテスト／将来のWorker経路でも課金APIの前に止める。
+    ensure_storage_capacity(storage, operation="image_generation")
     requested_model = model_id if is_allowed_image_model(str(model_id or "")) else runtime.openai_image_model
     if not is_allowed_image_model(str(requested_model)):
         requested_model = "gpt-image-2"

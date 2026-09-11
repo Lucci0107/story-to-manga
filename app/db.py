@@ -11,9 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from .config import get_settings
@@ -609,6 +611,59 @@ def list_projects(user_id: str) -> List[Dict[str, Any]]:
             (user_id,),
         ).fetchall()
     return [_project_from_row(row) for row in rows]
+
+
+def list_storage_references() -> Dict[str, List[str]]:
+    """Storage監査用に、DBが参照するasset/export keyだけを返す。
+
+    原作本文やProjectのタイトルは返さず、管理者の読み取り専用容量監査に
+    必要な不透明なStorage keyだけを抽出する。孤児候補の削除は行わない。
+    """
+
+    asset_keys: set[str] = set()
+    export_keys: set[str] = set()
+
+    def safe_project(value: Any) -> str:
+        clean = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value)).strip("-")
+        return clean or "project"
+
+    with connection() as conn:
+        project_rows = conn.execute(
+            "SELECT id, storyboard_json FROM projects"
+        ).fetchall()
+        export_rows = conn.execute(
+            "SELECT storage_key, file_path FROM exports"
+        ).fetchall()
+
+    for row in project_rows:
+        project_id = safe_project(row["id"])
+        storyboard = _loads(row["storyboard_json"], [])
+        for page in storyboard if isinstance(storyboard, list) else []:
+            if not isinstance(page, Mapping):
+                continue
+            for panel in page.get("panels", []) or []:
+                if not isinstance(panel, Mapping):
+                    continue
+                image_url = str(panel.get("image_url") or "")
+                filename = PurePosixPath(image_url.replace("\\", "/")).name
+                if filename and filename not in {".", ".."}:
+                    asset_keys.add(f"assets/{project_id}/{filename}")
+                direction = panel.get("panel_direction")
+                canvas = direction.get("generation_canvas") if isinstance(direction, Mapping) else None
+                source_asset = canvas.get("source_asset") if isinstance(canvas, Mapping) else None
+                if source_asset:
+                    value = str(source_asset)
+                    if value.startswith("assets/"):
+                        asset_keys.add(value)
+
+    for row in export_rows:
+        value = row["storage_key"] or row["file_path"]
+        if value:
+            export_keys.add(str(value))
+    return {
+        "assets": sorted(asset_keys),
+        "exports": sorted(export_keys),
+    }
 
 
 def update_project(

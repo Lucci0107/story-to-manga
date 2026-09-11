@@ -39,6 +39,12 @@
         <div class="settings-row"><span>テーマ</span><button class="secondary-button compact-button" type="button" data-theme-toggle aria-label="テーマを切り替える">◐ 表示テーマ</button></div>
         <p class="field-help">テーマはこのブラウザに保存され、次回の制作でも引き継がれます。</p>
       </section>
+      {% if user.role == 'admin' %}
+      <section class="surface-panel panel-padding" aria-labelledby="storage-heading">
+        <div class="settings-section-heading"><div><p class="eyebrow">STORAGE</p><h2 id="storage-heading">保存領域</h2></div><a class="secondary-button compact-button" href="/admin/storage">容量を確認</a></div>
+        <p class="field-help">Persistent Diskの使用率、生成画像・書き出し・DBの内訳、孤児候補を読み取り専用で確認できます。</p>
+      </section>
+      {% endif %}
     </div>
   </main>
 </div>

@@ -509,6 +509,14 @@
 - Previewでは生成済み2画像（各1024×1024）の読み込みを確認し、Export画面のPDF／ZIP導線を表示確認しました。新規Export生成はディスク監査を読み取り専用に保つため実行していません。Light／Dark表示を確認後に元へ戻し、ブラウザconsoleログは空でした。既存の390pxモバイルQA記録は維持しています（今回のIAB表示は775px固定のため再エミュレーションは未実施）。
 - 再発防止として、assets／exportsの保持期間・孤立ファイル検出・使用率80%警告／90% critical／95%高コスト処理停止の導入を候補化しました。現時点で自動削除は行いません。
 
+## Storage Capacity Safety（2026-09-12）
+
+- `app/services/storage.py`へ保存領域の読み取りスナップショットと共通閾値を追加しました。使用率80%以上はwarning、90%以上はcritical、95%以上はblockedとして分類し、容量不足は`retryable`な`storage_capacity_exceeded`へ変換します。
+- 画像生成はJob登録前とWorker保存直前、PDF／ZIPはExport記録・描画開始前に容量を確認します。95%以上では課金API／高コスト書き込みを開始せず、Exportの部分ファイルを残しません。LocalFileStorageの保存自体も同一ディレクトリ内の一時ファイルから原子的に確定します。
+- 管理者専用の`/api/admin/storage`と`/admin/storage`で、合計・使用中・空き・使用率、assets／exports／SQLiteのサイズ、閾値、保持方針を読み取り表示します。孤児候補はDB参照との差分として報告するだけで、自動削除は無効です。
+- 保持方針の候補は古い／差し替え済みExport、放棄された一時／revisionデータです。削除ポリシーの承認までは既存DB・参照済みArtwork・Exportを変更しません。
+- 回帰テストは`297 passed`、compileall・JavaScript構文・pip check・diff checkを通過しました。既存本番Projectおよび`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は変更していません。
+
 ## 次回セッションの確認
 
 1. `git status --short --branch`で作業ツリーと`origin/main`を確認する
