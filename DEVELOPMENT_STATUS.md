@@ -2,6 +2,15 @@
 
 更新日: 2026-09-12
 
+## CONFIRMED_ORPHAN Cleanupワークフロー（2026-09-12、削除承認待ち）
+
+- `storage_cleanup_plans`／`storage_cleanup_items`へdry-runの監査PlanとItem証拠を保存し、実行時は各ファイル直前にcanonical reference graphを再収集・再分類します。`CONFIRMED_ORPHAN`以外、24時間未満、active／retryable Job、SQLite／WAL／SHM／一時／system file、managed namespace外、traversal／symlinkはスキップし、Project／Panel／Character／Knowledge／ExportのDB行は削除しません。
+- 管理者専用の`POST /api/admin/storage/cleanup/dry-run`、Plan再表示、`POST /api/admin/storage/cleanup/execute`を追加しました。実行は同一Origin、管理者権限、チェックボックス、`DELETE`入力、Plan直前再検証を必須とし、Planごとの実行者・件数・スキップ／失敗・回収容量・前後使用量を監査します。二重実行はidempotentに扱い、一件のI/O失敗で他候補の記録を失いません。自動削除は有効化していません。
+- 管理画面に最新dry-runの確認済み孤児数、除外数、assets／exports内訳、回収見込み、削除不能警告を追加しました。dry-runボタン以外の自動実行はなく、実行フォームは明示確認が揃うまで無効です。
+- 検証: Cleanup専用テスト9件を含む全回帰 **313 passed**、compileall、`node --check`、pip check、diff check成功。隔離tmp領域での参照追加スキップ、active Job保護、symlink／traversal拒否、部分失敗、idempotency、管理者／Origin認可、dry-run無変更を確認し、ローカル管理画面（Desktop／390px相当／Light／Dark）の表示とコンソール0件を確認しました。
+- コミット`4ef6eb3`をmainへpush、GitHub Actions `34677770298` success、Render `dep-daietj15efls738td5h0` live、`/api/health` HTTP 200です。本番の匿名Cleanup APIは401で保護され、認証済み管理画面のfresh dry-runはMacロック中で既存セッションへ安全にアクセスできないため未実行です。本番ファイル削除、Production DB／Artwork／Export変更、追加課金、保護フォルダ`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`の変更はありません。
+- 実装は本番dry-run後に停止し、実際の削除はユーザーの明示承認があるまで呼び出しません。
+
 ## Storage孤立ファイルの証拠付き分類（2026-09-12）
 
 - 容量監視の既存しきい値（80% warning／90% critical／95%以上の高コスト書き込み停止）を維持したまま、DB全体からStorage参照を集めるcanonical reference graphを追加しました。現行Panel、revision系列、Page/Panel Composition、Character/Project JSON、Export行、旧`file_path`、active／retryable Jobの出力保護を同じ経路で照合します。
