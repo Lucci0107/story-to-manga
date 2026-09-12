@@ -7,11 +7,11 @@
 - 容量監視の既存しきい値（80% warning／90% critical／95%以上の高コスト書き込み停止）を維持したまま、DB全体からStorage参照を集めるcanonical reference graphを追加しました。現行Panel、revision系列、Page/Panel Composition、Character/Project JSON、Export行、旧`file_path`、active／retryable Jobの出力保護を同じ経路で照合します。
 - 各ファイルを`REFERENCED`、`CONFIRMED_ORPHAN`、`UNCERTAIN`、`IGNORED_SYSTEM_FILE`へ分類します。既知namespace・命名規則・全参照不在・Job保護なし・24時間以上のgrace periodを満たす場合だけ確認済み孤児とし、解決不能な旧参照、未知命名、最近のファイル、進行中／再試行可能な出力は`UNCERTAIN`へ倒します。SQLite／WAL／SHM／一時／隠しファイルは監査対象外です。
 - 管理者の容量画面と`/api/admin/storage`に分類別件数・容量・回収見込み・証拠付き先頭候補を表示し、`/api/admin/storage/orphan-dry-run`は`CONFIRMED_ORPHAN`のみの削除予定を計算します。dry-runはファイルを変更せず、自動削除・削除ボタン・既存Export／Artworkの保持変更は実施していません。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`も未追跡のまま未変更です。
-- 検証: Storage分類／dry-runを含む全回帰 **304 passed**、compileall、JavaScript構文、pip check、diff checkを通過しています。commit `7ff5f66`、GitHub Actions `34666441895`、Render `dep-daib4op5efls738r4ki0`（live）まで反映済みです。
+- 検証: Storage分類／dry-runを含む全回帰 **304 passed**、compileall、JavaScript構文、pip check、diff checkを通過しています。実装commit `7ff5f66`（CI `34666441895`）に続き、監査記録commit `4523e50`、GitHub Actions `34667834519`、Render `dep-daibipcs728c73af08vg`（live）まで反映済みです。
 
 ## Storage分類の本番反映・読み取り専用監査（2026-09-12）
 
-- 本番はRender `dep-daib4op5efls738r4ki0` がlive、`/api/health` はHTTP 200、production smoke（health／login／CSS／JavaScript）は全項目成功です。既存SQLite／Persistent Diskの削除・再作成、データ変更、追加の有料生成は行っていません。
+- 本番はRender `dep-daibipcs728c73af08vg`（commit `4523e50`）がlive、`/api/health` はHTTP 200、production smoke（health／login／CSS／JavaScript）は全項目成功です。既存SQLite／Persistent Diskの削除・再作成、データ変更、追加の有料生成は行っていません。
 - 既存認証済みブラウザで管理画面を再読み込みし、容量4.9GB、使用957.4MB（19.13%）、空き3.9GB、assets 691.5MB、exports 260.3MB、SQLite 4.9MBを確認しました。分類は`REFERENCED` 40件／326,872,024 bytes、`CONFIRMED_ORPHAN` 289件／670,091,142 bytes、`UNCERTAIN` 1件／999,424 bytes、`IGNORED_SYSTEM_FILE` 0件です。回収見込みは確認済み孤児だけの670,091,142 bytesとして表示されます。
 - `CONFIRMED_ORPHAN` は24時間以上のgrace、既知namespace、全参照不在、active／retryable Job保護なしを満たす監査結果に限ります。dry-runは289件／670,091,142 bytesを報告するだけで、自動削除・削除ボタン・既存Artwork／Exportの変更は無効のままです。旧互換参照候補はassets 290件／exports 0件として別表示し、未解決候補を`UNCERTAIN`へ倒しています。
 - ローカル隔離Browser QA（Desktop、390px、Light／Dark）と本番管理画面の再読み込み後表示を確認し、ローカルのブラウザエラー／警告は0件、横方向overflowなしでした。本番の既存Project・Artwork・Knowledge・Exportは読み取り専用確認で保持されています。
