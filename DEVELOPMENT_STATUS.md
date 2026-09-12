@@ -12,6 +12,7 @@
 - 承認範囲（旧Plan `567c1416-ee54-4cfd-8ad7-4c6eb5a8ec20`）と件数・容量が一致したfresh Plan `354cdb52-92a7-4d4f-8f17-b0067e4eb85c`だけを、サーバー側の直前再検証付きで一度実行しました。`CONFIRMED_ORPHAN` 289件（670,091,142 bytes）を削除し、スキップ0件、失敗0件、回収670,091,142 bytesとなりました。`UNCERTAIN` 1件と`REFERENCED` 40件は削除対象外です。
 - 実行後の本番容量は使用317.8MB／4.9GB（6.35%）、assets 52.4MB、exports 260.3MB、SQLite 4.9MBです。再スキャンでは`REFERENCED` 40件／326,872,024 bytes、`CONFIRMED_ORPHAN` 0件、`UNCERTAIN` 1件／999,424 bytesとなり、最新Planは`COMPLETED`です。既存Project・Artwork・Knowledge・Export・DB行は変更していません。
 - 本番管理画面の再読み込み、既存Project一覧、既存19コマ作品のPreview、Knowledge一覧、`/api/health`（`{"status":"ok"}`）を読み取り専用で確認しました。自動削除は引き続き無効です。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は未追跡・未変更・未コミットのままです。
+- 削除結果の記録commit `cb13d04`をpushし、GitHub Actions `34697728797` success、Render `dep-dailjh4s728c73alv4q0` live、`/api/health` HTTP 200を確認しました。
 
 ## Storage孤立ファイルの証拠付き分類（2026-09-12）
 
