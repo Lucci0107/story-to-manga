@@ -15,8 +15,9 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Optional
+from urllib.parse import urlparse
 
 from .config import get_settings
 from .services.database import DatabaseConnection, connection as database_connection
@@ -613,56 +614,308 @@ def list_projects(user_id: str) -> List[Dict[str, Any]]:
     return [_project_from_row(row) for row in rows]
 
 
-def list_storage_references() -> Dict[str, List[str]]:
-    """Storage監査用に、DBが参照するasset/export keyだけを返す。
+def _storage_safe_component(value: Any, fallback: str) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value)).strip("-")
+    return clean or fallback
 
-    原作本文やProjectのタイトルは返さず、管理者の読み取り専用容量監査に
-    必要な不透明なStorage keyだけを抽出する。孤児候補の削除は行わない。
+
+def _storage_reference_key(
+    value: Any,
+    *,
+    category: Optional[str] = None,
+    project_id: Optional[str] = None,
+    storage_root: Optional[Path] = None,
+) -> Optional[str]:
+    """DB内の現行・旧参照を安全な相対Storage keyへ揃える。
+
+    ここでは参照の収集だけを行い、ファイルシステムへのアクセスや削除は行わない。
+    外部URL、Traversal、``/static``等の表示用パスは意図的に無視する。
     """
 
-    asset_keys: set[str] = set()
-    export_keys: set[str] = set()
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw or "\x00" in raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        return None
+    normalized = raw.replace("\\", "/")
+    parts = normalized.lstrip("/").split("/")
+    if len(parts) >= 3 and parts[0].lower() == "media":
+        if category not in {None, "assets"}:
+            return None
+        owner = project_id or parts[1]
+        filename = PurePosixPath(parts[-1]).name
+        if filename in {"", ".", ".."}:
+            return None
+        return f"assets/{_storage_safe_component(owner, 'project')}/{filename}"
 
-    def safe_project(value: Any) -> str:
-        clean = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value)).strip("-")
-        return clean or "project"
+    # 旧絶対file_pathは既知namespaceの境界以降だけを採用する。
+    if normalized.startswith("/"):
+        if storage_root is None:
+            return None
+        try:
+            normalized = Path(normalized).expanduser().resolve().relative_to(
+                storage_root.expanduser().resolve()
+            ).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            return None
+    normalized = normalized.lstrip("/")
+    parts = normalized.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    if parts and parts[0] in {"assets", "exports"}:
+        if category and parts[0] != category:
+            return None
+        return "/".join(parts)
+    filename = PurePosixPath(normalized).name
+    if category == "assets" and project_id and filename not in {"", ".", ".."}:
+        return f"assets/{_storage_safe_component(project_id, 'project')}/{filename}"
+    if category == "exports" and filename not in {"", ".", ".."}:
+        return f"exports/{filename}"
+    return None
+
+
+_STORAGE_REFERENCE_FIELD_HINTS = {
+    "image_url",
+    "image_path",
+    "asset_url",
+    "asset_path",
+    "asset_file",
+    "background_image_url",
+    "background_asset",
+    "page_asset",
+    "artwork_asset",
+    "mask_asset",
+    "thumbnail_asset",
+    "preview_asset",
+    "reference_image_url",
+    "source_asset",
+    "source_asset_key",
+    "asset_key",
+    "storage_key",
+    "file_path",
+    "thumbnail_url",
+    "preview_url",
+    "export_url",
+}
+
+
+def collect_storage_references(storage_root: Optional[Path] = None) -> Dict[str, Any]:
+    """DB全体からStorage参照グラフを一度だけ収集する。
+
+    現行Panel、revision系列、Character/Project JSONのローカル参照、Export行、
+    active/retryable Jobを同じグラフへまとめる。本文・タイトル等の内容は返さず、
+    監査に必要なIDとStorage keyだけを保持する。
+    """
+
+    resolved_storage_root = storage_root or get_settings().data_dir
+    graph: Dict[str, Any] = {
+        "version": 1,
+        "assets": {},
+        "exports": {},
+        "assets_prefixes": {},
+        "exports_prefixes": {},
+        # 旧パスを現在のStorage rootへ安全に解決できない場合も捨てずに
+        # 記録する。分類側では一致し得るファイルをUNCERTAINへ倒す。
+        "unresolved": {"assets": [], "exports": []},
+        "protected": {"assets": {}, "exports": {}},
+        "protected_prefixes": {"assets": {}, "exports": {}},
+        "known_project_slugs": [],
+    }
+
+    def add(category: str, key: Optional[str], entity: Mapping[str, Any]) -> None:
+        if not key or category not in {"assets", "exports"}:
+            return
+        bucket = graph[category]
+        bucket.setdefault(key, []).append(dict(entity))
+
+    def add_prefix(category: str, prefix: str, entity: Mapping[str, Any], *, protected: bool = False) -> None:
+        if not prefix or category not in {"assets", "exports"}:
+            return
+        bucket_name = "protected_prefixes" if protected else ""
+        bucket = graph[bucket_name][category] if bucket_name else graph[f"{category}_prefixes"]
+        bucket.setdefault(prefix, []).append(dict(entity))
+
+    def add_unresolved(category: str, value: Any, entity: Mapping[str, Any]) -> None:
+        """解決不能なローカル参照を分類の保護材料として残す。"""
+
+        raw = str(value or "").strip()
+        if not raw:
+            return
+        parsed = urlparse(raw)
+        # 外部URLはアプリケーションStorageの参照ではないため、ローカル
+        # ファイルを不必要にUNCERTAINへ倒さない。
+        if parsed.scheme or parsed.netloc:
+            return
+        path = PurePosixPath(raw.replace("\\", "/"))
+        basename = path.name if path.name not in {"", ".", ".."} else ""
+        graph["unresolved"][category].append(
+            {
+                **dict(entity),
+                "value": raw[:500],
+                "basename": basename,
+            }
+        )
+
+    def entity_base(project_id: str, source: str, **extra: Any) -> Dict[str, Any]:
+        return {"project_id": project_id, "source": source, **extra}
+
+    def walk(value: Any, *, project_id: str, entity: Mapping[str, Any], key_hint: str = "") -> None:
+        if isinstance(value, Mapping):
+            for field, child in value.items():
+                field_name = str(field).lower()
+                if field_name in _STORAGE_REFERENCE_FIELD_HINTS and isinstance(child, str):
+                    category = "exports" if "export" in field_name or "file_path" in field_name and str(child).lower().endswith((".pdf", ".zip")) else "assets"
+                    key = _storage_reference_key(
+                        child,
+                        category=category,
+                        project_id=project_id,
+                        storage_root=resolved_storage_root,
+                    )
+                    if key:
+                        add(category, key, {**dict(entity), "source_field": field_name, "legacy_reference_detected": field_name in {"file_path", "image_url", "thumbnail_url", "preview_url"}})
+                    elif field_name in {"file_path", "storage_key", "asset_path", "source_asset", "source_asset_key", "image_url", "thumbnail_url", "preview_url", "export_url"}:
+                        add_unresolved(category, child, {**dict(entity), "source_field": field_name, "legacy_reference_detected": field_name in {"file_path", "image_url", "thumbnail_url", "preview_url"}})
+                else:
+                    walk(child, project_id=project_id, entity=entity, key_hint=field_name)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, project_id=project_id, entity=entity, key_hint=key_hint)
 
     with connection() as conn:
         project_rows = conn.execute(
-            "SELECT id, storyboard_json FROM projects"
+            "SELECT id, analysis_json, manga_settings_recommendation_json, characters_json, storyboard_json, generation_metadata_json FROM projects"
         ).fetchall()
         export_rows = conn.execute(
-            "SELECT storage_key, file_path FROM exports"
+            "SELECT id, project_id, storage_key, file_path, status, created_at FROM exports"
+        ).fetchall()
+        job_rows = conn.execute(
+            "SELECT id, project_id, target_id, job_type, status, error_category, created_at, updated_at FROM generation_jobs"
         ).fetchall()
 
     for row in project_rows:
-        project_id = safe_project(row["id"])
+        project_id = str(row["id"])
+        safe_project = _storage_safe_component(project_id, "project")
+        graph["known_project_slugs"].append(safe_project)
         storyboard = _loads(row["storyboard_json"], [])
+        base = entity_base(project_id, "project_json")
+        # Character reference画像・analysis等の将来フィールドも同じwalkerで拾う。
+        for column in (
+            "analysis_json",
+            "manga_settings_recommendation_json",
+            "characters_json",
+            "generation_metadata_json",
+        ):
+            walk(_loads(row[column], None), project_id=project_id, entity=base, key_hint=column)
         for page in storyboard if isinstance(storyboard, list) else []:
             if not isinstance(page, Mapping):
                 continue
+            page_id = str(page.get("id") or "")
+            page_owner = entity_base(project_id, "page_composition", page_id=page_id)
+            # Page-level background/overlay/composition assetsも拾う。Panel内の
+            # 参照は下のpanel ownerで収集し、所有者の追跡性を保つ。
+            walk(
+                {key: value for key, value in page.items() if key != "panels"},
+                project_id=project_id,
+                entity=page_owner,
+            )
             for panel in page.get("panels", []) or []:
                 if not isinstance(panel, Mapping):
                     continue
-                image_url = str(panel.get("image_url") or "")
-                filename = PurePosixPath(image_url.replace("\\", "/")).name
-                if filename and filename not in {".", ".."}:
-                    asset_keys.add(f"assets/{project_id}/{filename}")
-                direction = panel.get("panel_direction")
-                canvas = direction.get("generation_canvas") if isinstance(direction, Mapping) else None
-                source_asset = canvas.get("source_asset") if isinstance(canvas, Mapping) else None
-                if source_asset:
-                    value = str(source_asset)
-                    if value.startswith("assets/"):
-                        asset_keys.add(value)
+                panel_id = str(panel.get("id") or "")
+                owner = entity_base(
+                    project_id,
+                    "panel_artwork",
+                    page_id=page_id,
+                    panel_id=panel_id,
+                    revision=panel.get("revision", 0),
+                )
+                walk(panel, project_id=project_id, entity=owner)
+                panel_id_slug = _storage_safe_component(panel_id, "panel")
+                if panel_id and (
+                    panel.get("image_url")
+                    or panel.get("generation_status") == "completed"
+                    or int(panel.get("revision", 0) or 0) > 0
+                ):
+                    add_prefix(
+                        "assets",
+                        f"assets/{safe_project}/{panel_id_slug}-r",
+                        {**owner, "source": "panel_revision_series"},
+                    )
 
     for row in export_rows:
-        value = row["storage_key"] or row["file_path"]
-        if value:
-            export_keys.add(str(value))
+        project_id = str(row["project_id"] or "")
+        owner = {
+            "source": "export_record",
+            "project_id": project_id,
+            "export_id": str(row["id"]),
+            "status": str(row["status"] or ""),
+            "legacy_reference_detected": bool(row["file_path"]),
+        }
+        resolved_keys: list[str] = []
+        for source_field, value in (("storage_key", row["storage_key"]), ("file_path", row["file_path"])):
+            if not value:
+                continue
+            key = _storage_reference_key(
+                value,
+                category="exports",
+                project_id=project_id,
+                storage_root=resolved_storage_root,
+            )
+            if key:
+                add(
+                    "exports",
+                    key,
+                    {**owner, "source_field": source_field},
+                )
+                resolved_keys.append(key)
+            else:
+                add_unresolved(
+                    "exports",
+                    value,
+                    {**owner, "source_field": source_field},
+                )
+        if not resolved_keys and str(row["status"] or "").lower() in {"queued", "processing"}:
+            prefix = f"exports/{_storage_safe_component(project_id, 'project')}-{_storage_safe_component(row['id'], 'export')}."
+            add_prefix("exports", prefix, {**owner, "source": "active_export_record"}, protected=True)
+
+    for row in job_rows:
+        status = str(row["status"] or "").lower()
+        category = "assets" if str(row["job_type"] or "").lower() in {"panel_artwork", "image", "character"} else None
+        if category != "assets" or not row["target_id"]:
+            continue
+        if status not in {"queued", "processing", "failed"}:
+            continue
+        # 失敗・中断・timeoutは再試行時に同じrevision系列を再利用し得るため保護する。
+        if status in {"queued", "processing"} or str(row["error_category"] or "").lower() in {"retryable", "interrupted", "timeout", "provider"}:
+            project_id = str(row["project_id"] or "")
+            prefix = f"assets/{_storage_safe_component(project_id, 'project')}/{_storage_safe_component(row['target_id'], 'panel')}-r"
+            add_prefix(
+                "assets",
+                prefix,
+                {
+                    "source": "generation_job",
+                    "project_id": project_id,
+                    "job_id": str(row["id"]),
+                    "target_id": str(row["target_id"]),
+                    "status": status,
+                },
+                protected=True,
+            )
+
+    graph["known_project_slugs"] = sorted(set(graph["known_project_slugs"]))
+    return graph
+
+
+def list_storage_references() -> Dict[str, List[str]]:
+    """後方互換用に、canonical graphの完全参照keyだけを返す。"""
+
+    graph = collect_storage_references()
     return {
-        "assets": sorted(asset_keys),
-        "exports": sorted(export_keys),
+        "assets": sorted(str(key) for key in (graph.get("assets") or {}).keys()),
+        "exports": sorted(str(key) for key in (graph.get("exports") or {}).keys()),
     }
 
 

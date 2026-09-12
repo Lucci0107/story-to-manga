@@ -75,9 +75,10 @@ from .services.storage import (
     StorageConfigurationError,
     StorageError,
     StorageObjectNotFound,
+    classify_storage_objects,
     ensure_storage_capacity,
-    find_orphan_storage_objects,
     get_storage,
+    storage_cleanup_dry_run,
     storage_status,
 )
 
@@ -275,12 +276,14 @@ def storage_admin_report() -> Dict[str, Any]:
 
     storage = get_storage()
     report = storage_status(storage)
-    references = db.list_storage_references()
-    report["orphan_candidates"] = find_orphan_storage_objects(
+    storage_root = getattr(storage, "root", get_settings().data_dir)
+    references = db.collect_storage_references(storage_root)
+    report["orphan_candidates"] = classify_storage_objects(
         storage,
-        referenced_asset_keys=references.get("assets", []),
-        referenced_export_keys=references.get("exports", []),
+        reference_graph=references,
     )
+    # 管理画面のdry-runは確認済み孤児のみを対象にするが、実際の削除は提供しない。
+    report["orphan_dry_run"] = storage_cleanup_dry_run(report["orphan_candidates"])
     return report
 
 
@@ -1193,6 +1196,20 @@ async def admin_storage_status(user=Depends(require_admin)):
     del user
     try:
         return {"storage": storage_admin_report()}
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail="保存領域の状態を確認できませんでした") from exc
+
+
+@app.get("/api/admin/storage/orphan-dry-run")
+async def admin_storage_orphan_dry_run(user=Depends(require_admin)):
+    """確認済み孤児だけの削除予定を返すdry-run。ファイルは変更しない。"""
+
+    del user
+    try:
+        report = storage_admin_report()
+        return {"storage": report["orphan_dry_run"]}
     except StorageConfigurationError as exc:
         raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
     except StorageError as exc:

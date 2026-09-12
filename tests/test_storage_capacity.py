@@ -154,4 +154,10 @@ def test_admin_storage_endpoint_is_read_only_and_reports_db_references(tmp_path:
     payload = response.json()["storage"]
     assert {"total_bytes", "used_bytes", "free_bytes", "usage_percent", "assets_bytes", "exports_bytes", "database_bytes"} <= payload.keys()
     assert payload["orphan_candidates"]["mode"] == "report_only"
+    assert {"REFERENCED", "CONFIRMED_ORPHAN", "UNCERTAIN", "IGNORED_SYSTEM_FILE"} <= set(
+        payload["orphan_candidates"]["classification_counts"]
+    )
+    dry_run = client.get("/api/admin/storage/orphan-dry-run")
+    assert dry_run.status_code == 200
+    assert dry_run.json()["storage"]["automatic_deletion"] is False
     assert client.get("/admin/storage").status_code == 200

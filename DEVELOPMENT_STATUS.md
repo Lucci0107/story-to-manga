@@ -2,6 +2,13 @@
 
 更新日: 2026-09-12
 
+## Storage孤立ファイルの証拠付き分類（2026-09-12）
+
+- 容量監視の既存しきい値（80% warning／90% critical／95%以上の高コスト書き込み停止）を維持したまま、DB全体からStorage参照を集めるcanonical reference graphを追加しました。現行Panel、revision系列、Page/Panel Composition、Character/Project JSON、Export行、旧`file_path`、active／retryable Jobの出力保護を同じ経路で照合します。
+- 各ファイルを`REFERENCED`、`CONFIRMED_ORPHAN`、`UNCERTAIN`、`IGNORED_SYSTEM_FILE`へ分類します。既知namespace・命名規則・全参照不在・Job保護なし・24時間以上のgrace periodを満たす場合だけ確認済み孤児とし、解決不能な旧参照、未知命名、最近のファイル、進行中／再試行可能な出力は`UNCERTAIN`へ倒します。SQLite／WAL／SHM／一時／隠しファイルは監査対象外です。
+- 管理者の容量画面と`/api/admin/storage`に分類別件数・容量・回収見込み・証拠付き先頭候補を表示し、`/api/admin/storage/orphan-dry-run`は`CONFIRMED_ORPHAN`のみの削除予定を計算します。dry-runはファイルを変更せず、自動削除・削除ボタン・既存Export／Artworkの保持変更は実施していません。`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`も未追跡のまま未変更です。
+- 検証: Storage分類／dry-runを含む全回帰 **304 passed**、compileall、JavaScript構文、pip check、diff checkを通過しています。次は差分確認後にcommit／CI／Render再デプロイし、本番の既存Project・Artwork・Knowledge・Exportを読み取り専用で再確認します。
+
 ## SQLite WAL切替失敗時の安全な起動fallback（2026-09-12、Render再デプロイ待ち）
 
 - Render CLIを公式Homebrew版で導入し、既存の認証済みCLIセッションからサービス・deploy・Runtime Logsを秘密値なしで取得できる状態にしました。Build方式、uvicorn起動方式、SQLiteパス（`/var/data/story-manga/story_manga.sqlite3`）は変更していません。

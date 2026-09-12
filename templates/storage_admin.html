@@ -36,9 +36,33 @@
       </section>
       <section class="surface-panel panel-padding" aria-labelledby="orphan-heading">
         <h2 id="orphan-heading">孤児候補（報告のみ）</h2>
-        <p class="field-help">DBから参照されていないファイル候補です。削除や変更は行っていません。</p>
-        <div class="settings-row"><span>assets候補</span><strong>{{ storage.orphan_candidates.asset_count }}件 / {{ storage.orphan_candidates.asset_bytes }} bytes</strong></div>
-        <div class="settings-row"><span>exports候補</span><strong>{{ storage.orphan_candidates.export_count }}件 / {{ storage.orphan_candidates.export_bytes }} bytes</strong></div>
+        <p class="field-help">DB参照、revision系列、Job状態、命名、経過時間を照合した結果です。削除や変更は行っていません。</p>
+        {% set audit = storage.orphan_candidates %}
+        {% set summary = audit.classification_summary %}
+        <div class="settings-row"><span>REFERENCED（参照あり）</span><strong>{{ summary.REFERENCED.count }}件 / {{ summary.REFERENCED.bytes }} bytes</strong></div>
+        <div class="settings-row"><span>CONFIRMED_ORPHAN（確認済み）</span><strong>{{ summary.CONFIRMED_ORPHAN.count }}件 / {{ summary.CONFIRMED_ORPHAN.bytes }} bytes</strong></div>
+        <div class="settings-row"><span>UNCERTAIN（判断保留）</span><strong>{{ summary.UNCERTAIN.count }}件 / {{ summary.UNCERTAIN.bytes }} bytes</strong></div>
+        <div class="settings-row"><span>IGNORED_SYSTEM_FILE（除外）</span><strong>{{ summary.IGNORED_SYSTEM_FILE.count }}件 / {{ summary.IGNORED_SYSTEM_FILE.bytes }} bytes</strong></div>
+        <div class="settings-row"><span>再利用可能量の推定</span><strong>{{ audit.reclaimable_bytes }} bytes</strong></div>
+        <div class="settings-row"><span>旧候補（互換表示）assets / exports</span><strong>{{ audit.asset_count }}件 / {{ audit.export_count }}件</strong></div>
+        {% if audit.confirmed_orphans %}
+        <details class="storage-audit-details">
+          <summary>確認済み候補の先頭20件</summary>
+          <div class="storage-audit-list">
+          {% for item in audit.confirmed_orphans[:20] %}
+            <div class="settings-row"><span>{{ item.storage_key }}<small>{{ item.size_bucket }}・{{ item.modified_at }}</small></span><strong>{{ item.size_bytes }} bytes</strong></div>
+          {% endfor %}
+          </div>
+        </details>
+        {% endif %}
+        <p class="field-help">UNCERTAINは自動削除対象外です。確認済み候補も現時点ではdry-run／報告のみです。</p>
+      </section>
+      <section class="surface-panel panel-padding" aria-labelledby="dry-run-heading">
+        <h2 id="dry-run-heading">削除dry-run</h2>
+        <p class="field-help">次回の保持方針検討用です。ここでは削除予定を計算するだけで、ファイルシステムは変更しません。</p>
+        <div class="settings-row"><span>削除予定（CONFIRMED_ORPHANのみ）</span><strong>{{ storage.orphan_dry_run.file_count }}件</strong></div>
+        <div class="settings-row"><span>回収見込み</span><strong>{{ storage.orphan_dry_run.reclaimable_bytes }} bytes</strong></div>
+        <div class="settings-row"><span>自動削除</span><strong>無効</strong></div>
       </section>
       <section class="surface-panel panel-padding" aria-labelledby="retention-heading">
         <h2 id="retention-heading">保持方針</h2>

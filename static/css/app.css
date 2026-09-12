@@ -214,6 +214,12 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .settings-row:first-of-type { padding-top: 0; }
 .settings-row:last-of-type { border-bottom: 0; }
 .settings-row strong { color: var(--ink); font-family: monospace; font-size: 12px; font-weight: 500; }
+.storage-audit-details { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.storage-audit-details summary { cursor: pointer; color: var(--ink); font-size: 12px; font-weight: 600; }
+.storage-audit-list { margin-top: 8px; max-height: 360px; overflow: auto; }
+.storage-audit-list .settings-row { align-items: flex-start; }
+.storage-audit-list .settings-row span { min-width: 0; overflow-wrap: anywhere; }
+.storage-audit-list .settings-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .settings-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .settings-section-heading h2 { margin-bottom: 0; }
 .settings-badge { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); font-size: 9px; white-space: nowrap; }
