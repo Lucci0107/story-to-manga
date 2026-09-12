@@ -64,6 +64,30 @@
         <div class="settings-row"><span>回収見込み</span><strong>{{ storage.orphan_dry_run.reclaimable_bytes }} bytes</strong></div>
         <div class="settings-row"><span>自動削除</span><strong>無効</strong></div>
       </section>
+      <section class="surface-panel panel-padding storage-cleanup-panel" aria-labelledby="cleanup-heading" data-storage-cleanup>
+        <div class="settings-section-heading"><div><p class="eyebrow">ORPHAN CLEANUP</p><h2 id="cleanup-heading">確認済み孤児のCleanup</h2></div><span class="settings-badge">管理者確認が必要</span></div>
+        <p class="field-help">毎回の実行直前に参照グラフとファイル状態を再検証し、CONFIRMED_ORPHANだけを対象にします。UNCERTAIN、参照中、処理中のファイルは削除しません。</p>
+        <button class="button secondary-button" type="button" data-storage-cleanup-dry-run>最新状態でdry-runを作成</button>
+        <div class="storage-cleanup-result" data-storage-cleanup-result role="status" aria-live="polite"></div>
+        <div class="storage-cleanup-summary" aria-label="Cleanup対象の内訳">
+          <div class="settings-row"><span>CONFIRMED_ORPHAN</span><strong data-storage-cleanup-confirmed>{{ storage.orphan_dry_run.file_count }}件</strong></div>
+          <div class="settings-row"><span>UNCERTAIN / 参照中・除外</span><strong data-storage-cleanup-excluded>{{ storage.orphan_candidates.uncertain_count + storage.orphan_candidates.referenced_count + storage.orphan_candidates.ignored_system_count }}件</strong></div>
+          <div class="settings-row"><span>assets / exports</span><strong data-storage-cleanup-categories>{{ storage.orphan_dry_run.would_delete|selectattr('category', 'equalto', 'assets')|list|length }}件 / {{ storage.orphan_dry_run.would_delete|selectattr('category', 'equalto', 'exports')|list|length }}件</strong></div>
+        </div>
+        <form class="storage-cleanup-confirm" data-storage-cleanup-form hidden>
+          <div class="warning-callout"><strong>注意：</strong>削除したファイルは自動復元できません。実行時に対象を再検証します。</div>
+          <label class="check-row"><input type="checkbox" name="cleanup_confirmed" data-storage-cleanup-checkbox> <span>確認済み孤児ファイルを完全に削除することを理解しました。</span></label>
+          <label class="field-label" for="cleanup-confirmation">実行確認（DELETE）</label>
+          <input id="cleanup-confirmation" class="text-input" name="confirmation" maxlength="16" autocomplete="off" data-storage-cleanup-confirmation>
+          <button class="button danger-button" type="submit" data-storage-cleanup-submit disabled>確認済み孤児を削除</button>
+        </form>
+        {% set latest_cleanup = storage.cleanup.latest_plan if storage.cleanup else none %}
+        {% if latest_cleanup %}
+        <p class="field-help" data-storage-cleanup-latest>最新Plan: {{ latest_cleanup.id }}（{{ latest_cleanup.status }}、{{ latest_cleanup.candidate_count }}件）</p>
+        {% else %}
+        <p class="field-help" data-storage-cleanup-latest>Cleanup Planはまだありません。</p>
+        {% endif %}
+      </section>
       <section class="surface-panel panel-padding" aria-labelledby="retention-heading">
         <h2 id="retention-heading">保持方針</h2>
         <p class="field-help">現在はreport-onlyです。古い書き出し、差し替え済み書き出し、放棄された一時／revisionデータを候補として検討しますが、自動削除は有効化していません。</p>
@@ -71,4 +95,5 @@
     </div>
   </main>
 </div>
+<script src="/static/js/storage_admin.js?v=1" defer></script>
 {% endblock %}

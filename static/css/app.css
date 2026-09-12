@@ -220,6 +220,22 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .storage-audit-list .settings-row { align-items: flex-start; }
 .storage-audit-list .settings-row span { min-width: 0; overflow-wrap: anywhere; }
 .storage-audit-list .settings-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.storage-cleanup-panel { border-color: color-mix(in srgb, var(--danger) 24%, var(--line)); }
+.storage-cleanup-panel > .button { margin-top: 6px; }
+.storage-cleanup-result { min-height: 20px; margin-top: 12px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.storage-cleanup-result.success { color: var(--success); }
+.storage-cleanup-result.error { color: var(--danger); }
+.storage-cleanup-confirm { display: grid; gap: 10px; margin-top: 13px; border-top: 1px solid var(--line); padding-top: 15px; }
+.storage-cleanup-confirm[hidden] { display: none; }
+.storage-cleanup-confirm .warning-callout { border: 1px solid color-mix(in srgb, var(--danger) 25%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--danger) 7%, var(--surface)); padding: 10px 12px; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.storage-cleanup-confirm .warning-callout strong { color: var(--danger); }
+.check-row { display: flex; align-items: flex-start; gap: 8px; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.check-row input { width: 17px; height: 17px; flex: 0 0 17px; margin: 1px 0 0; accent-color: var(--accent); }
+.field-label { color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+.text-input { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); padding: 10px 12px; }
+.text-input:focus { border-color: var(--accent); outline: 3px solid var(--accent-soft); }
+.danger-button { min-height: 42px; border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--danger) 10%, var(--surface)); color: var(--danger); padding: 0 16px; font-weight: 700; }
+.danger-button:disabled { cursor: not-allowed; opacity: .45; }
 .settings-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .settings-section-heading h2 { margin-bottom: 0; }
 .settings-badge { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); font-size: 9px; white-space: nowrap; }

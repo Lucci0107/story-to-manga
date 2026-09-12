@@ -291,6 +291,15 @@ class ExportRequest(BaseModel):
         return value
 
 
+class StorageCleanupExecuteRequest(BaseModel):
+    """管理者がCleanup Planの実行を明示確認する入力。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str = Field(min_length=1, max_length=80)
+    confirmation: str = Field(min_length=1, max_length=16)
+
+
 class KnowledgeSelection(BaseModel):
     """Projectで利用するKnowledge Documentの設定。"""
 

@@ -35,6 +35,7 @@ from .schemas import (
     PanelPatch,
     ProjectPatch,
     SettingsRecommendationRequest,
+    StorageCleanupExecuteRequest,
     normalize_analysis,
     normalize_characters,
     normalize_storyboard,
@@ -80,6 +81,15 @@ from .services.storage import (
     get_storage,
     storage_cleanup_dry_run,
     storage_status,
+)
+from .services.storage_cleanup import (
+    StorageCleanupConflict,
+    StorageCleanupConfirmationError,
+    StorageCleanupError,
+    StorageCleanupNotFound,
+    create_cleanup_dry_run_plan,
+    execute_cleanup_plan,
+    latest_cleanup_plan,
 )
 
 
@@ -284,6 +294,11 @@ def storage_admin_report() -> Dict[str, Any]:
     )
     # 管理画面のdry-runは確認済み孤児のみを対象にするが、実際の削除は提供しない。
     report["orphan_dry_run"] = storage_cleanup_dry_run(report["orphan_candidates"])
+    report["cleanup"] = {
+        "latest_plan": latest_cleanup_plan(),
+        "automatic_deletion": False,
+        "execution_requires_confirmation": True,
+    }
     return report
 
 
@@ -1214,6 +1229,79 @@ async def admin_storage_orphan_dry_run(user=Depends(require_admin)):
         raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
     except StorageError as exc:
         raise HTTPException(status_code=503, detail="保存領域の状態を確認できませんでした") from exc
+
+
+def _same_origin_request(request: Request) -> bool:
+    """Cookie認証の管理POSTを同一Originからの要求に限定する。"""
+
+    expected = str(request.base_url).rstrip("/")
+    origin = request.headers.get("origin")
+    if origin and origin.rstrip("/") != expected:
+        return False
+    referer = request.headers.get("referer")
+    if referer and not referer.startswith(f"{expected}/"):
+        return False
+    return True
+
+
+@app.post("/api/admin/storage/cleanup/dry-run")
+async def admin_storage_cleanup_dry_run(
+    request: Request,
+    user=Depends(require_admin),
+):
+    """最新状態を再監査してCleanup Planを作る。ファイルは変更しない。"""
+
+    if not _same_origin_request(request):
+        raise HTTPException(status_code=403, detail="同一Originからの操作だけ許可されています")
+    try:
+        return create_cleanup_dry_run_plan(str(user["id"]))
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail="保存領域の状態を確認できませんでした") from exc
+    except StorageCleanupError as exc:
+        raise HTTPException(status_code=503, detail="Cleanup Planを作成できませんでした") from exc
+
+
+@app.get("/api/admin/storage/cleanup/{plan_id}")
+async def admin_storage_cleanup_plan(plan_id: str, user=Depends(require_admin)):
+    """管理者が保存済みPlanの監査結果を再表示する。"""
+
+    del user
+    plan = db.get_storage_cleanup_plan(plan_id, include_items=True)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Cleanup Planが見つかりません")
+    return {"plan": plan, "automatic_deletion": False}
+
+
+@app.post("/api/admin/storage/cleanup/execute")
+async def admin_storage_cleanup_execute(
+    payload: StorageCleanupExecuteRequest,
+    request: Request,
+    user=Depends(require_admin),
+):
+    """明示確認を受けたPlanだけを直前再検証付きで実行する。"""
+
+    if not _same_origin_request(request):
+        raise HTTPException(status_code=403, detail="同一Originからの操作だけ許可されています")
+    try:
+        return execute_cleanup_plan(
+            payload.plan_id,
+            str(user["id"]),
+            payload.confirmation,
+        )
+    except StorageCleanupConfirmationError as exc:
+        raise HTTPException(status_code=400, detail="確認文字列が一致しません") from exc
+    except StorageCleanupNotFound as exc:
+        raise HTTPException(status_code=404, detail="Cleanup Planが見つかりません") from exc
+    except StorageCleanupConflict as exc:
+        raise HTTPException(status_code=409, detail="別のCleanup処理が実行中です") from exc
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail="保存領域の状態を確認できませんでした") from exc
+    except StorageCleanupError as exc:
+        raise HTTPException(status_code=503, detail="Cleanup処理に失敗しました") from exc
 
 
 @app.get("/admin/storage", response_class=HTMLResponse)

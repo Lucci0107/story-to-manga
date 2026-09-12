@@ -191,6 +191,49 @@ def init_db() -> None:
                 completed_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS storage_cleanup_plans (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL REFERENCES users(id),
+                scan_id TEXT NOT NULL,
+                reference_graph_version INTEGER NOT NULL DEFAULT 1,
+                candidate_count INTEGER NOT NULL DEFAULT 0,
+                candidate_bytes INTEGER NOT NULL DEFAULT 0,
+                confirmed_orphan_count INTEGER NOT NULL DEFAULT 0,
+                uncertain_count INTEGER NOT NULL DEFAULT 0,
+                excluded_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                dry_run INTEGER NOT NULL DEFAULT 1,
+                revalidated_at TEXT,
+                executed_at TEXT,
+                executed_by TEXT REFERENCES users(id),
+                requested_count INTEGER NOT NULL DEFAULT 0,
+                deleted_count INTEGER NOT NULL DEFAULT 0,
+                skipped_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                reclaimed_bytes INTEGER NOT NULL DEFAULT 0,
+                disk_used_before INTEGER,
+                disk_used_after INTEGER,
+                disk_total_bytes INTEGER,
+                error_message TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS storage_cleanup_items (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL REFERENCES storage_cleanup_plans(id) ON DELETE CASCADE,
+                storage_key TEXT NOT NULL,
+                category TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                classification_at_plan TEXT NOT NULL,
+                classification_at_execution TEXT,
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                age_seconds INTEGER,
+                exclusion_reason TEXT,
+                delete_status TEXT NOT NULL,
+                deleted_at TEXT,
+                error_message TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_projects_user_updated
                 ON projects(user_id, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_project_status
@@ -201,9 +244,18 @@ def init_db() -> None:
                 ON knowledge_versions(knowledge_document_id, version_number DESC);
             CREATE INDEX IF NOT EXISTS idx_project_knowledge_project
                 ON project_knowledge(project_id, enabled, priority DESC);
+            CREATE INDEX IF NOT EXISTS idx_storage_cleanup_plans_created
+                ON storage_cleanup_plans(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_storage_cleanup_plans_status
+                ON storage_cleanup_plans(status, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_storage_cleanup_items_plan
+                ON storage_cleanup_items(plan_id, delete_status);
             """
         )
         project_columns = conn.table_columns("projects")
+        cleanup_plan_columns = conn.table_columns("storage_cleanup_plans")
+        if "executed_by" not in cleanup_plan_columns:
+            conn.execute("ALTER TABLE storage_cleanup_plans ADD COLUMN executed_by TEXT")
         if "quality_check_json" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN quality_check_json TEXT")
         if "ai_model_settings_json" not in project_columns:
@@ -917,6 +969,230 @@ def list_storage_references() -> Dict[str, List[str]]:
         "assets": sorted(str(key) for key in (graph.get("assets") or {}).keys()),
         "exports": sorted(str(key) for key in (graph.get("exports") or {}).keys()),
     }
+
+
+def _storage_cleanup_plan_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Cleanup PlanのDB行を監査API向けの辞書へ変換する。"""
+
+    integer_fields = {
+        "reference_graph_version",
+        "candidate_count",
+        "candidate_bytes",
+        "confirmed_orphan_count",
+        "uncertain_count",
+        "excluded_count",
+        "dry_run",
+        "requested_count",
+        "deleted_count",
+        "skipped_count",
+        "failed_count",
+        "reclaimed_bytes",
+        "disk_used_before",
+        "disk_used_after",
+        "disk_total_bytes",
+    }
+    result = dict(row)
+    for field_name in integer_fields:
+        if field_name not in result or result[field_name] is None:
+            continue
+        try:
+            result[field_name] = int(result[field_name])
+        except (TypeError, ValueError):
+            result[field_name] = 0
+    result["dry_run"] = bool(result.get("dry_run", True))
+    return result
+
+
+def _storage_cleanup_item_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Cleanup Plan itemをJSONの証拠付き辞書へ変換する。"""
+
+    result = dict(row)
+    for field_name in ("size_bytes", "age_seconds"):
+        if result.get(field_name) is None:
+            continue
+        try:
+            result[field_name] = int(result[field_name])
+        except (TypeError, ValueError):
+            result[field_name] = 0
+    result["evidence"] = _loads(result.pop("evidence_json", None), {})
+    return result
+
+
+def create_storage_cleanup_plan(
+    created_by: str,
+    scan_id: str,
+    *,
+    reference_graph_version: int = 1,
+    candidate_count: int = 0,
+    candidate_bytes: int = 0,
+    confirmed_orphan_count: int = 0,
+    uncertain_count: int = 0,
+    excluded_count: int = 0,
+    items: Iterable[Mapping[str, Any]] = (),
+) -> Dict[str, Any]:
+    """新しいdry-run Planと対象Itemを保存する。ファイルは変更しない。"""
+
+    plan_id = str(uuid.uuid4())
+    created_at = utc_now()
+    normalized_items = [dict(item) for item in items]
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO storage_cleanup_plans (
+                id, created_at, created_by, scan_id, reference_graph_version,
+                candidate_count, candidate_bytes, confirmed_orphan_count,
+                uncertain_count, excluded_count, status, dry_run
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', 1)
+            """,
+            (
+                plan_id,
+                created_at,
+                str(created_by),
+                str(scan_id)[:120],
+                max(1, int(reference_graph_version)),
+                max(0, int(candidate_count)),
+                max(0, int(candidate_bytes)),
+                max(0, int(confirmed_orphan_count)),
+                max(0, int(uncertain_count)),
+                max(0, int(excluded_count)),
+            ),
+        )
+        for item in normalized_items:
+            storage_key = str(item.get("storage_key") or item.get("key") or "").strip()
+            category = str(item.get("category") or "").strip()
+            if (
+                not storage_key
+                or category not in {"assets", "exports"}
+                or item.get("classification", "CONFIRMED_ORPHAN") != "CONFIRMED_ORPHAN"
+            ):
+                continue
+            evidence = {
+                "reason": str(item.get("reason") or ""),
+                "confidence": item.get("confidence", 0),
+                "legacy_reference_detected": bool(item.get("legacy_reference_detected")),
+                "referencing_entities": item.get("referencing_entities") or [],
+                "modified_at": str(item.get("modified_at") or ""),
+            }
+            conn.execute(
+                """
+                INSERT INTO storage_cleanup_items (
+                    id, plan_id, storage_key, category, size_bytes,
+                    classification_at_plan, evidence_json, age_seconds, delete_status
+                ) VALUES (?, ?, ?, ?, ?, 'CONFIRMED_ORPHAN', ?, ?, 'PLANNED')
+                """,
+                (
+                    str(uuid.uuid4()),
+                    plan_id,
+                    storage_key[:1_000],
+                    category,
+                    max(0, int(item.get("size_bytes", 0))),
+                    _json(evidence),
+                    max(0, int(item.get("age_seconds", 0))),
+                ),
+            )
+    return get_storage_cleanup_plan(plan_id, include_items=True)  # type: ignore[return-value]
+
+
+def get_storage_cleanup_plan(
+    plan_id: str,
+    *,
+    include_items: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Cleanup Planを取得する。秘密情報や絶対パスは保存・返却しない。"""
+
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM storage_cleanup_plans WHERE id = ?",
+            (str(plan_id),),
+        ).fetchone()
+        if not row:
+            return None
+        result = _storage_cleanup_plan_from_row(row)
+        if include_items:
+            items = conn.execute(
+                "SELECT * FROM storage_cleanup_items WHERE plan_id = ? ORDER BY storage_key",
+                (str(plan_id),),
+            ).fetchall()
+            result["items"] = [_storage_cleanup_item_from_row(item) for item in items]
+        return result
+
+
+def get_latest_storage_cleanup_plan() -> Optional[Dict[str, Any]]:
+    """最新のCleanup Plan概要を返す。"""
+
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM storage_cleanup_plans ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    return _storage_cleanup_plan_from_row(row) if row else None
+
+
+def list_storage_cleanup_items(plan_id: str) -> List[Dict[str, Any]]:
+    """指定PlanのItemを監査用に返す。"""
+
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM storage_cleanup_items WHERE plan_id = ? ORDER BY storage_key",
+            (str(plan_id),),
+        ).fetchall()
+    return [_storage_cleanup_item_from_row(row) for row in rows]
+
+
+def update_storage_cleanup_plan(plan_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
+    """許可された監査フィールドだけをPlanへ更新する。"""
+
+    allowed = {
+        "status",
+        "revalidated_at",
+        "executed_at",
+        "executed_by",
+        "requested_count",
+        "deleted_count",
+        "skipped_count",
+        "failed_count",
+        "reclaimed_bytes",
+        "disk_used_before",
+        "disk_used_after",
+        "disk_total_bytes",
+        "error_message",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if updates:
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with connection() as conn:
+            conn.execute(
+                f"UPDATE storage_cleanup_plans SET {assignments} WHERE id = ?",
+                [*updates.values(), str(plan_id)],
+            )
+    return get_storage_cleanup_plan(str(plan_id), include_items=False)
+
+
+def update_storage_cleanup_item(item_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
+    """許可された監査フィールドだけをItemへ更新する。"""
+
+    allowed = {
+        "classification_at_execution",
+        "exclusion_reason",
+        "delete_status",
+        "deleted_at",
+        "error_message",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if "classification_at_execution" in updates:
+        updates["classification_at_execution"] = str(updates["classification_at_execution"])[:40]
+    if updates:
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with connection() as conn:
+            conn.execute(
+                f"UPDATE storage_cleanup_items SET {assignments} WHERE id = ?",
+                [*updates.values(), str(item_id)],
+            )
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM storage_cleanup_items WHERE id = ?",
+            (str(item_id),),
+        ).fetchone()
+    return _storage_cleanup_item_from_row(row) if row else None
 
 
 def update_project(
