@@ -71,6 +71,15 @@ class FailingStoryboardProvider(ExternalStoryboardProvider):
         raise AIProviderError("テスト用の生成失敗", retryable=False)
 
 
+class CategorizedFailingStoryboardProvider(ExternalStoryboardProvider):
+    def storyboard(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AIProviderError(
+            "OpenAI Structured Outputsのスキーマ設定に互換性がありません。更新後に再試行してください",
+            retryable=False,
+            error_category="schema",
+        )
+
+
 class InvalidStoryboardProvider(ExternalStoryboardProvider):
     def storyboard(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         return []
@@ -180,6 +189,43 @@ def test_successful_storyboard_retry_clears_partial_error(
     saved = db.get_project(project["id"], project["user_id"])
     assert saved and saved["status"] == "storyboard_ready"
     assert db.latest_generation_job(project["id"], "storyboard")["id"] == completed["id"]
+
+
+def test_failed_storyboard_retry_preserves_existing_name_and_records_category(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """失敗した再生成で保存済みのネーム・コマ・画像参照を変更しない。"""
+
+    _client, project = _client_and_project(tmp_path)
+    seeded_page = _page()
+    seeded_page["panels"][0].update(
+        {
+            "id": "existing-panel",
+            "image_url": "/media/assets/existing-panel.png",
+            "generation_status": "completed",
+            "generation_prompt": "保存済みの画像Prompt",
+        }
+    )
+    seeded = db.update_project(
+        project["id"],
+        project["user_id"],
+        storyboard=[seeded_page],
+        status="storyboard_ready",
+        current_step="storyboard",
+    )
+    assert seeded
+    before = db.get_project(project["id"], project["user_id"])
+    assert before
+
+    failed = _run_job(before, CategorizedFailingStoryboardProvider(), monkeypatch)
+
+    assert failed["status"] == "failed"
+    assert failed["error_category"] == "schema"
+    saved = db.get_project(project["id"], project["user_id"])
+    assert saved
+    assert saved["storyboard"] == before["storyboard"]
+    assert saved["storyboard"][0]["panels"][0]["image_url"] == "/media/assets/existing-panel.png"
+    assert saved["storyboard"][0]["panels"][0]["generation_status"] == "completed"
 
 
 def test_completed_storyboard_job_repairs_legacy_partial_error_status(

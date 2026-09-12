@@ -27,6 +27,7 @@ class OpenAIRequestError(RuntimeError):
         retryable: bool = False,
         error_code: Optional[str] = None,
         error_type: Optional[str] = None,
+        error_param: Optional[str] = None,
         category: str = "unknown",
     ) -> None:
         super().__init__(message)
@@ -34,6 +35,7 @@ class OpenAIRequestError(RuntimeError):
         self.retryable = retryable
         self.error_code = error_code
         self.error_type = error_type
+        self.error_param = error_param
         self.category = category
 
 
@@ -45,21 +47,28 @@ def _http_error_category(
     status_code: int,
     error_code: Optional[str] = None,
     error_type: Optional[str] = None,
+    error_param: Optional[str] = None,
 ) -> str:
     """HTTP応答を再試行可否の判断に使える安全な分類へ変換する。"""
 
     code = str(error_code or "").lower()
     error_kind = str(error_type or "").lower()
+    param = str(error_param or "").lower()
     if status_code == 401:
         return "authentication"
-    if status_code == 403 and ("model" in code or "model" in error_kind):
+    if (
+        "schema" in code
+        or "schema" in error_kind
+        or "schema" in param
+        or "response_format" in param
+    ):
+        return "schema"
+    if status_code in {400, 403, 404} and ("model" in code or "model" in error_kind):
         return "model_access"
+    if code in {"unsupported_parameter", "invalid_parameter", "parameter_not_supported"}:
+        return "unsupported_parameter"
     if status_code == 403:
         return "permission"
-    if status_code == 404 and (
-        "model" in code or "model" in error_kind
-    ):
-        return "model_access"
     if status_code == 404:
         return "request"
     if status_code == 408:
@@ -84,6 +93,10 @@ def _status_message(status_code: int, category: str) -> str:
         return "OpenAI Projectまたはモデルへのアクセス権限を確認してください"
     if category == "model_access":
         return "選択したOpenAIモデルをこのアカウントでは利用できません"
+    if category == "schema":
+        return "OpenAI Structured Outputsのスキーマ設定に互換性がありません。更新後に再試行してください"
+    if category == "unsupported_parameter":
+        return "選択したOpenAIモデルに対応しないリクエスト設定です。モデル設定を確認して再試行してください"
     if category == "quota":
         return "OpenAI APIの利用上限を確認してください"
     if category == "rate_limit":
@@ -99,7 +112,9 @@ def _status_message(status_code: int, category: str) -> str:
     return "OpenAI APIリクエストに失敗しました"
 
 
-def _safe_error_fields(exc: urllib.error.HTTPError) -> tuple[Optional[str], Optional[str]]:
+def _safe_error_fields(
+    exc: urllib.error.HTTPError,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """エラー本文から分類に必要なコードだけを取り出す。本文は保持しない。"""
 
     try:
@@ -107,15 +122,17 @@ def _safe_error_fields(exc: urllib.error.HTTPError) -> tuple[Optional[str], Opti
         body = json.loads(raw.decode("utf-8"))
         error = body.get("error") if isinstance(body, dict) else None
         if not isinstance(error, dict):
-            return None, None
+            return None, None, None
         code = error.get("code")
         error_type = error.get("type")
+        error_param = error.get("param")
         return (
             str(code)[:120] if isinstance(code, str) else None,
             str(error_type)[:120] if isinstance(error_type, str) else None,
+            str(error_param)[:120] if isinstance(error_param, str) else None,
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, AttributeError):
-        return None, None
+        return None, None, None
 
 
 def request_bytes(
@@ -161,8 +178,8 @@ def request_bytes(
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
-            error_code, error_type = _safe_error_fields(exc)
-            category = _http_error_category(exc.code, error_code, error_type)
+            error_code, error_type, error_param = _safe_error_fields(exc)
+            category = _http_error_category(exc.code, error_code, error_type, error_param)
             # quota枯渇は再試行しても回復しないため、課金APIを余分に呼ばない。
             retryable = _retryable_status(exc.code) and category != "quota"
             if retryable and attempt < attempts - 1:
@@ -174,6 +191,7 @@ def request_bytes(
                 retryable=retryable,
                 error_code=error_code,
                 error_type=error_type,
+                error_param=error_param,
                 category=category,
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:

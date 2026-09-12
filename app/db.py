@@ -1846,7 +1846,11 @@ def recover_stale_character_jobs(
 
 
 def fail_storyboard_job(
-    job_id: str, project_id: str, user_id: str, error: str
+    job_id: str,
+    project_id: str,
+    user_id: str,
+    error: str,
+    error_category: Optional[str] = None,
 ) -> bool:
     """失敗Jobだけをterminal stateへ進め、成功済みJobは降格させない。"""
 
@@ -1855,11 +1859,11 @@ def fail_storyboard_job(
         cursor = conn.execute(
             """
             UPDATE generation_jobs
-            SET status = 'failed', error = ?, completed_at = ?, updated_at = ?
+            SET status = 'failed', error = ?, error_category = ?, completed_at = ?, updated_at = ?
             WHERE id = ? AND project_id = ? AND job_type = 'storyboard'
               AND status IN ('queued', 'processing')
             """,
-            (error, now, now, job_id, project_id),
+            (error, error_category, now, now, job_id, project_id),
         )
         if cursor.rowcount == 0:
             return False

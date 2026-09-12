@@ -160,6 +160,18 @@ def test_responses_structured_output_and_knowledge_are_sent(monkeypatch: pytest.
     assert "霧の町では余白を広くする" in requests[0]["input"]
 
 
+def test_storyboard_schema_is_strict_for_nested_panels() -> None:
+    """Storyboardの全オブジェクトがStructured Outputsのstrict条件を満たす。"""
+
+    from app.services.ai_pipeline import PANEL_SCHEMA, STORYBOARD_SCHEMA
+
+    assert set(STORYBOARD_SCHEMA["properties"]) == set(STORYBOARD_SCHEMA["required"])
+    page_schema = STORYBOARD_SCHEMA["properties"]["pages"]["items"]
+    assert set(page_schema["properties"]) == set(page_schema["required"])
+    assert set(PANEL_SCHEMA["properties"]) == set(PANEL_SCHEMA["required"])
+    assert PANEL_SCHEMA["additionalProperties"] is False
+
+
 def test_character_request_uses_task_specific_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """Character Bibleは一般AI処理より長いが、上限付きの専用timeoutを使う。"""
 
@@ -480,6 +492,50 @@ def test_quota_failure_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     assert raised.value.category == "quota"
     assert raised.value.retryable is False
     assert "利用上限" in str(raised.value)
+
+
+def test_invalid_structured_output_request_is_classified_without_body_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAIのSchema拒否を分類し、本文や秘密を例外へ持ち込まない。"""
+
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            400,
+            "invalid request",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "Invalid schema with internal-secret-value",
+                            "type": "invalid_request_error",
+                            "param": "text.format.schema",
+                            "code": "invalid_json_schema",
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(OpenAIRequestError) as raised:
+        request_json(
+            "https://api.openai.com/v1/responses",
+            api_key="test-key",
+            payload={"model": "gpt-5.6-sol"},
+            timeout=5.0,
+            max_retries=0,
+        )
+
+    assert raised.value.category == "schema"
+    assert raised.value.status_code == 400
+    assert raised.value.error_code == "invalid_json_schema"
+    assert raised.value.error_param == "text.format.schema"
+    assert "internal-secret-value" not in str(raised.value)
+    assert "スキーマ設定" in str(raised.value)
 
 
 def test_storyboard_uses_task_specific_timeout_after_transient_failure(

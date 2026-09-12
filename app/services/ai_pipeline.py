@@ -179,6 +179,10 @@ PANEL_SCHEMA: Dict[str, Any] = {
         "panel_role",
         "scene_type",
         "importance",
+        "head_visible",
+        "hands_required",
+        "props_required",
+        "required_body_extent",
     ],
     "additionalProperties": False,
 }
@@ -614,6 +618,8 @@ def _language_reference(settings: Optional[Dict[str, Any]]) -> str:
 def _is_model_access_error(error: OpenAIRequestError) -> bool:
     """Astraの利用不可だけを判定し、一般的な入力エラーは再試行しない。"""
 
+    if getattr(error, "category", None) == "model_access":
+        return True
     code = str(getattr(error, "error_code", "") or "").lower()
     if code in {
         "model_not_found",
@@ -881,11 +887,15 @@ class OpenAIProvider(DemoAIProvider):
                 )
             except OpenAIRequestError as exc:
                 logger.warning(
-                    "openai request failed task=%s requested_model=%s actual_model=%s category=%s duration_seconds=%.2f client_request_id=%s",
+                    "openai request failed task=%s requested_model=%s actual_model=%s category=%s status_code=%s error_code=%s error_type=%s error_param=%s duration_seconds=%.2f client_request_id=%s",
                     task_key,
                     requested_model,
                     actual_model,
                     getattr(exc, "category", "unknown"),
+                    getattr(exc, "status_code", None),
+                    getattr(exc, "error_code", None),
+                    getattr(exc, "error_type", None),
+                    getattr(exc, "error_param", None),
                     time.monotonic() - request_started,
                     client_request_id,
                 )

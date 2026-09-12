@@ -69,6 +69,8 @@ def test_storyboard_job_ui_restores_terminal_and_reload_states() -> None:
     assert "consecutiveNetworkErrors >= 4" in APP_SCRIPT
     assert "restoreStoryboardJobState();" in APP_SCRIPT
     assert 'goToStep("generate")' in APP_SCRIPT
+    assert "const storyboardErrorMessage = function (job)" in APP_SCRIPT
+    assert "Structured Outputsの設定を確認してから再試行してください。" in APP_SCRIPT
 
 
 def test_character_job_ui_restores_terminal_and_reload_states() -> None:
@@ -132,3 +134,14 @@ def test_mobile_global_theme_control_remains_compact_and_in_header() -> None:
 
     assert ".sidebar-bottom { display: flex; grid-column: 2; grid-row: 1;" in APP_STYLES
     assert ".sidebar-bottom .theme-nav { width: 36px; overflow: hidden; padding: 0; font-size: 0; }" in APP_STYLES
+
+
+def test_mobile_storyboard_controls_wrap_without_forcing_page_width() -> None:
+    """Name画面の操作列が狭い画面でカード幅を押し広げないことを確認する。"""
+
+    assert ".workspace-topbar { min-height: 57px; align-items: flex-start; flex-direction: column; gap: 8px; padding: 10px 15px; }" in APP_STYLES
+    assert ".mobile-project-title { display: flex; width: 100%; min-width: 0; flex: 0 1 auto; }" in APP_STYLES
+    assert ".workspace-topbar-actions { width: 100%; max-width: 100%; margin-left: 0; flex: 0 1 auto; flex-wrap: wrap; gap: 4px; }" in APP_STYLES
+    assert ".page-card-header { align-items: stretch; flex-direction: column; }" in APP_STYLES
+    assert ".page-card-title, .page-card-actions { width: 100%; min-width: 0; }" in APP_STYLES
+    assert ".page-card-actions { display: grid; grid-template-columns: repeat(4, max-content); justify-content: flex-start; }" in APP_STYLES

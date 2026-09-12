@@ -130,6 +130,58 @@ def test_invalid_saved_model_falls_back_without_breaking_and_reasoning_is_capabi
     assert DEFAULT_AI_MODEL_SETTINGS["image_model"] == "gpt-image-2"
 
 
+def test_storyboard_auto_request_uses_allowlisted_model_and_strict_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto設定のStoryboardがallowlist内モデルとResponses形式を使う。"""
+
+    calls: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(
+            response_with_json(
+                {
+                    "pages": [
+                        {
+                            "page_number": 1,
+                            "title": "霧の入口",
+                            "layout": "classic",
+                            "panels": [
+                                {
+                                    "description": "蒼が灯台を見る",
+                                    "shot_type": "遠景",
+                                    "characters": ["蒼"],
+                                    "action": "立ち止まる",
+                                    "expression": "迷い",
+                                    "background": "霧の町",
+                                    "dialogue": [],
+                                    "narration": [],
+                                    "sfx": [],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+
+    result = OpenAIProvider({"preset": "auto"}).storyboard(
+        "蒼は灯台へ向かった。",
+        valid_analysis(),
+        {"target_page_count": 1, "language": "ja"},
+        [{"name": "蒼", "role": "主人公", "appearance": "短髪"}],
+    )
+
+    assert result and result[0]["panels"]
+    assert calls[0]["model"] == "gpt-5.6-sol"
+    assert calls[0]["text"]["format"]["type"] == "json_schema"
+    assert calls[0]["text"]["format"]["strict"] is True
+
+
 def test_astra_unavailable_falls_back_once_and_records_requested_actual_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

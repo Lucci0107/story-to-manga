@@ -941,7 +941,18 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             message,
         )
         try:
-            db.fail_storyboard_job(job_id, project_id, user_id, message)
+            category = getattr(exc, "error_category", None) or (
+                "validation"
+                if isinstance(exc, AIProviderError) and "検証" in message
+                else type(exc).__name__.lower()
+            )
+            db.fail_storyboard_job(
+                job_id,
+                project_id,
+                user_id,
+                message,
+                str(category)[:80],
+            )
         except Exception as state_exc:  # noqa: BLE001
             logger.error(
                 "storyboard job terminal-state update failed project_id=%s job_id=%s error_category=%s",

@@ -667,10 +667,11 @@ body.processing-dialog-open { overflow: hidden; }
   .progress-item { width: auto; min-height: 34px; flex: 0 0 auto; grid-template-columns: auto auto; gap: 6px; padding: 0 9px; }
   .progress-index { font-size: 8px; }
   .project-sidebar-bottom { display: none; }
-  .workspace-topbar { min-height: 57px; padding: 0 15px; }
-  .mobile-project-title { display: flex; }
+  .workspace-topbar { min-height: 57px; align-items: flex-start; flex-direction: column; gap: 8px; padding: 10px 15px; }
+  .mobile-project-title { display: flex; width: 100%; min-width: 0; flex: 0 1 auto; }
+  .mobile-project-title > span { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
   .mobile-menu-button { display: none; }
-  .workspace-topbar-actions { gap: 4px; }
+  .workspace-topbar-actions { width: 100%; max-width: 100%; margin-left: 0; flex: 0 1 auto; flex-wrap: wrap; gap: 4px; }
   .workspace-topbar-actions .save-state { display: none; }
   .workspace-topbar-actions .rename-button { display: none; }
   .workspace-topbar-actions .compact-button { min-height: 32px; padding: 0 10px; font-size: 10px; }
@@ -688,9 +689,12 @@ body.processing-dialog-open { overflow: hidden; }
   .analysis-grid .full, .settings-grid .full, .panel-editor-grid .full { grid-column: auto; }
   .panel-padding { padding: 16px; }
   .story-preview { font-size: 14px; }
-  .page-card-header { align-items: flex-start; }
-  .page-card-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .page-card-header { align-items: stretch; flex-direction: column; }
+  .page-card-title, .page-card-actions { width: 100%; min-width: 0; }
+  .page-card-actions { display: grid; grid-template-columns: repeat(4, max-content); justify-content: flex-start; }
+  .page-card-actions .page-layout-control { grid-column: 1 / -1; }
   .storyboard-panel { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
+  .storyboard-panel > div { min-width: 0; }
   .panel-list { padding: 12px; }
   .generation-panel-row { grid-template-columns: 33px minmax(0, 1fr); }
   .generation-panel-row .panel-status { grid-column: 2; width: fit-content; }

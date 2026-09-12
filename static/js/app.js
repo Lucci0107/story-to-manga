@@ -1427,8 +1427,23 @@
               ? "ネームを作り直す"
               : "ネームを生成する";
       const actionDisabled = storyboardPolling && jobActive ? " disabled" : "";
+      const storyboardErrorMessage = function (job) {
+        const message = job?.error || "Storyboardの生成に失敗しました。再試行できます。";
+        if (message.includes("再試行")) return message;
+        const guidance = {
+          schema: "Structured Outputsの設定を確認してから再試行してください。",
+          model_access: "選択モデルの利用権限を確認してから再試行してください。",
+          authentication: "OpenAIの認証設定を確認してから再試行してください。",
+          quota: "OpenAIの利用上限を確認してから再試行してください。",
+          rate_limit: "しばらく待ってから再試行してください。",
+          timeout: "しばらく待ってから再試行してください。",
+          server: "OpenAIの一時障害が解消してから再試行してください。",
+          request: "リクエスト設定を確認してから再試行してください。"
+        }[job?.error_category];
+        return guidance ? message + " " + guidance : message;
+      };
       const jobNotice = jobStatus === "failed"
-        ? '<div class="form-notice error-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(storyboardJobState.error || "Storyboardの生成に失敗しました。再試行できます。") + '</p></div>'
+        ? '<div class="form-notice error-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(storyboardErrorMessage(storyboardJobState)) + '</p></div>'
         : jobActive
           ? '<div class="form-notice" role="status"><span class="notice-mark">…</span><p>Storyboardを生成しています。再読み込み後もサーバーのJob状態から復元します。</p></div>'
           : "";
