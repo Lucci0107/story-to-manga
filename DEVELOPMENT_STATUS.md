@@ -10,7 +10,9 @@
 - 最終Artwork cropは実画像サイズ・保存済みsafe crop・顔／頭／手／小物領域を使って解き、Preview／PDF／ZIPで同じCompositionラスターを共有します。安全情報がない／必要領域が比率に収まらない既存画像は全体containへ倒し、Artworkを再生成しません。
 - 回帰: 全 **340 passed**。compileall、全`static/js/*.js`の`node --check`、pip check、diff check成功。追加fixtureはellipse mask、sliver、hard-zone balloon、RTL、crop保護、長文抑止、Preview/PDF/ZIP parityを確認。ローカル4ページPDFの各ページを目視し、Preview／ZIP画像とPDF画像のピクセル一致4/4、品質指標（顔・重要対象との文字重なり／sliver／ellipse／読順／text overflow／panel overlap／invalid crop）は全0でした。
 - Browser QA: ローカルの既存テストArtworkでDesktop／390px、Light／Darkを確認。水平overflowなし、unexpected console error/warning 0。既存Artworkの再生成・本番Projectデータ変更・有料画像生成なし。
-- デプロイ／Production read-only QAはこの記録時点では未実施。保護`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は未変更・未追跡のままです。
+- Code commit `5d8cb2b`のGitHub Actions `34974775298`はsuccess、Render deploy `dep-dakkeee7bikc7397tq6g`はlive、`/api/health`はHTTP 200です。Productionの認証済み読み取り専用確認では、既存「本番パネル進捗QA」（8ページ／31コマ／Artwork 2件）のPreview先頭ページとKnowledge Library（登録1件）が開きました。Productionへの保存・再生成は行っていません。
+- 認証済みProductionの表示Project一覧に指定作品「ある外科医の思考」がなく、同一Artworkを使った当該4ページの本番比較は未実施です。`/admin/storage`と`/api/admin/status`はブラウザーが`ERR_BLOCKED_BY_CLIENT`でブロックしたため迂回せず、管理Storage画面のQAは未確認としました。Healthは200、deploy後のRender ERRORログ検索は該当なしです。
+- 保護`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は未変更・未追跡・未コミットのままです。
 
 ## CONFIRMED_ORPHAN Cleanup実行記録（2026-09-12）
 
