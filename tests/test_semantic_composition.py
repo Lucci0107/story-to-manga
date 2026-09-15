@@ -199,6 +199,15 @@ def test_bubble_stays_in_panel_unless_explicit_breakout() -> None:
     prepared = _v3(_page(layout="action", page_role="action", climax=True, count=3))
     assert not any(item["type"] == "bubble" for item in prepared["composition"]["overlays"])
     prepared = _v3(_page(layout="action", page_role="action", climax=True, count=3, bubble_breakout=True))
+    assert not any(item["type"] == "bubble" for item in prepared["composition"]["overlays"])
+    prepared = _v3(_page(
+        layout="action",
+        page_role="action",
+        climax=True,
+        count=3,
+        bubble_breakout=True,
+        bubble_breakout_reason="決め台詞を主役コマからページへ広げる",
+    ))
     assert any(item["type"] == "bubble" and item.get("breakout") for item in prepared["composition"]["overlays"])
 
 

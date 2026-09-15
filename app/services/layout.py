@@ -20,6 +20,10 @@ from .composition import (
     simplify_composition,
     panel_shape_for,
     shape_points,
+    PAGE_SAFE_MARGIN,
+    MIN_DETAIL_HEIGHT_RATIO,
+    MIN_PANEL_HEIGHT_RATIO,
+    panel_allows_detail_geometry,
 )
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 from .text_composition import separate_text_from_unverified_artwork
@@ -40,6 +44,8 @@ PAGE_BOTTOM_MARGIN = 0.06
 PANEL_GAP = 0.014
 TEXT_SAFE_MARGIN = 0.06
 TEXT_GAP = 0.012
+MAX_PAGE_ROWS = 5
+TEXT_ROW_HEIGHT_FLOOR = 0.15
 
 
 def _requested_composition_version(page: Mapping[str, Any], settings: Mapping[str, Any] | None) -> int:
@@ -268,6 +274,18 @@ def _rows_for_panels(
     if cursor < count:
         rows.append(list(range(cursor, count)))
 
+    # 4列×5段までは通常寸法を保って均等に収められる。
+    # それを超えるページは物理的に下限を満たせないため、ここで無理に潰さない。
+    if len(rows) > MAX_PAGE_ROWS and count <= MAX_PAGE_ROWS * 4:
+        row_count = MAX_PAGE_ROWS
+        base_size, remainder = divmod(count, row_count)
+        sizes = [base_size + (index < remainder) for index in range(row_count)]
+        rows = []
+        cursor = 0
+        for size in sizes:
+            rows.append(list(range(cursor, cursor + size)))
+            cursor += size
+
     if template == TEMPLATE_FOUR_PANEL or count < 3 or not force_dominant:
         return rows
     scores = [panel_importance(panel) for panel in panels]
@@ -292,7 +310,8 @@ def _rows_for_panels(
                 after_rows[0] = after + after_rows[0]
             else:
                 replacement.append(after)
-        return replacement + after_rows
+        next_rows = replacement + after_rows
+        return next_rows if len(next_rows) <= MAX_PAGE_ROWS else rows
     return rows
 
 
@@ -447,7 +466,7 @@ def _text_box_size(text: str, item_type: str) -> tuple[float, float, int]:
     width = _clamp(0.34 + min(length, 70) * 0.0026, 0.36, 0.52)
     chars_per_line = max(8, int(width * 27))
     lines = max(1, math.ceil(length / chars_per_line))
-    return width, _clamp(0.075 + lines * 0.052, 0.18, 0.46), lines
+    return width, _clamp(0.075 + lines * 0.052, 0.15, 0.46), lines
 
 
 def _candidate_rects(item_type: str, width: float, height: float, language: str) -> Iterable[Dict[str, float]]:
@@ -491,7 +510,7 @@ def _protected_zones(panel: Mapping[str, Any]) -> List[Dict[str, float]]:
         text = _text_from_panel(panel)
         if "アップ" in text or "close-up" in text:
             return [{"x": 0.22, "y": 0.20, "width": 0.56, "height": 0.62}]
-        return [{"x": 0.27, "y": 0.24, "width": 0.46, "height": 0.58}]
+        return [{"x": 0.30, "y": 0.22, "width": 0.40, "height": 0.38}]
     return []
 
 
@@ -515,21 +534,37 @@ def place_text_elements(
     warnings: List[str] = []
     protected = list(protected_zones) if protected_zones is not None else _protected_zones(panel)
     reserved = reserved_zones or {}
+    character_position = " ".join(
+        str(panel.get(key) or "") for key in ("character_position", "subject_position")
+    ).lower()
+    if any(token in character_position for token in ("right", "右")):
+        preferred_bubble_side = "left"
+    elif any(token in character_position for token in ("left", "左")):
+        preferred_bubble_side = "right"
+    else:
+        preferred_bubble_side = "left" if language == LANGUAGE_EN else "right"
     for item_type, order, text in elements:
         width, height, lines = _text_box_size(text, item_type)
-        valid_candidates: List[tuple[float, float, int, Dict[str, float]]] = []
+        valid_candidates: List[tuple[float, int, int, int, Dict[str, float]]] = []
         for candidate_index, candidate in enumerate(_candidate_rects(item_type, width, height, language)):
             if any(_rect_intersects(candidate, item, TEXT_GAP) for item in placed):
                 continue
             protected_overlap = sum(_intersection_area(candidate, zone) for zone in protected)
-            if protected_zones is not None and protected_overlap > 0.00001:
+            if protected_overlap > 0.00001:
                 continue
             reserved_zone = reserved.get(item_type)
             reserved_overlap = _intersection_area(candidate, reserved_zone) if isinstance(reserved_zone, Mapping) else 0.0
-            # 顔保護を第一にしつつ、予約領域に多く重なる候補を優先する。
-            valid_candidates.append((protected_overlap, -reserved_overlap, candidate_index, candidate))
+            candidate_side = "left" if candidate["x"] + candidate["width"] / 2 < 0.5 else "right"
+            speaker_penalty = int(item_type == "bubble" and candidate_side != preferred_bubble_side)
+            reading_row = candidate_index // 3
+            candidate_side_order = candidate_index % 3
+            # 予約安全域と吹き出し段の読順を守り、同じ段では話者側を優先する。
+            valid_candidates.append((-reserved_overlap, reading_row, speaker_penalty, candidate_side_order, candidate))
         if valid_candidates:
-            _score, _reserved_score, _candidate_index, rect = min(valid_candidates, key=lambda value: (value[0], value[1], value[2]))
+            _reserved_score, _reading_row, _speaker_score, _side_order, rect = min(
+                valid_candidates, key=lambda value: (value[0], value[1], value[2], value[3])
+            )
+            placement_failed = False
         else:
             rect = {}
             for scale in (0.9, 0.8):
@@ -538,38 +573,52 @@ def place_text_elements(
                 candidates = list(_candidate_rects(item_type, scaled_width, scaled_height, language))
                 candidate = next(
                     (item for item in candidates if not any(_rect_intersects(item, existing, TEXT_GAP / 2) for existing in placed)
-                     and (protected_zones is None or not any(_intersection_area(item, zone) > 0.00001 for zone in protected))),
+                     and not any(_intersection_area(item, zone) > 0.00001 for zone in protected)),
                     None,
                 )
                 if candidate:
                     rect = candidate
                     width, height = scaled_width, scaled_height
+                    placement_failed = False
                     break
             if not rect:
                 rect = min(
                     _candidate_rects(item_type, width, height, language),
-                    key=lambda candidate: sum(_intersection_area(candidate, existing) for existing in placed),
+                    key=lambda candidate: (
+                        sum(_intersection_area(candidate, zone) for zone in protected)
+                        + sum(_intersection_area(candidate, existing) for existing in placed)
+                    ),
                 )
+                placement_failed = True
                 warnings.append(f"{item_type}-{order}:配置領域が不足しています")
         side = "left" if rect["x"] + rect["width"] / 2 < 0.5 else "right"
+        if item_type == "narration":
+            chars_per_line = max(10, int(rect["width"] * 31))
+            line_height = 0.045
+        elif item_type == "sfx":
+            chars_per_line = max(6, int(rect["width"] * 22))
+            line_height = 0.05
+        else:
+            chars_per_line = max(8, int(rect["width"] * 27))
+            line_height = 0.052
+        fitted_lines = max(1, math.ceil(len(text) / chars_per_line))
+        available_lines = max(1, int(max(0.0, rect["height"] - 0.055) / line_height))
+        text_fits = fitted_lines <= available_lines
+        font_scale = _clamp((rect["height"] - 0.055) / max(line_height * fitted_lines, 0.001), 0.62, 1.0)
+        protected_collision = any(_intersection_area(rect, zone) > 0.00001 for zone in protected)
+        placed_collision = any(_rect_intersects(rect, existing) for existing in placed)
         placed.append(
             {
                 "id": f"{item_type}-{order}",
                 "type": item_type,
                 "order": order,
                 "text": text,
-                "overflow": (protected_zones is not None and any(_intersection_area(rect, zone) > 0.00001 for zone in protected))
-                or any(_rect_intersects(rect, existing) for existing in placed),
+                "overflow": placement_failed or protected_collision or placed_collision or not text_fits or font_scale < 0.72,
+                "render_suppressed": placement_failed or protected_collision or placed_collision or not text_fits or font_scale < 0.72,
                 **{key: _round(rect[key]) for key in ("x", "y", "width", "height")},
                 "side": side,
-                "line_count": lines,
-                "font_scale": _round(
-                    _clamp(
-                        (rect["height"] - 0.055) / max(0.052 * lines, 0.052),
-                        0.62,
-                        1.0,
-                    )
-                ),
+                "line_count": fitted_lines,
+                "font_scale": _round(font_scale),
             }
         )
     return {
@@ -633,11 +682,19 @@ def reflow_page(
     total_height = 1 - top_margin - PAGE_BOTTOM_MARGIN - panel_gap * max(0, len(rows) - 1)
     weight_total = sum(row_weights) or 1.0
     row_heights = [total_height * weight / weight_total for weight in row_weights]
-    if semantic_mode and rows:
-        # 文字のある段を細い横帯にしない。主役の面積を増やす前に最低高さを配分する。
-        floors = [0.17 if any(panels[index].get("dialogue") or panels[index].get("narration") for index in indices) else 0.10 for indices in rows]
+    if rows:
+        # 文字段は最低高さを先取りし、残りだけを重要度の重みに応じて配る。
+        floors = []
+        for indices in rows:
+            row_panels = [panels[index] for index in indices]
+            if any(panel.get("dialogue") or panel.get("narration") or panel.get("sfx") for panel in row_panels):
+                floors.append(TEXT_ROW_HEIGHT_FLOOR)
+            elif row_panels and all(panel_allows_detail_geometry(panel) for panel in row_panels):
+                floors.append(MIN_DETAIL_HEIGHT_RATIO)
+            else:
+                floors.append(MIN_PANEL_HEIGHT_RATIO)
         floor_total = sum(floors)
-        if floor_total < total_height:
+        if floor_total <= total_height:
             remaining = total_height - floor_total
             row_heights = [floor + remaining * weight / weight_total for floor, weight in zip(floors, row_weights)]
 
@@ -691,9 +748,11 @@ def reflow_page(
                 }
                 geometry["semantic_family"] = family if semantic_mode else ""
                 geometry["dominant"] = bool(semantic_mode and dominant_index == panel_index)
+                existing_direction = panels[panel_index].get("panel_direction")
+                direction_zones = existing_direction.get("protected_zones") if isinstance(existing_direction, Mapping) else None
+                geometry["protected_zones"] = deepcopy(direction_zones) if isinstance(direction_zones, list) and direction_zones else semantic_protected_zones(panels[panel_index])
                 if semantic_mode:
                     geometry["text_safe_zones"] = semantic_text_safe_zones(panels[panel_index], str(language))
-                    geometry["protected_zones"] = semantic_protected_zones(panels[panel_index])
                     # v3は明示的な理由がある場合だけBreakout候補にする。
                     geometry["allow_breakout"] = bool(
                         (geometry["dominant"] or bool(next_page.get("special_emphasis")))
@@ -720,7 +779,7 @@ def reflow_page(
                 panels[panel_index],
                 settings,
                 reserved_zones=geometry.get("text_safe_zones") if semantic_mode else None,
-                protected_zones=geometry.get("protected_zones") if semantic_mode else None,
+                protected_zones=geometry.get("protected_zones"),
             )
             if semantic_mode:
                 current_panel = panels[panel_index]
@@ -751,6 +810,17 @@ def reflow_page(
                     geometry["shape_reason"] = ""
                     geometry["polygon_points"] = shape_points(box, "rectangle")
                 apply_text_direction(panels[panel_index], settings or {})
+            else:
+                current_panel = panels[panel_index]
+                planned = current_panel.get("panel_direction")
+                separate_layout = None if planned else separate_text_from_unverified_artwork(current_panel, geometry, str(language))
+                if separate_layout:
+                    current_panel["text_layout"] = separate_layout
+                    geometry["artwork_viewport"] = separate_layout["artwork_viewport"]
+                    geometry["protected_zones"] = [separate_layout["artwork_viewport"]]
+                    geometry["shape"] = "rectangle"
+                    geometry["shape_reason"] = ""
+                    geometry["polygon_points"] = shape_points(box, "rectangle")
             geometries.append(geometry)
         y += row_height + panel_gap
 

@@ -441,7 +441,7 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .page-sfx { position: absolute; z-index: 2; overflow: hidden; color: #d85f3d; overflow-wrap: anywhere; font-family: serif; font-size: calc(clamp(10px, 1.25vw, 16px) * var(--text-scale, 1)); font-weight: 800; line-height: 1.1; transform: rotate(-6deg); }
 .manga-breakout { position: absolute; overflow: hidden; pointer-events: none; }
 .manga-breakout img { width: 100%; height: 100%; display: block; object-fit: cover; object-position: center top; }
-.manga-breakout-character { clip-path: ellipse(48% 50% at 50% 50%); }
+.manga-breakout-character { clip-path: none; border-radius: 0; }
 .page-overlay-bubble, .page-overlay-narration, .page-overlay-sfx, .page-overlay-title { position: absolute; }
 .page-overlay-title { display: flex; align-items: center; color: #1e201d; font-size: clamp(9px, 1.15vw, 16px); font-weight: 800; letter-spacing: .04em; line-height: 1; }
 .page-overlay-bubble { z-index: 4; }

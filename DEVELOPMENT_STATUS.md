@@ -1,6 +1,16 @@
 # Story to Manga 開発状況
 
-更新日: 2026-09-12
+更新日: 2026-09-15
+
+## Manga Page Composition Quality Fix（2026-09-15）
+
+- 通常の人物Breakoutから楕円マスク生成を廃止し、旧Compositionのellipse／oval／circle／`clip-path`／極端な角丸は保存データを書き換えず描画時に抑止します。例外は明示要求・Inset意味・主Panel保持・crop安全確認・理由をすべて持つ場合だけです。斜め・polygon Panelは維持します。
+- Panelの寸法・面積・アスペクト比下限、detail例外、最大5段のリフローと重要度連動の面積配分を導入しました。16〜20コマは最大4列×5段へ整理し、修復はPanel IDとArtwork参照が完全一致する場合だけ描画時に採用します。
+- 顔／頭／重要な手・器具・小物のhard保護領域、予約された負の空間、話者位置と日本語読順を使って吹き出し候補を決定します。安全に置けない／読みやすく収まらない文字は顔へ重ねたり過度に縮小したりせず描画を抑止し、品質指標に記録します。Narrationは独立した矩形caption規則です。
+- 最終Artwork cropは実画像サイズ・保存済みsafe crop・顔／頭／手／小物領域を使って解き、Preview／PDF／ZIPで同じCompositionラスターを共有します。安全情報がない／必要領域が比率に収まらない既存画像は全体containへ倒し、Artworkを再生成しません。
+- 回帰: 全 **340 passed**。compileall、全`static/js/*.js`の`node --check`、pip check、diff check成功。追加fixtureはellipse mask、sliver、hard-zone balloon、RTL、crop保護、長文抑止、Preview/PDF/ZIP parityを確認。ローカル4ページPDFの各ページを目視し、Preview／ZIP画像とPDF画像のピクセル一致4/4、品質指標（顔・重要対象との文字重なり／sliver／ellipse／読順／text overflow／panel overlap／invalid crop）は全0でした。
+- Browser QA: ローカルの既存テストArtworkでDesktop／390px、Light／Darkを確認。水平overflowなし、unexpected console error/warning 0。既存Artworkの再生成・本番Projectデータ変更・有料画像生成なし。
+- デプロイ／Production read-only QAはこの記録時点では未実施。保護`MANGA_KNOWLEDGE_CATEGORIZED_PACK/`は未変更・未追跡のままです。
 
 ## CONFIRMED_ORPHAN Cleanup実行記録（2026-09-12）
 

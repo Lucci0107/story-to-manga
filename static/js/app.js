@@ -2111,8 +2111,8 @@
 
     function pageStage(page) {
       if (!page) return '<div class="preview-frame-wrap"><p>ページがありません</p></div>';
-      if (page.composition?.style_profile || (page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
-        // 文字の実測配置をブラウザで再解釈せず、PDF・ZIPと同一の描画結果を表示する。
+      if (Number(page.composition?.composition_version || page.composition_version || 1) >= 2 || (page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
+        // Composition v2/v3をブラウザで再解釈せず、PDF・ZIPと同じ最終画像を表示する。
         const src = "/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(page.id) + "/composition.png?v=" + encodeURIComponent(state.updated_at || "");
         const transcript = (page.panels || []).map(function (panel, index) { return "コマ" + (index + 1) + " " + [...(panel.dialogue || []), ...(panel.narration || [])].join(" "); }).join("。 ");
         const hasOverflow = (page.panels || []).some(function (panel) { return (panel.text_layout?.items || []).some(function (item) { return item.overflow; }); });

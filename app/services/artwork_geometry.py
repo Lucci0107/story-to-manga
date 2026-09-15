@@ -224,6 +224,88 @@ def generation_crop_window(panel: Mapping[str, Any], model_id: str | None = None
     return {"x": (1 - crop_width) * ax, "y": (1 - crop_height) * ay, "width": crop_width, "height": crop_height}
 
 
+def resolve_final_crop_window(
+    source_size: tuple[int | float, int | float] | list[int | float],
+    target_size: tuple[int | float, int | float] | list[int | float],
+    *,
+    crop_bounds: Mapping[str, Any] | None = None,
+    protected_regions: list[Mapping[str, Any]] | None = None,
+    anchor_x: str = "center",
+    anchor_y: str = "middle",
+) -> dict:
+    """最終レンダーのcover cropを決め、必須の顔・手・小物領域を含める。"""
+
+    try:
+        source_width, source_height = (float(value) for value in source_size)
+        target_width, target_height = (float(value) for value in target_size)
+    except (TypeError, ValueError):
+        return {"valid": False, "reason": "invalid_dimensions", "window": None}
+    if not all(math.isfinite(value) and value > 0 for value in (source_width, source_height, target_width, target_height)):
+        return {"valid": False, "reason": "invalid_dimensions", "window": None}
+
+    bounds = {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+    if isinstance(crop_bounds, Mapping):
+        try:
+            bounds = {key: float(crop_bounds[key]) for key in ("x", "y", "width", "height")}
+        except (KeyError, TypeError, ValueError):
+            return {"valid": False, "reason": "invalid_crop_bounds", "window": None}
+    if (
+        not all(math.isfinite(value) for value in bounds.values())
+        or bounds["x"] < 0
+        or bounds["y"] < 0
+        or bounds["width"] <= 0
+        or bounds["height"] <= 0
+        or bounds["x"] + bounds["width"] > 1.000001
+        or bounds["y"] + bounds["height"] > 1.000001
+    ):
+        return {"valid": False, "reason": "invalid_crop_bounds", "window": None}
+
+    target_ratio = target_width / target_height
+    bounds_ratio = source_width * bounds["width"] / (source_height * bounds["height"])
+    if bounds_ratio > target_ratio:
+        crop_height = bounds["height"]
+        crop_width = target_ratio * crop_height * source_height / source_width
+    else:
+        crop_width = bounds["width"]
+        crop_height = crop_width * source_width / (target_ratio * source_height)
+    if crop_width <= 0 or crop_height <= 0 or crop_width > bounds["width"] + 1e-6 or crop_height > bounds["height"] + 1e-6:
+        return {"valid": False, "reason": "aspect_does_not_fit_saved_crop", "window": None}
+
+    regions = [item for item in (protected_regions or []) if isinstance(item, Mapping)]
+    x_min = bounds["x"]
+    x_max = bounds["x"] + bounds["width"] - crop_width
+    y_min = bounds["y"]
+    y_max = bounds["y"] + bounds["height"] - crop_height
+    for region in regions:
+        try:
+            rx, ry = float(region["x"]), float(region["y"])
+            rw, rh = float(region["width"]), float(region["height"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (rx, ry, rw, rh)) or rw <= 0 or rh <= 0:
+            continue
+        if rw > crop_width + 1e-6 or rh > crop_height + 1e-6:
+            return {"valid": False, "reason": "protected_region_too_large", "window": None}
+        x_min = max(x_min, rx + rw - crop_width)
+        x_max = min(x_max, rx)
+        y_min = max(y_min, ry + rh - crop_height)
+        y_max = min(y_max, ry)
+    if x_min > x_max + 1e-6 or y_min > y_max + 1e-6:
+        return {"valid": False, "reason": "protected_regions_cannot_fit", "window": None}
+
+    x_anchor = {"left": 0.0, "center": 0.5, "right": 1.0}.get(str(anchor_x), 0.5)
+    y_anchor = {"top": 0.0, "middle": 0.5, "bottom": 1.0}.get(str(anchor_y), 0.5)
+    desired_x = bounds["x"] + (bounds["width"] - crop_width) * x_anchor
+    desired_y = bounds["y"] + (bounds["height"] - crop_height) * y_anchor
+    x = min(x_max, max(x_min, desired_x))
+    y = min(y_max, max(y_min, desired_y))
+    return {
+        "valid": True,
+        "reason": "protected_regions_preserved" if regions else "anchor_crop",
+        "window": {"x": round(x, 6), "y": round(y, 6), "width": round(crop_width, 6), "height": round(crop_height, 6)},
+    }
+
+
 def generation_canvas_zones(panel: Mapping[str, Any], model_id: str | None = None) -> dict:
     """文字と顔の予約位置を、近似生成サイズで失われない位置へ写す。"""
     direction = panel.get("panel_direction") or {}

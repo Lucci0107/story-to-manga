@@ -74,22 +74,31 @@ def test_shape_points_and_diagonal_gutter_are_persisted() -> None:
     assert len(shape_points({"x": 0.1, "y": 0.1, "width": 0.4, "height": 0.3}, "trapezoid")) == 4
 
 
-def test_important_panel_gets_dominant_area_and_breakout_layer() -> None:
+def test_important_panel_gets_dominant_area_without_automatic_breakout() -> None:
     prepared = ensure_page_layout(_page(6, "action"), {"language": "ja"})
     panels = prepared["composition"]["panels"]
     critical = next(item for item in panels if item["panel_id"] == "panel-1")
     total = sum(polygon_area(item["polygon_points"]) for item in panels)
     assert 0.20 < polygon_area(critical["polygon_points"]) / total < 0.55
-    assert prepared["composition"]["breakouts"]
-    assert all(0.04 <= item["x"] <= 0.74 and 0.04 <= item["y"] <= 0.62 for item in prepared["composition"]["breakouts"])
+    assert prepared["composition"]["breakouts"] == []
 
 
 def test_bubble_and_sfx_can_move_to_page_level_without_duplicate_panel_text() -> None:
-    prepared = ensure_page_layout(_page(3, "action"), {"language": "ja"})
+    page = _page(3, "action")
+    page["bubble_breakout"] = True
+    page["bubble_breakout_reason"] = "ページ全体へ視線を導く決め台詞"
+    prepared = ensure_page_layout(page, {"language": "ja"})
     overlays = prepared["composition"]["overlays"]
     assert any(item["type"] == "bubble" and item.get("breakout") for item in overlays)
-    assert any(item["type"] == "sfx" and item.get("breakout") for item in overlays)
+    assert not any(item["type"] == "sfx" and item.get("breakout") for item in overlays)
     assert {tuple(item.values()) for item in prepared["composition"]["moved_text_items"]}
+
+
+def test_page_emphasis_alone_does_not_move_dialogue_or_sfx_outside_panel() -> None:
+    page = _page(3, "action")
+    page["special_emphasis"] = True
+    prepared = ensure_page_layout(page, {"language": "ja"})
+    assert not any(item.get("breakout") for item in prepared["composition"]["overlays"])
 
 
 def test_first_page_title_is_small_and_later_pages_do_not_repeat_it() -> None:
@@ -160,12 +169,15 @@ def test_composition_quality_detects_uniform_and_coverage_failure() -> None:
         panel["polygon_points"] = [[panel["x"], panel["y"]], [panel["x"] + panel["width"], panel["y"]], [panel["x"] + panel["width"], panel["y"] + panel["height"]], [panel["x"], panel["y"] + panel["height"]]]
     prepared["composition"]["panels"][0]["artwork_coverage"] = 0.8
     keys = {issue["key"] for issue in composition_quality_issues(prepared)}
-    assert "composition-shape-uniform-1" in keys
+    assert "composition-shape-uniform-1" not in keys
     assert "composition-coverage-1-1" in keys
 
 
 def test_page_level_bubble_collision_is_reported() -> None:
-    prepared = ensure_page_layout(_page(3, "action"), {"language": "ja"})
+    page = _page(3, "action")
+    page["bubble_breakout"] = True
+    page["bubble_breakout_reason"] = "ページの決め台詞として配置"
+    prepared = ensure_page_layout(page, {"language": "ja"})
     bubbles = [item for item in prepared["composition"]["overlays"] if item["type"] == "bubble"]
     assert bubbles
     prepared["composition"]["overlays"].append({**bubbles[0], "id": "overlap-bubble", "x": bubbles[0]["x"], "y": bubbles[0]["y"]})

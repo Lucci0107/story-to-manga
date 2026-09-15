@@ -11,7 +11,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
@@ -21,8 +21,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 from .artwork import render_panel_image
-from .composition import PAGE_SIZE, composition_for_page, moved_text_item_set, normalize_polygon
-from .layout import ensure_page_layout
+from .composition import PAGE_SIZE, composition_for_page, composition_quality_issues, is_explicit_elliptical_inset, moved_text_item_set, normalize_polygon
+from .artwork_geometry import resolve_final_crop_window
+from .layout import ensure_page_layout, reflow_page
 from .storage import (
     StorageError,
     StorageObjectNotFound,
@@ -40,12 +41,61 @@ class CompositionReadabilityError(ValueError):
     """配置修正が必要なページを不自然な完成品として書き出さない。"""
 
 
+_RENDER_REPAIR_ISSUE_PREFIXES = (
+    "composition-sliver-",
+    "composition-panel-overlap-",
+    "composition-reading-order-",
+    "composition-protected-collision-",
+    "composition-v3-face-collision-",
+    "composition-overlay-subject-collision-",
+    "composition-v3-overlay-face-collision-",
+    "composition-overlay-collision-",
+)
+
+
+def prepare_page_for_render(page: Mapping[str, Any], settings: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+    """保存済みデータを変更せず、明確な構造違反だけを描画時に修復する。"""
+
+    canonical_settings = dict(settings or {})
+    prepared = ensure_page_layout(page, canonical_settings)
+    composition = composition_for_page(prepared)
+    if composition != prepared.get("composition"):
+        prepared["composition"] = composition
+    if int(composition.get("composition_version", 1) or 1) < 2:
+        return prepared
+    issues = composition_quality_issues(prepared)
+    if not any(issue["key"].startswith(_RENDER_REPAIR_ISSUE_PREFIXES) for issue in issues):
+        normalized = composition_for_page(prepared)
+        if normalized != prepared.get("composition"):
+            prepared["composition"] = normalized
+        return prepared
+    original_artwork = [
+        (str(panel.get("id")), panel.get("image_url"))
+        for panel in prepared.get("panels", [])
+        if isinstance(panel, Mapping)
+    ]
+    repaired = reflow_page(prepared, canonical_settings, _allow_fallback=False)
+    repaired_artwork = [
+        (str(panel.get("id")), panel.get("image_url"))
+        for panel in repaired.get("panels", [])
+        if isinstance(panel, Mapping)
+    ]
+    # geometry修復はPanel件数とArtwork参照を完全に保つ場合だけ採用する。
+    result = repaired if repaired_artwork == original_artwork else prepared
+    normalized = composition_for_page(result)
+    if normalized != result.get("composition"):
+        result["composition"] = normalized
+    return result
+
+
 def validate_export_readability(project: Mapping[str, Any]) -> None:
     for raw_page in project.get("storyboard", []) or []:
-        page = ensure_page_layout(raw_page, project.get("settings") or {})
+        page = prepare_page_for_render(raw_page, project.get("settings") or {})
+        composition = composition_for_page(page)
+        composition_version = int(composition.get("composition_version", 1) or 1)
         for panel in page.get("panels", []) or []:
             layout = panel.get("text_layout") or {}
-            if int(page.get("composition_version", 1) or 1) >= 3 and any(item.get("overflow") for item in layout.get("items", [])):
+            if composition_version >= 2 and any(item.get("overflow") for item in layout.get("items", [])):
                 raise CompositionReadabilityError(f"ページ{page.get('page_number', '')}の文字領域が不足しています。コマを広げるかページを分割してから再計算してください。画像再生成は不要です。")
 
 
@@ -179,37 +229,71 @@ def _crop_image_to_box(
     return image.crop(box)
 
 
-def _crop_persisted_generation_window(image: Image.Image, panel: Mapping[str, Any]) -> Image.Image:
-    """生成時に保存したoverscan sourceのfinal cropだけを適用する。
+def _crop_panel_source_for_box(
+    image: Image.Image,
+    panel: Mapping[str, Any],
+    width: int,
+    height: int,
+    crop_anchor_x: str,
+    crop_anchor_y: str,
+) -> tuple[Image.Image, bool]:
+    """実際に描くcropを一度だけ解き、重要領域を含める。"""
 
-    新規のoverscan画像はsource assetを保持し、ここでは保存済み正規化座標を
-    読むだけにする。Preview/PDF/ZIPごとに別のcropを再計算しない。
-    """
     direction = panel.get("panel_direction") if isinstance(panel, Mapping) else None
-    if not isinstance(direction, Mapping):
-        return image
-    canvas = direction.get("generation_canvas")
-    if not isinstance(canvas, Mapping) or str(canvas.get("strategy", "")) != "overscan_safe_crop":
-        return image
-    crop = canvas.get("safe_crop") or canvas.get("final_crop_window")
-    if not isinstance(crop, Mapping):
-        return image
-    try:
-        x, y = float(crop.get("x", 0)), float(crop.get("y", 0))
-        width, height = float(crop.get("width", 1)), float(crop.get("height", 1))
-    except (TypeError, ValueError):
-        return image
-    if not all(math.isfinite(value) for value in (x, y, width, height)):
-        return image
-    if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
-        return image
-    if width >= .99999 and height >= .99999 and x <= .00001 and y <= .00001:
-        return image
-    left = max(0, min(image.width - 1, round(x * image.width)))
-    top = max(0, min(image.height - 1, round(y * image.height)))
-    right = max(left + 1, min(image.width, round((x + width) * image.width)))
-    bottom = max(top + 1, min(image.height, round((y + height) * image.height)))
-    return image.crop((left, top, right, bottom))
+    direction = direction if isinstance(direction, Mapping) else {}
+    canvas = direction.get("generation_canvas") if isinstance(direction.get("generation_canvas"), Mapping) else {}
+    bounds = None
+    if str(canvas.get("strategy") or "") == "overscan_safe_crop":
+        bounds = canvas.get("safe_crop") or canvas.get("final_crop_window")
+    regions: List[Mapping[str, Any]] = []
+    stored_regions = canvas.get("regions") if isinstance(canvas.get("regions"), Mapping) else {}
+    for key in ("face_safe_zone", "head_safe_zone", "important_hand_zone", "important_prop_zone"):
+        value = stored_regions.get(key)
+        if isinstance(value, Mapping):
+            regions.append(value)
+    if not regions:
+        for key in ("face_safe_zone", "head_safe_zone", "important_hand_zone", "important_prop_zone"):
+            value = direction.get(key)
+            if isinstance(value, Mapping):
+                regions.append(value)
+    if not regions and not isinstance(bounds, Mapping):
+        # 顔・手などの保護情報がない既存画像をcoverで切らない。
+        # 不明な画面外へ主役がいる可能性があるため、全体をcontainする。
+        fitted = ImageOps.contain(image, (max(1, width), max(1, height)), method=Image.Resampling.LANCZOS)
+        background = Image.new("RGB", (max(1, width), max(1, height)), (245, 243, 235))
+        background.paste(fitted, ((background.width - fitted.width) // 2, (background.height - fitted.height) // 2))
+        return background, False
+    plan = resolve_final_crop_window(
+        image.size,
+        (max(1, width), max(1, height)),
+        crop_bounds=bounds if isinstance(bounds, Mapping) else None,
+        protected_regions=regions,
+        anchor_x=crop_anchor_x,
+        anchor_y=crop_anchor_y,
+    )
+    if plan.get("valid") and isinstance(plan.get("window"), Mapping):
+        window = plan["window"]
+        left = max(0, min(image.width - 1, round(float(window["x"]) * image.width)))
+        top = max(0, min(image.height - 1, round(float(window["y"]) * image.height)))
+        right = max(left + 1, min(image.width, round((float(window["x"]) + float(window["width"])) * image.width)))
+        bottom = max(top + 1, min(image.height, round((float(window["y"]) + float(window["height"])) * image.height)))
+        return image.crop((left, top, right, bottom)).resize((max(1, width), max(1, height)), Image.Resampling.LANCZOS), True
+
+    # 必須領域がtarget比率へ収まらない場合はcoverで切らず、全体をcontainする。
+    safe_source = image
+    if isinstance(bounds, Mapping):
+        try:
+            left = max(0, min(image.width - 1, round(float(bounds["x"]) * image.width)))
+            top = max(0, min(image.height - 1, round(float(bounds["y"]) * image.height)))
+            right = max(left + 1, min(image.width, round((float(bounds["x"]) + float(bounds["width"])) * image.width)))
+            bottom = max(top + 1, min(image.height, round((float(bounds["y"]) + float(bounds["height"])) * image.height)))
+            safe_source = image.crop((left, top, right, bottom))
+        except (KeyError, TypeError, ValueError):
+            safe_source = image
+    fitted = ImageOps.contain(safe_source, (max(1, width), max(1, height)), method=Image.Resampling.LANCZOS)
+    background = Image.new("RGB", (max(1, width), max(1, height)), (245, 243, 235))
+    background.paste(fitted, ((background.width - fitted.width) // 2, (background.height - fitted.height) // 2))
+    return background, False
 
 
 def _panel_asset(
@@ -244,7 +328,7 @@ def _panel_asset(
 
 def _panel_text_items(panel: Dict[str, Any]) -> List[Dict[str, Any]]:
     layout = panel.get("text_layout") or {}
-    return [dict(item) for item in layout.get("items", []) if isinstance(item, dict)]
+    return [dict(item) for item in layout.get("items", []) if isinstance(item, dict) and not item.get("render_suppressed")]
 
 
 def _draw_panel_text(
@@ -311,20 +395,14 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
     c.setTitle(project.get("title", "Story to Manga"))
     settings = project.get("settings") or {}
     for raw_page in project.get("storyboard", []):
-        page = ensure_page_layout(raw_page, settings)
+        page = prepare_page_for_render(raw_page, settings)
         composition = composition_for_page(page)
         c.setPageSize(A4)
         if int(composition.get("composition_version", 1) or 1) >= 2:
-            measured = bool(composition.get("style_profile")) or any((panel.get("text_layout") or {}).get("placement_mode") == "reserved_text_band" for panel in page.get("panels", []))
-            if measured:
-                # 実測文字のページはPreview/ZIPと同じピクセルを利用する。
-                # A4用に再描画するとcropと字形が変わるため、ページ比率も揃える。
-                rendered = render_page_png(project, page, storage)
-                output_height = width * PAGE_SIZE[1] / PAGE_SIZE[0]
-                c.setPageSize((width, output_height))
-            else:
-                rendered = render_page_png(project, page, storage, width=max(1, round(width)), height=max(1, round(height)))
-                output_height = height
+            # Compositionは常に同じ3:4ラスターを使い、A4への再cropや縦横伸縮を避ける。
+            rendered = render_page_png(project, page, storage)
+            output_height = width * PAGE_SIZE[1] / PAGE_SIZE[0]
+            c.setPageSize((width, output_height))
             c.drawImage(ImageReader(BytesIO(rendered)), 0, 0, width, output_height, preserveAspectRatio=False, mask="auto")
             _draw_pdf_accessible_text(c, project, page)
             c.showPage()
@@ -430,9 +508,15 @@ def _pil_panel_image(
             return placeholder
         draw.text((width // 2, height // 2), "ARTWORK", fill=(85, 87, 82), font=_load_page_font(18), anchor="mm")
         return placeholder
-    source = _crop_persisted_generation_window(source, panel)
-    source = _crop_image_to_box(source, width, height, "fill", crop_anchor_x, crop_anchor_y)
-    return source.resize((max(1, width), max(1, height)), Image.Resampling.LANCZOS)
+    prepared, _crop_valid = _crop_panel_source_for_box(
+        source,
+        panel,
+        max(1, width),
+        max(1, height),
+        crop_anchor_x,
+        crop_anchor_y,
+    )
+    return prepared
 
 
 def _pil_lines(text: str, line_count: int) -> str:
@@ -649,7 +733,7 @@ def _render_composition_png(
     # Breakoutは元Artworkを再利用し、画像生成や外部サービスを追加で呼ばない。
     # 文字が人物の前景に来るよう、BreakoutをPanel内の文字より先に描く。
     for breakout in composition.get("breakouts", []):
-        if not isinstance(breakout, Mapping) or not breakout.get("enabled", True):
+        if not isinstance(breakout, Mapping) or not breakout.get("enabled", True) or breakout.get("render_suppressed"):
             continue
         panel = panel_lookup.get(str(breakout.get("source_panel_id") or breakout.get("panel_id")), {})
         bx = round(float(breakout.get("x", 0)) * width)
@@ -658,10 +742,20 @@ def _render_composition_png(
         bh = max(1, round(float(breakout.get("height", 0.3)) * height))
         asset = _pil_panel_image(project, panel, bw, bh, storage, crop_anchor_x="center", crop_anchor_y="top").convert("RGBA")
         mask = Image.new("L", (bw, bh), 0)
-        if str(breakout.get("clip_shape", "ellipse")) == "ellipse":
+        clip_shape = str(breakout.get("clip_shape") or "rectangle").strip().lower()
+        if clip_shape in {"ellipse", "oval", "circle"} and is_explicit_elliptical_inset(breakout):
             ImageDraw.Draw(mask).ellipse((0, 0, bw - 1, bh - 1), fill=255)
+        elif clip_shape == "polygon" and isinstance(breakout.get("clip_points"), list):
+            points = []
+            for point in breakout["clip_points"][:12]:
+                if isinstance(point, (list, tuple)) and len(point) >= 2:
+                    points.append((round(float(point[0]) * bw), round(float(point[1]) * bh)))
+            if len(points) >= 3:
+                ImageDraw.Draw(mask).polygon(points, fill=255)
+            else:
+                ImageDraw.Draw(mask).rectangle((0, 0, bw - 1, bh - 1), fill=255)
         else:
-            ImageDraw.Draw(mask).rectangle((0, 0, bw, bh), fill=255)
+            ImageDraw.Draw(mask).rectangle((0, 0, bw - 1, bh - 1), fill=255)
         image.paste(asset, (bx, by), mask)
 
     moved = moved_text_item_set(composition)
@@ -701,7 +795,7 @@ def render_page_png(
 ) -> bytes:
     """Preview/PDFと同じ保存済みgeometryからページ画像を生成する。"""
 
-    prepared = ensure_page_layout(page, project.get("settings") or {})
+    prepared = prepare_page_for_render(page, project.get("settings") or {})
     composition = composition_for_page(prepared)
     if int(composition.get("composition_version", 1) or 1) >= 2:
         return _render_composition_png(project, prepared, storage, composition, width, height)
@@ -732,7 +826,7 @@ def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         storyboard = [
-            ensure_page_layout(page, project.get("settings") or {})
+            prepare_page_for_render(page, project.get("settings") or {})
             for page in project.get("storyboard", [])
         ]
         manifest = {
