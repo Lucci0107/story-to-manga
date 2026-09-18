@@ -16,7 +16,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 from urllib.parse import urlparse
 
 from .config import get_settings
@@ -66,7 +66,7 @@ def connection() -> DatabaseConnection:
     return database_connection()
 
 
-def init_db() -> None:
+def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
     """テーブルとインデックスを作成する。"""
 
     with connection() as conn:
@@ -373,6 +373,9 @@ def init_db() -> None:
                     "UPDATE projects SET settings_json = ?, storyboard_json = ? WHERE id = ?",
                     (_json(next_settings), _json(next_storyboard), row["id"]),
                 )
+        # WAL補助ファイルが存在する間に監視用read-only接続を確保する。
+        if on_ready is not None:
+            on_ready()
     # 環境変数が揃っている場合だけ初期管理者を作成し、未設定でも起動を妨げない。
     bootstrap_admin()
 

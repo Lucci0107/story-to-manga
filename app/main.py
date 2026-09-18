@@ -25,6 +25,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import db
 from .config import BASE_DIR, ensure_data_dirs, get_settings
+from .observability import install_observer
 from .schemas import (
     ExportRequest,
     GenerateRequest,
@@ -96,10 +97,10 @@ from .services.storage_cleanup import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("story_to_manga")
 
-ensure_data_dirs()
-db.init_db()
-
 app = FastAPI(title="Story to Manga", version="0.1.0")
+prepare_observer = install_observer(app)
+ensure_data_dirs()
+db.init_db(on_ready=prepare_observer)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
