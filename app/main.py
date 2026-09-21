@@ -27,6 +27,7 @@ from . import db
 from .config import BASE_DIR, ensure_data_dirs, get_settings
 from .observability import install_observer
 from .schemas import (
+    ApprovalRequest,
     ExportRequest,
     GenerateRequest,
     AIModelSettingsPayload,
@@ -43,6 +44,8 @@ from .schemas import (
     validate_settings,
     validate_storyboard,
 )
+from .services.generation_design import design_data, design_hash, audit_design, public_design
+from .services.architect import recommend_architect, compile_architect
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider
 from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artwork
 from .services.extraction import StoryExtractionError, extract_uploaded_file
@@ -578,18 +581,20 @@ def queue_panels(
         except StorageError as exc:
             raise HTTPException(status_code=503, detail="保存領域の状態を確認できないため、生成を開始できません") from exc
 
+    approvals = {}
+    for candidate in candidates:
+        page, _ = find_panel(project, str(candidate['id']))
+        errors = audit_design(project, page, candidate)
+        if errors: raise HTTPException(422, ' / '.join(errors))
+        digest = design_hash(generation_design(project,page,candidate,user_id))
+        approval = db.current_generation_approval(project['id'],candidate['id'],digest,user_id)
+        if not approval:
+            raise HTTPException(409, 'このコマの最新設計を確認し、「この内容で生成」を押してください。保存・画面移動は承認になりません。')
+        approvals[candidate['id']] = approval
     jobs: List[Dict[str, Any]] = []
     batch_id = secrets.token_hex(12) if candidates else None
     for panel in candidates:
-        revision = int(panel.get("revision", 0))
-        suffix = secrets.token_hex(4) if force else str(revision)
-        idempotency_key = f"panel:{project['id']}:{panel['id']}:{suffix}"
-        job = db.create_generation_job(
-            project["id"],
-            str(panel["id"]),
-            idempotency_key,
-            batch_id=batch_id,
-        )
+        job = db.queue_approved_generation(approvals[panel['id']], batch_id)
         if job and job.get("status") in {"queued", "processing"}:
             jobs.append(job)
 
@@ -654,6 +659,10 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     for key in ("description", "action", "expression", "background")
                 ),
             )
+            approval = db.generation_job_approval(job_id)
+            digest = design_hash(generation_design(latest,_latest_page,latest_panel,user_id))
+            if not approval or approval['design_hash'] != digest:
+                raise ArtworkGenerationError("承認後に設計が変わりました。最新設計を再確認してください。")
             model_settings = project_ai_model_settings(latest, user_id)
             from .services.model_registry import model_for_task
 
@@ -679,14 +688,19 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                     )
                     record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
             latest_panel["generation_prompt"] = append_knowledge_prompt(base_prompt, knowledge_context)
-            if latest_panel.get("panel_direction"):
+            if latest_panel.get("panel_direction") or latest.get("settings",{}).get("rendering_style_id"):
                 from .services.ai_pipeline import compose_panel_prompt
 
                 # LLMの要約や手入力Promptから確定構図が脱落しないよう、生成境界で付加する。
                 latest_panel["generation_prompt"] += "\n確定済み構図・描画条件:\n" + compose_panel_prompt(latest_panel, latest.get("characters") or [], latest.get("settings") or {})
+            latest_panel["generation_prompt"] += compile_architect(latest.get("settings") or {}, latest_panel)
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
             # 外部画像APIの待機中も、Jobが生きていることを記録する。
             db.touch_generation_job(job_id)
+            current_project = db.get_project(project_id,user_id)
+            current_page,current_panel = find_panel(current_project,str(job['target_id']))
+            if design_hash(generation_design(current_project,current_page,current_panel,user_id)) != approval['design_hash']:
+                raise ArtworkGenerationError("生成準備中に設計が変わりました。再確認してください。")
             storage_key = save_panel_artwork(
                 latest["id"], latest_panel, latest["settings"], model_settings
             )
@@ -1817,6 +1831,8 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
         value is not None
         for value in (payload.original_text, payload.settings, payload.analysis, payload.characters, payload.storyboard)
     )
+    if clear_quality_check:
+        db.invalidate_generation_approvals(project_id,user["id"])
     updated = db.update_project(
         project_id,
         user["id"],
@@ -2059,6 +2075,8 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
     project = require_project(project_id, user["id"])
     _page, panel = find_panel(project, panel_id)
     values = payload.model_dump(exclude_unset=True)
+    if values:
+        db.invalidate_generation_approvals(project_id,user["id"])
     visual_changed = False
     structure_changed = False
     structure_keys = {"description", "characters", "shot_type", "action", "expression", "background"}
@@ -2137,6 +2155,96 @@ async def api_repair_page_layout(project_id: str, page_id: str, composition_vers
         clear_quality_check=True,
     )
     return {"project": project_view(updated or project), "repaired_page_id": page_id}
+
+
+def generation_design(project: dict, page: dict, panel: dict, user_id: str) -> dict:
+    selections = db.list_project_knowledge(project["id"], user_id) or []
+    references = [
+        {"document_id": item["knowledge_document_id"],
+         "version_id": item.get("selected_version_id") if item.get("mode") == "pinned" else item.get("active_version_id"),
+         "priority": item.get("priority"), "scope": item.get("scope")}
+        for item in selections
+        if item.get("enabled") and item.get("document_active") and not item.get("document_archived")
+        and set(item.get("scope") or []) & {"all", "panel_prompt", "image_generation"}
+    ]
+    return design_data(
+        project, page, panel, project_ai_model_settings(project, user_id), references
+    )
+
+
+@app.get("/api/architect/catalog")
+async def api_architect_catalog(user=Depends(current_user)):
+    from .services.architect import (
+        STYLE_PROFILES,
+        CATEGORIES,
+        TONES,
+        GENRES,
+        PROPORTIONS,
+        MOODS,
+    )
+
+    return dict(
+        styles=STYLE_PROFILES,
+        categories=CATEGORIES,
+        tones=TONES,
+        genres=GENRES,
+        proportions=PROPORTIONS,
+        moods=MOODS,
+    )
+
+
+@app.post("/api/projects/{project_id}/settings/architect-recommendation")
+async def api_architect_recommendation(project_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    return {
+        "settings": recommend_architect(
+            project.get("analysis") or {}, project.get("settings") or {}
+        )
+    }
+
+
+@app.get("/api/projects/{project_id}/panels/{panel_id}/design")
+async def api_generation_design(
+    project_id: str, panel_id: str, user=Depends(current_user)
+):
+    project = require_project(project_id, user["id"])
+    page, panel = find_panel(project, panel_id)
+    digest = design_hash(generation_design(project, page, panel, user["id"]))
+    view = public_design(project, page, panel, digest)
+    view["models"] = project_ai_model_settings(project, user["id"])
+    approval = db.current_generation_approval(project_id, panel_id, digest, user["id"])
+    if approval and not view["errors"]:
+        view["state"] = "USER_APPROVED"
+    if panel.get("generation_status") in {"queued", "processing"}:
+        view["state"] = "GENERATING"
+    if panel.get("generation_status") == "completed":
+        view["state"] = "QA" if project.get("quality_check") else "GENERATED"
+    if panel.get("generation_status") == "failed":
+        view["state"] = "NEEDS_USER_REVIEW"
+    return view
+
+
+@app.post("/api/projects/{project_id}/panels/{panel_id}/approval")
+async def api_approve_generation(
+    project_id: str, panel_id: str, payload: ApprovalRequest, user=Depends(current_user)
+):
+    project = require_project(project_id, user["id"])
+    page, panel = find_panel(project, panel_id)
+    data = generation_design(project, page, panel, user["id"])
+    digest = design_hash(data)
+    if digest != payload.design_hash:
+        raise HTTPException(409, "設計が変更されました。最新の内容を確認してください。")
+    errors = audit_design(project, page, panel)
+    if errors:
+        raise HTTPException(422, " / ".join(errors))
+    approval = db.approve_generation_design(
+        project_id, panel_id, digest, data, user["id"]
+    )
+    return {
+        "state": "USER_APPROVED",
+        "design_hash": digest,
+        "approved_at": approval["approved_at"],
+    }
 
 
 @app.post("/api/projects/{project_id}/generate")

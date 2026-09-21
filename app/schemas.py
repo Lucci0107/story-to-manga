@@ -76,6 +76,37 @@ ALLOWED_PANEL_SHAPES = {"rectangle", "wide", "tall", "trapezoid", "slanted-left"
 class SettingsPayload(BaseModel):
     """漫画化設定。"""
 
+    script_tone_primary: Optional[str] = None
+    script_tone_secondary: Optional[str] = None
+    script_tone_reason: str = Field(default="", max_length=500)
+    script_tone_source: str = "user"
+    script_tone_custom: str = Field(default="", max_length=500)
+    style_category: Optional[str] = None
+    rendering_style_id: Optional[str] = None
+    rendering_style_custom: str = Field(default="", max_length=1000)
+    style_requested_mode: str = "user"
+    style_reason: str = Field(default="", max_length=500)
+    visual_genre: Optional[str] = None
+    character_proportion: Optional[str] = None
+    mood_lighting: Optional[str] = None
+    title_mode: str = "none"
+
+    @model_validator(mode="after")
+    def validate_architect(self) -> "SettingsPayload":
+        from .services.architect import TONES, STYLES, CATEGORIES, GENRES, PROPORTIONS, MOODS
+        for field, catalog in [("script_tone_primary",TONES),("script_tone_secondary",TONES),("rendering_style_id",{**STYLES,"custom":{}}),("style_category",{**CATEGORIES,"all":"","custom":""}),("visual_genre",GENRES),("character_proportion",PROPORTIONS),("mood_lighting",MOODS)]:
+            value = getattr(self,field)
+            if value is not None and value not in catalog:
+                raise ValueError(field + "の選択が不正です")
+        if self.script_tone_primary and self.script_tone_primary == self.script_tone_secondary:
+            raise ValueError("副トーンは主トーンと異なるものを選んでください")
+        if self.title_mode not in {"none","first_page","cover"}:
+            raise ValueError("タイトル形式が不正です")
+        profile = STYLES.get(self.rendering_style_id, {})
+        if profile and self.style_category not in {None,"all",profile['category']}:
+            raise ValueError("カテゴリと描画スタイルが一致しません")
+        return self
+
     target_page_count: int = Field(default=8, ge=1, le=120)
     language: Optional[str] = None
     reading_direction: Optional[str] = None
@@ -195,6 +226,10 @@ class SettingsRecommendationRequest(BaseModel):
     """漫画化設定の推奨取得。force=Trueはユーザーが明示した再提案だけに使う。"""
 
     force: bool = False
+
+
+class ApprovalRequest(BaseModel):
+    design_hash: str = Field(min_length=64, max_length=64)
 
 
 class GenerateRequest(BaseModel):
@@ -459,6 +494,8 @@ def normalize_characters(value: Any) -> List[Dict[str, Any]]:
         character = {"id": str(item.get("id") or uuid.uuid4()), "name": name}
         for field in fields:
             character[field] = str(item.get(field, ""))[:2_000] if item.get(field) is not None else None
+        roles = item.get("reference_roles", ["CHARACTER_IDENTITY"] if item.get("reference_image_url") else [])
+        character["reference_roles"] = [role for role in roles if role in {"CHARACTER_IDENTITY", "STYLE_REFERENCE"}][:2] if isinstance(roles,list) else []
         character["knowledge_refs"] = normalize_knowledge_refs(item.get("knowledge_refs", []))
         normalized.append(character)
     return normalized
@@ -731,6 +768,7 @@ def normalize_storyboard(
         return []
     list_fields = {"characters", "dialogue", "narration", "sfx"}
     normalized_pages: List[Dict[str, Any]] = []
+    content_number = 0
     for page_index, item in enumerate(value[:120]):
         if not isinstance(item, dict):
             continue
@@ -807,6 +845,7 @@ def normalize_storyboard(
                 "feasibility_reasons": [str(entry)[:200] for entry in (raw_panel.get("feasibility_reasons") or [])[:8] if str(entry).strip()] if isinstance(raw_panel.get("feasibility_reasons"), list) else [],
                 "fallback_recommendation": str(raw_panel.get("fallback_recommendation") or "")[:40],
             }
+            panel["event_ids"] = [str(v)[:1000] for v in raw_panel["event_ids"][:16]] if isinstance(raw_panel.get("event_ids"), list) else []
             for field in list_fields:
                 source = raw_panel.get(field, [])
                 if isinstance(source, str):
@@ -818,9 +857,14 @@ def normalize_storyboard(
             panel["sfx_order"] = list(range(1, len(panel["sfx"]) + 1))
             panels.append(panel)
         normalized_composition = normalize_composition(item.get("composition"))
+        is_cover = item.get("page_kind") == "cover" and page_index == 0
+        content_number += 0 if is_cover else 1
         normalized_page = {
                 "id": str(item.get("id") or f"page-{page_index + 1}-{uuid.uuid4().hex[:6]}"),
-                "page_number": page_index + 1,
+                "page_number": 0 if is_cover else content_number,
+                "page_kind": "cover" if is_cover else "content",
+                "show_title": item.get("show_title", True),
+                "script_tone_parameters": item.get("script_tone_parameters") or {},
                 "title": str(item.get("title", f"ページ {page_index + 1}"))[:200],
                 "layout": layout,
                 "page_role": str(item.get("page_role") or "")[:120],
@@ -848,5 +892,12 @@ def normalize_storyboard(
                 normalized_page["composition_version"] = int(normalized_composition.get("composition_version", COMPOSITION_VERSION))
             except (TypeError, ValueError):
                 normalized_page["composition_version"] = COMPOSITION_VERSION
+        for field in ("start_state", "first_reveal", "page_end_state"):
+            normalized_page[field] = str(item.get(field) or "")[:2000]
+        for field in ("allowed_events", "forbidden_until_later", "dialogue_scope", "carry_over"):
+            values = item.get(field) or []
+            normalized_page[field] = [str(v)[:1000] for v in values[:64]] if isinstance(values,list) else []
+        for panel in panels:
+            panel["event_boundary"] = {k: normalized_page[k] for k in ("allowed_events","forbidden_until_later","dialogue_scope","start_state","page_end_state","carry_over")}
         normalized_pages.append(normalized_page)
     return ensure_storyboard_layout(normalized_pages, settings or {})

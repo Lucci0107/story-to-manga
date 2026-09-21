@@ -413,7 +413,7 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
         c.setFont(PDF_FONT, 18)
         c.drawString(42, height - 58, str(project.get("title", "Story to Manga")))
         c.setFont(PDF_FONT, 8)
-        c.drawCentredString(width / 2, 24, str(page.get("page_number", "")))
+        c.drawCentredString(width / 2, 24, ("" if page.get("page_kind") == "cover" else str(page.get("page_number", ""))))
         for panel, box in zip(
             page.get("panels", []),
             _page_panel_boxes(page, width, height, settings),
@@ -779,7 +779,7 @@ def _render_composition_png(
     for overlay in composition.get("overlays", []):
         if isinstance(overlay, Mapping):
             _draw_rotated_overlay(image, overlay, width, height)
-    ImageDraw.Draw(image).text((width // 2, height - round(height * 0.025)), str(page.get("page_number", "")), fill=(45, 47, 44, 255), font=_load_page_font(max(12, round(width * 0.016))), anchor="mm")
+    ImageDraw.Draw(image).text((width // 2, height - round(height * 0.025)), ("" if page.get("page_kind") == "cover" else str(page.get("page_number", ""))), fill=(45, 47, 44, 255), font=_load_page_font(max(12, round(width * 0.016))), anchor="mm")
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG", optimize=True)
     return output.getvalue()
@@ -811,7 +811,7 @@ def render_page_png(
         image.paste(panel_image, (x, y))
         draw.rounded_rectangle((x, y, x + box_width, y + box_height), radius=8, outline=(30, 32, 29), width=3)
         _draw_page_text(draw, panel, (x, y, box_width, box_height))
-    draw.text((width // 2, height - 28), str(prepared.get("page_number", "")), fill=(45, 47, 44), font=_load_page_font(14), anchor="mm")
+    draw.text((width // 2, height - 28), ("" if prepared.get("page_kind") == "cover" else str(prepared.get("page_number", ""))), fill=(45, 47, 44), font=_load_page_font(14), anchor="mm")
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()

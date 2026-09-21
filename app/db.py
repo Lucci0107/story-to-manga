@@ -108,6 +108,16 @@ def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS generation_approvals (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                target_id TEXT NOT NULL,
+                design_hash TEXT NOT NULL,
+                design_json TEXT NOT NULL,
+                approved_by TEXT NOT NULL,
+                approved_at TEXT NOT NULL,
+                job_id TEXT
+            );
             CREATE TABLE IF NOT EXISTS generation_jobs (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -2540,3 +2550,86 @@ def save_quality_check(project_id: str, user_id: str, result: Dict[str, Any]) ->
             (_json(result), utc_now(), project_id, user_id),
         )
     return get_project(project_id, user_id)
+
+
+def approve_generation_design(
+    project_id: str, target_id: str, digest: str, design: dict, user_id: str
+) -> dict:
+    approval = dict(
+        id=str(uuid.uuid4()),
+        project_id=project_id,
+        target_id=target_id,
+        design_hash=digest,
+        design_json=_json(design),
+        approved_by=user_id,
+        approved_at=utc_now(),
+    )
+    with connection() as conn:
+        # Project行の書込みロックで、重複承認・生成登録を直列化する。
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project_id,user_id))
+        conn.execute("UPDATE generation_approvals SET job_id='superseded' WHERE project_id=? AND target_id=? AND job_id IS NULL",(project_id,target_id))
+        conn.execute(
+            "INSERT INTO generation_approvals (id,project_id,target_id,design_hash,design_json,approved_by,approved_at) VALUES (?,?,?,?,?,?,?)",
+            tuple(approval.values()),
+        )
+    return approval
+
+
+def current_generation_approval(
+    project_id: str, target_id: str, digest: str, user_id: str
+) -> Optional[dict]:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM generation_approvals WHERE project_id=? AND target_id=? AND design_hash=? AND approved_by=? AND job_id IS NULL ORDER BY approved_at DESC LIMIT 1",
+            (project_id, target_id, digest, user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def queue_approved_generation(approval: dict, batch_id: str) -> Optional[dict]:
+    """承認の消費とJob作成を同じトランザクションで確定する。"""
+    job_id = str(uuid.uuid4())
+    now = utc_now()
+    with connection() as conn:
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=?", (approval["project_id"],))
+        active = conn.execute(
+            "SELECT id FROM generation_jobs WHERE project_id=? AND target_id=? AND status IN ('queued','processing')",
+            (approval["project_id"], approval["target_id"]),
+        ).fetchone()
+        if active:
+            return None
+        result = conn.execute(
+            "UPDATE generation_approvals SET job_id=? WHERE id=? AND job_id IS NULL",
+            (job_id, approval["id"]),
+        )
+        if result.rowcount != 1:
+            return None
+        conn.execute(
+            "INSERT INTO generation_jobs (id,project_id,target_id,job_type,status,idempotency_key,batch_id,created_at,updated_at) VALUES (?,?,?,'panel_artwork','queued',?,?,?,?)",
+            (
+                job_id,
+                approval["project_id"],
+                approval["target_id"],
+                "approved:" + approval["target_id"] + ":" + approval["design_hash"],
+                batch_id,
+                now,
+                now,
+            ),
+        )
+    return get_generation_job(job_id)
+
+
+def generation_job_approval(job_id: str) -> Optional[dict]:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM generation_approvals WHERE job_id=?", (job_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def invalidate_generation_approvals(project_id: str, user_id: str) -> None:
+    with connection() as conn:
+        conn.execute(
+            "UPDATE generation_approvals SET job_id='invalidated' WHERE project_id=? AND approved_by=? AND job_id IS NULL",
+            (project_id, user_id),
+        )

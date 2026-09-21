@@ -726,3 +726,11 @@ body.processing-dialog-open { overflow: hidden; }
   .qa-issue, .qa-warning, .knowledge-reference-list li { display: grid; gap: 3px; }
   .qa-issue span, .qa-warning span, .knowledge-reference-list li span { text-align: left; }
 }
+
+/* 生成前の確認はページの全体像と条件を同じカードで読める大きさにする。 */
+.architect-settings { margin-bottom: 18px; }
+.architect-settings .settings-grid { margin-top: 20px; }
+.approval-card { margin-bottom: 24px; overflow-wrap: anywhere; }
+.approval-card .preview-frame-wrap { max-width: 390px; margin: 16px 0; }
+.approval-card p { margin: 10px 0; }
+.approval-card [role="alert"] { color: var(--accent); }

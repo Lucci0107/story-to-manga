@@ -1,0 +1,622 @@
+[
+  {
+    "id": "STYLE-001",
+    "name": "アドアラブル系3Dフィギュア",
+    "category": "category-01",
+    "dimension": "3D",
+    "body_ratio": "2.5–3 heads tall",
+    "face": "round, extremely cute, simplified",
+    "eyes": "large stylized eyes",
+    "material": "soft vinyl / PVC",
+    "texture": "smooth toy surface",
+    "rendering": "stylized 3D toy rendering",
+    "lighting": "soft studio lighting",
+    "camera": "product photography / macro",
+    "background": "simple miniature or studio environment",
+    "required": [
+      "oversized head",
+      "rounded silhouette",
+      "toy-like physical construction",
+      "visible manufactured-object feeling"
+    ],
+    "forbidden": [
+      "realistic human anatomy",
+      "photoreal human skin",
+      "2D illustration appearance",
+      "normal adult proportions"
+    ]
+  },
+  {
+    "id": "STYLE-002",
+    "name": "デフォルメ3Dフィギュア",
+    "category": "category-01",
+    "dimension": "3D",
+    "body_ratio": "3–4 heads tall",
+    "face": "stylized anime sculpt",
+    "material": "PVC / resin",
+    "rendering": "physical collectible figure",
+    "required": [
+      "sculpted hair",
+      "manufactured figure construction",
+      "display-quality surface",
+      "physical three-dimensional object"
+    ],
+    "forbidden": [
+      "flat 2D anime",
+      "realistic human skin",
+      "7–8 head human proportion"
+    ]
+  },
+  {
+    "id": "STYLE-003",
+    "name": "高品質コレクターフィギュア",
+    "category": "category-01",
+    "dimension": "3D",
+    "body_ratio": "6–7 heads tall",
+    "face": "high-end anime figure sculpt",
+    "material": "PVC / ABS / resin",
+    "texture": "precision painted surfaces",
+    "rendering": "premium 1/7 scale collectible figure",
+    "lighting": "professional product studio",
+    "camera": "85–120mm macro product photography",
+    "required": [
+      "physical figure",
+      "detailed sculpt",
+      "painted hair",
+      "premium collector product appearance",
+      "display base"
+    ],
+    "forbidden": [
+      "living human skin",
+      "flat illustration",
+      "chibi proportions"
+    ]
+  },
+  {
+    "id": "STYLE-004",
+    "name": "フル3DCGシネマティック",
+    "category": "category-01",
+    "dimension": "3D CG",
+    "body_ratio": "natural stylized or realistic",
+    "material": "PBR materials",
+    "texture": "physically based",
+    "rendering": "cinematic CGI, global illumination, ray tracing",
+    "lighting": "cinematic physically motivated lighting",
+    "camera": "cinematic lens",
+    "required": [
+      "volumetric depth",
+      "physically based materials",
+      "realistic light interaction",
+      "true CGI environment"
+    ],
+    "forbidden": [
+      "PVC figure appearance",
+      "flat anime cel shading",
+      "hand-painted illustration texture"
+    ]
+  },
+  {
+    "id": "STYLE-005",
+    "name": "クレイアニメ",
+    "category": "category-02",
+    "material": "modeling clay",
+    "texture": "hand-shaped clay, subtle fingerprints",
+    "rendering": "stop-motion clay animation",
+    "required": [
+      "clay construction",
+      "handmade imperfections",
+      "miniature physical set",
+      "stop-motion feeling"
+    ],
+    "forbidden": [
+      "human skin",
+      "PVC",
+      "flat illustration"
+    ]
+  },
+  {
+    "id": "STYLE-006",
+    "name": "ぬいぐるみ",
+    "category": "category-02",
+    "material": "plush fabric / fleece / cotton",
+    "face": "embroidered or sewn features",
+    "required": [
+      "visible fabric fibers",
+      "seams",
+      "stuffed construction",
+      "soft rounded volume"
+    ],
+    "forbidden": [
+      "human skin",
+      "realistic human hair",
+      "hard PVC surface"
+    ]
+  },
+  {
+    "id": "STYLE-007",
+    "name": "羊毛フェルト",
+    "category": "category-02",
+    "material": "needle felt wool",
+    "texture": "dense visible wool fibers",
+    "required": [
+      "fuzzy fiber structure",
+      "handmade needle-felt appearance",
+      "soft miniature construction"
+    ],
+    "forbidden": [
+      "smooth plastic",
+      "realistic skin",
+      "glossy CGI surface"
+    ]
+  },
+  {
+    "id": "STYLE-008",
+    "name": "ペーパークラフト",
+    "category": "category-02",
+    "material": "paper / cardstock",
+    "rendering": "layered physical paper sculpture",
+    "required": [
+      "folded paper",
+      "cut edges",
+      "layered construction",
+      "paper shadows"
+    ],
+    "forbidden": [
+      "human skin texture",
+      "PVC",
+      "seamless organic surfaces"
+    ]
+  },
+  {
+    "id": "STYLE-009",
+    "name": "ジオラマ・ミニチュア",
+    "category": "category-02",
+    "scale": "miniature",
+    "camera": "macro / tilt-shift",
+    "required": [
+      "miniature environment",
+      "scale-model construction",
+      "physical props",
+      "shallow depth of field"
+    ],
+    "forbidden": [
+      "full-size real-world appearance"
+    ]
+  },
+  {
+    "id": "STYLE-010",
+    "name": "ちびキャラ特化",
+    "category": "category-03",
+    "dimension": "2D",
+    "body_ratio": "2–2.5 heads tall",
+    "face": "extremely simplified",
+    "eyes": "very large",
+    "required": [
+      "head occupies approximately 40–50% of body height",
+      "extremely short limbs",
+      "tiny nose and mouth",
+      "super-deformed silhouette"
+    ],
+    "forbidden": [
+      "realistic anatomy",
+      "5+ head proportions",
+      "photoreal skin",
+      "adult realistic body"
+    ]
+  },
+  {
+    "id": "STYLE-011",
+    "name": "劇場版アニメ",
+    "category": "category-03",
+    "dimension": "2D",
+    "rendering": "feature-film anime",
+    "linework": "clean expressive anime linework",
+    "lighting": "cinematic",
+    "background": "detailed painted anime background",
+    "required": [
+      "cel-style character rendering",
+      "cinematic composition",
+      "expressive motion",
+      "hand-crafted animation feeling"
+    ],
+    "forbidden": [
+      "PVC surface",
+      "photoreal skin",
+      "physical figure base"
+    ]
+  },
+  {
+    "id": "STYLE-012",
+    "name": "日本漫画モノクロ",
+    "category": "category-03",
+    "dimension": "2D",
+    "color": "black and white",
+    "rendering": "Japanese manga",
+    "required": [
+      "ink linework",
+      "screentones",
+      "manga shading",
+      "expressive line weight"
+    ],
+    "forbidden": [
+      "full color",
+      "realistic photography",
+      "glossy 3D rendering"
+    ]
+  },
+  {
+    "id": "STYLE-013",
+    "name": "コミック・グラフィック",
+    "category": "category-03",
+    "dimension": "2D",
+    "required": [
+      "bold outlines",
+      "graphic shadows",
+      "halftone or print texture",
+      "dynamic composition"
+    ],
+    "forbidden": [
+      "photographic realism",
+      "soft 3D toy rendering"
+    ]
+  },
+  {
+    "id": "STYLE-014",
+    "name": "水彩画",
+    "category": "category-04",
+    "material": "watercolor pigment on paper",
+    "required": [
+      "pigment bleeding",
+      "translucent washes",
+      "visible watercolor paper",
+      "irregular hand-painted edges"
+    ],
+    "forbidden": [
+      "glossy 3D",
+      "photographic skin",
+      "plastic surfaces"
+    ]
+  },
+  {
+    "id": "STYLE-015",
+    "name": "油彩画",
+    "category": "category-04",
+    "material": "oil paint on canvas",
+    "required": [
+      "visible brush strokes",
+      "layered pigment",
+      "canvas texture",
+      "painterly color blending"
+    ],
+    "forbidden": [
+      "anime cel shading",
+      "polished CGI",
+      "photographic surface"
+    ]
+  },
+  {
+    "id": "STYLE-016",
+    "name": "色鉛筆画",
+    "category": "category-04",
+    "material": "colored pencil on textured paper",
+    "required": [
+      "pencil strokes",
+      "cross-hatching",
+      "paper grain",
+      "layered colored-pencil pigment"
+    ],
+    "forbidden": [
+      "CGI reflections",
+      "photographic rendering"
+    ]
+  },
+  {
+    "id": "STYLE-017",
+    "name": "水墨画",
+    "category": "category-04",
+    "material": "ink on paper",
+    "required": [
+      "expressive brushwork",
+      "ink diffusion",
+      "strong use of negative space",
+      "monochromatic tonal variation"
+    ],
+    "forbidden": [
+      "glossy CGI",
+      "saturated digital anime rendering"
+    ]
+  },
+  {
+    "id": "STYLE-029",
+    "name": "ゆるい手描き",
+    "category": "category-04",
+    "dimension": "2D",
+    "body_ratio": "simplified, flexible, slightly deformed proportions",
+    "face": "simple, friendly, loosely drawn facial features",
+    "eyes": "small to medium simplified hand-drawn eyes",
+    "material": "pen / pencil / marker on paper",
+    "texture": "subtle paper texture, natural hand-drawn irregularity",
+    "rendering": "loose casual hand-drawn illustration",
+    "linework": "soft uneven hand-drawn lines, slight wobble, imperfect contours",
+    "lighting": "minimal or flat, softly suggested when needed",
+    "camera": "simple illustration framing, natural centered or slightly asymmetric composition",
+    "background": "minimal hand-drawn background, sparse decorative elements, generous negative space",
+    "depth": "mostly flat 2D, minimal depth",
+    "required": [
+      "visibly hand-drawn appearance",
+      "relaxed uneven linework",
+      "simple friendly shapes",
+      "intentional small imperfections",
+      "approachable casual illustration feeling",
+      "identity core remains recognizable"
+    ],
+    "forbidden": [
+      "perfectly clean vector lines",
+      "polished anime linework",
+      "photoreal rendering",
+      "glossy 3D surfaces",
+      "highly detailed realistic anatomy",
+      "mechanically perfect symmetry"
+    ]
+  },
+  {
+    "id": "STYLE-030",
+    "name": "ゆるい落書き",
+    "category": "category-04",
+    "dimension": "2D",
+    "body_ratio": "highly simplified, freely distorted proportions",
+    "face": "minimal doodle face, playful expression",
+    "eyes": "dots, circles, short strokes, or extremely simple eyes",
+    "material": "pen / pencil / crayon / marker on paper",
+    "texture": "rough paper, casual scribble texture",
+    "rendering": "playful loose doodle illustration",
+    "linework": "rough spontaneous scribbles, uneven strokes, overlapping or unfinished lines allowed",
+    "lighting": "none or extremely minimal",
+    "camera": "free-form doodle composition, intentionally casual placement",
+    "background": "blank paper or sparse doodles, symbols, simple decorative marks",
+    "depth": "flat 2D",
+    "required": [
+      "spontaneous doodle feeling",
+      "intentionally rough and imperfect drawing",
+      "extremely simplified forms",
+      "playful irregularity",
+      "casual handwritten visual language",
+      "recognizable identity using minimum necessary features"
+    ],
+    "forbidden": [
+      "polished professional illustration",
+      "precise clean outlines",
+      "realistic anatomy",
+      "detailed cinematic shading",
+      "glossy CGI",
+      "elaborate background rendering",
+      "overly controlled symmetry"
+    ]
+  },
+  {
+    "id": "STYLE-031",
+    "name": "一筆書き",
+    "category": "category-04",
+    "dimension": "2D",
+    "body_ratio": "simplified silhouette determined by continuous-line construction",
+    "face": "minimal facial information expressed with the continuous line",
+    "eyes": "minimal dots, loops, or line-based indications when necessary",
+    "material": "ink / pen line on paper",
+    "texture": "natural ink or pen stroke with subtle analog variation",
+    "rendering": "continuous-line drawing / one-line art",
+    "linework": "single continuous flowing line, elegant uninterrupted stroke, minimal line crossings",
+    "lighting": "none",
+    "camera": "iconic frontal, profile, or simple three-quarter composition optimized for silhouette recognition",
+    "background": "plain white, off-white, or minimal background with generous negative space",
+    "depth": "flat 2D",
+    "required": [
+      "continuous-line visual construction",
+      "subject recognizable from minimal essential features",
+      "strong silhouette readability",
+      "flowing organic stroke",
+      "extensive negative space",
+      "identity core reduced to essential recognizable motifs",
+      "visual impression of being drawn without lifting the pen"
+    ],
+    "forbidden": [
+      "conventional multi-line illustration",
+      "detailed shading",
+      "filled realistic textures",
+      "photorealism",
+      "3D rendering",
+      "complex color rendering",
+      "dense background",
+      "excessive internal detail"
+    ]
+  },
+  {
+    "id": "STYLE-018",
+    "name": "ピクセルアート",
+    "category": "category-05",
+    "dimension": "2D",
+    "rendering": "pixel art",
+    "required": [
+      "visible pixel grid",
+      "deliberately limited resolution",
+      "pixel clusters",
+      "game-sprite aesthetics"
+    ],
+    "forbidden": [
+      "smooth anti-aliased painting",
+      "photoreal detail",
+      "high-resolution brushwork"
+    ]
+  },
+  {
+    "id": "STYLE-019",
+    "name": "ボクセルアート",
+    "category": "category-05",
+    "dimension": "3D",
+    "geometry": "voxel cubes",
+    "required": [
+      "cubic construction",
+      "voxel environment",
+      "block-based silhouette"
+    ],
+    "forbidden": [
+      "smooth organic geometry",
+      "realistic anatomy surfaces"
+    ]
+  },
+  {
+    "id": "STYLE-020",
+    "name": "ローポリ3D",
+    "category": "category-05",
+    "dimension": "3D",
+    "geometry": "low polygon",
+    "required": [
+      "visible polygonal planes",
+      "faceted geometry",
+      "simplified geometric forms"
+    ],
+    "forbidden": [
+      "smooth high-poly sculpt",
+      "photoreal skin"
+    ]
+  },
+  {
+    "id": "STYLE-021",
+    "name": "レトロゲーム",
+    "category": "category-05",
+    "rendering": "16-bit / 32-bit inspired game art",
+    "required": [
+      "retro game visual language",
+      "restricted palette",
+      "sprite-like simplification"
+    ],
+    "forbidden": [
+      "modern photoreal CGI"
+    ]
+  },
+  {
+    "id": "STYLE-022",
+    "name": "写実フォトリアル",
+    "category": "category-06",
+    "dimension": "real-world photographic",
+    "body_ratio": "natural adult human proportions when human",
+    "face": "realistic",
+    "eyes": "natural human proportions",
+    "skin": "pores, fine texture, realistic translucency",
+    "hair": "individual strands",
+    "material": "real-world materials",
+    "camera": "professional full-frame photography",
+    "required": [
+      "believable real person or object",
+      "natural anatomy",
+      "photographic optics",
+      "realistic skin and fabric"
+    ],
+    "forbidden": [
+      "anime eyes",
+      "chibi anatomy",
+      "PVC",
+      "illustration texture",
+      "doll-like face"
+    ]
+  },
+  {
+    "id": "STYLE-023",
+    "name": "シネマティック写真",
+    "category": "category-06",
+    "rendering": "cinematic photography",
+    "lighting": "motivated dramatic movie lighting",
+    "camera": "cinema lens",
+    "required": [
+      "photographic realism",
+      "cinematic framing",
+      "realistic depth of field",
+      "movie-scene atmosphere"
+    ],
+    "forbidden": [
+      "anime rendering",
+      "toy appearance"
+    ]
+  },
+  {
+    "id": "STYLE-024",
+    "name": "ファッションエディトリアル",
+    "category": "category-06",
+    "rendering": "high-fashion editorial photography",
+    "required": [
+      "professional fashion posing",
+      "magazine-level lighting",
+      "premium textile detail",
+      "editorial composition"
+    ],
+    "forbidden": [
+      "anime anatomy",
+      "toy materials",
+      "chibi proportions"
+    ]
+  },
+  {
+    "id": "STYLE-025",
+    "name": "浮世絵",
+    "category": "category-07",
+    "dimension": "2D",
+    "rendering": "traditional Japanese woodblock-print inspired",
+    "required": [
+      "flat color areas",
+      "strong contour lines",
+      "woodblock print texture",
+      "traditional compositional language"
+    ],
+    "forbidden": [
+      "photoreal perspective",
+      "CGI materials"
+    ]
+  },
+  {
+    "id": "STYLE-026",
+    "name": "切り絵",
+    "category": "category-07",
+    "material": "cut paper",
+    "required": [
+      "layered silhouettes",
+      "sharp cut edges",
+      "paper depth",
+      "negative-space design"
+    ],
+    "forbidden": [
+      "realistic skin rendering",
+      "smooth CGI"
+    ]
+  },
+  {
+    "id": "STYLE-027",
+    "name": "ステンドグラス",
+    "category": "category-07",
+    "material": "colored glass and lead came",
+    "required": [
+      "translucent colored glass",
+      "dark lead outlines",
+      "transmitted light",
+      "segmented glass construction"
+    ],
+    "forbidden": [
+      "conventional painted skin",
+      "seamless photographic surfaces"
+    ]
+  },
+  {
+    "id": "STYLE-028",
+    "name": "ヴィンテージポスター",
+    "category": "category-07",
+    "rendering": "traditional print poster",
+    "required": [
+      "limited color palette",
+      "print grain",
+      "aged paper",
+      "graphic simplification"
+    ],
+    "forbidden": [
+      "polished modern CGI",
+      "photographic perfection"
+    ]
+  }
+]

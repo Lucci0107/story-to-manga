@@ -208,7 +208,7 @@ def save_openai_image(
             api_key=runtime.openai_api_key,
             payload=payload,
             timeout=getattr(runtime, "openai_timeout_seconds", 120.0),
-            max_retries=getattr(runtime, "openai_max_retries", 1),
+            max_retries=0,
         )
         image_data = body["data"][0]
         encoded = image_data.get("b64_json")

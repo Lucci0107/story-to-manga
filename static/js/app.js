@@ -1030,11 +1030,41 @@
       return '<label class="editor-label">' + escapeHtml(label) + '<select data-settings-field="' + key + '">' + options.map(function (option) { return '<option value="' + escapeAttr(option.value) + '"' + (option.value === value ? " selected" : "") + '>' + escapeHtml(option.label) + '</option>'; }).join("") + '</select></label>';
     }
 
+    let architectCatalog = null;
+    let architectDraft = {};
+    let architectLoading = false;
+
+    function architectFields(settings) {
+      if (!architectCatalog) return '<p role="status">描画スタイルを読み込み中…</p>';
+      const catalog = architectCatalog;
+      const options = function (items, empty) { return [{value:"",label:empty || "指定なし"}].concat(Object.entries(items).map(function (entry) { return {value:entry[0],label:entry[1]}; })); };
+      const category = settings.style_category || "";
+      const styles = catalog.styles.filter(function (style) { return category === "all" || style.category === category; });
+      const selected = catalog.styles.find(function (style) { return style.id === settings.rendering_style_id; });
+      return '<section class="surface-panel panel-padding architect-settings"><h3>脚本と描画方式</h3><p>おすすめを確認してから保存できます。画像生成は始まりません。</p><button type="button" class="secondary-button compact-button" data-architect-recommend>解析からおすすめを選ぶ</button><div class="settings-grid">' +
+        selectField("script_tone_primary","主トーン",settings.script_tone_primary || "",options(catalog.tones,"既存の演出を維持")) +
+        selectField("script_tone_secondary","副トーン（ひとつまで）",settings.script_tone_secondary || "",options(catalog.tones)) +
+        '<label class="editor-label">トーン自由記述<input data-settings-field="script_tone_custom" value="' + escapeAttr(settings.script_tone_custom || "") + '"></label>' +
+        selectField("style_category","描画カテゴリ",category,options({...catalog.categories,all:"すべてのスタイル",custom:"自由記述"},"カテゴリを選択")) +
+        (category ? selectField("rendering_style_id","描画スタイル",settings.rendering_style_id || "",category === "custom" ? [{value:"custom",label:"自由記述"}] : [{value:"",label:"スタイルを選択"}].concat(styles.map(function (style) { return {value:style.id,label:style.name}; }))) : '') +
+        (category === "custom" ? '<label class="editor-label">描画方式の自由記述<input data-settings-field="rendering_style_custom" value="' + escapeAttr(settings.rendering_style_custom || "") + '"></label>' : '') +
+        selectField("visual_genre","世界観",settings.visual_genre || "",options(catalog.genres)) +
+        selectField("character_proportion","人物の頭身",settings.character_proportion || "",options(catalog.proportions)) +
+        selectField("mood_lighting","雰囲気・照明",settings.mood_lighting || "",options(catalog.moods)) +
+        selectField("title_mode","タイトル・表紙",settings.title_mode || "none",[{value:"none",label:"本文のみ"},{value:"first_page",label:"本文1ページ目にタイトル"},{value:"cover",label:"独立した表紙"}]) +
+        '</div><p role="status">' + escapeHtml(settings.script_tone_reason || "") + ' ' + escapeHtml(settings.style_reason || "") + '</p>' +
+        (selected ? '<details><summary>描画方式の条件</summary><p>' + escapeHtml(selected.name) + ' / ' + escapeHtml(selected.body_ratio || "任意の頭身") + '</p><p>固定の頭身・素材・照明は追加指定より優先します。</p><p>必須：' + escapeHtml(selected.required.join(" / ")) + '</p><p>禁止：' + escapeHtml(selected.forbidden.join(" / ")) + '</p></details>' : '') + '</section>';
+    }
+
+    function captureSettingsDraft() {
+      content.querySelectorAll("[data-settings-field]").forEach(function (input) { architectDraft[input.dataset.settingsField] = input.type === "number" ? Number(input.value) : (input.value || null); });
+    }
+
     function renderSettings() {
       const savedSettings = state.settings || {};
       const storedRecommendation = state.manga_settings_recommendation;
       const recommendation = storedRecommendation && !storedRecommendation.user_override && !storedRecommendation.stale && !pendingRecommendation ? storedRecommendation : null;
-      const settings = { ...savedSettings, ...(recommendation ? recommendationSettings(recommendation) : {}) };
+      const settings = { ...savedSettings, ...(recommendation ? recommendationSettings(recommendation) : {}), ...architectDraft };
       const styleOptions = [{ value: "dynamic", label: "動きのある少年漫画風" }, { value: "elegant", label: "繊細で余白のある演出" }, { value: "cinematic", label: "映画的な陰影" }, { value: "comedy", label: "表情豊かなコメディ" }, { value: "minimal", label: "線と余白のミニマル" }, { value: "webtoon", label: "縦読み向けの明快さ" }];
       const currentLanguage = canonicalLanguage(settings);
       const languageOptions = [{ value: "ja", label: "日本語" }, { value: "en", label: "English" }];
@@ -1046,7 +1076,19 @@
       const preview = pendingRecommendation ? '<div class="recommendation-preview" role="status"><div><strong>再提案のプレビュー</strong><p>' + escapeHtml(pendingRecommendation.page_count_reason || pendingRecommendation.recommendation_reason || "分析結果から新しい推奨値を作成しました。") + '</p></div><div class="save-row"><button type="button" class="secondary-button compact-button" data-cancel-recommendation>現在の設定を維持</button><button type="button" class="primary-button compact-button" data-apply-recommendation>推奨値を適用</button></div></div>' : '';
       const recommendationRetry = recommendationAttempted ? '<button type="button" class="secondary-button compact-button" data-retry-recommendation>AI推奨を再試行</button>' : '';
       const recommendationPanel = storedRecommendation ? '<section class="recommendation-panel" aria-live="polite"><div class="recommendation-header"><div><span class="settings-badge">AI推奨</span><strong>シナリオ分析からの初期提案</strong></div><button type="button" class="text-button" data-refresh-recommendation' + (recommendationLoading ? ' disabled' : '') + '>分析結果から再提案</button></div><p>' + escapeHtml(storedRecommendation.page_count_reason || storedRecommendation.recommendation_reason || "分析結果に基づく漫画化設定です。") + '</p>' + (budgetText ? '<div class="recommendation-budget" aria-label="シーン別ページ配分">' + budgetText + '</div>' : '') + fallbackNotice + staleNotice + preview + '</section>' : '<section class="recommendation-panel recommendation-empty" aria-live="polite"><div><span class="settings-badge">AI推奨</span><strong>分析結果から初期値を作成します</strong></div><p>目標ページ数、テンポ、画面スタイルなどを既存のStory Analysisから推定します。</p>' + recommendationRetry + '</section>';
-      content.innerHTML = heading("漫画化の方針を決める", "AIが提案するページ構成とコマの雰囲気をここで指定します。") + recommendationPanel + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">目標ページ数<small>' + (recommendation ? 'AI推奨値。保存前に自由に変更できます。' : 'デモ生成では最大8ページまで作成します。') + '</small><input type="number" min="1" max="120" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "視覚スタイル", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div>' + (recommendation ? '<div class="field-help recommendation-applied-note">表示中の値はAI推奨を反映しています。保存した設定は次回以降自動上書きされません。</div>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
+      content.innerHTML = heading("漫画化の方針を決める", "AIが提案するページ構成とコマの雰囲気をここで指定します。") + recommendationPanel + architectFields(settings) + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">目標ページ数<small>' + (recommendation ? 'AI推奨値。保存前に自由に変更できます。' : 'デモ生成では最大8ページまで作成します。') + '</small><input type="number" min="1" max="120" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "コマの演出", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div>' + (recommendation ? '<div class="field-help recommendation-applied-note">表示中の値はAI推奨を反映しています。保存した設定は次回以降自動上書きされません。</div>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
+      if (!architectCatalog && !architectLoading) {
+        architectLoading = true;
+        api("/api/architect/catalog").then(function (data) { architectCatalog=data; if (activeStep === "settings") { captureSettingsDraft(); renderSettings(); } }).catch(function(error) { showToast(error.message,"error"); }).finally(function() { architectLoading=false; });
+      }
+      content.querySelector('[data-settings-field="style_category"]')?.addEventListener("change", function () { captureSettingsDraft(); architectDraft.rendering_style_id=architectDraft.style_category === "custom" ? "custom" : null; architectDraft.style_requested_mode="user"; renderSettings(); });
+      content.querySelector('[data-settings-field="rendering_style_id"]')?.addEventListener("change", function () { captureSettingsDraft(); architectDraft.style_requested_mode="user"; architectDraft.style_reason=""; renderSettings(); });
+      content.querySelector('[data-settings-field="script_tone_primary"]')?.addEventListener("change", function () { architectDraft.script_tone_source="user"; architectDraft.script_tone_reason=""; });
+      content.querySelector('[data-architect-recommend]')?.addEventListener("click", async function(event) {
+        event.currentTarget.disabled=true;
+        try { captureSettingsDraft(); const data=await api("/api/projects/"+encodeURIComponent(state.id)+"/settings/architect-recommendation",{method:"POST",body:"{}"}); architectDraft={...architectDraft,...data.settings}; renderSettings(); }
+        catch(error) { showToast(error.message,"error"); event.currentTarget.disabled=false; }
+      });
       const languageSelect = content.querySelector('[data-settings-field="language"]');
       const directionNode = content.querySelector("[data-reading-direction]");
       const warning = content.querySelector("[data-language-warning]");
@@ -1070,7 +1112,9 @@
       });
       content.querySelector("[data-save-settings]").addEventListener("click", function () {
         const next = { ...settings };
-        content.querySelectorAll("[data-settings-field]").forEach(function (input) { next[input.dataset.settingsField] = input.type === "number" ? Number(input.value) : input.value; });
+        content.querySelectorAll("[data-settings-field]").forEach(function (input) { next[input.dataset.settingsField] = input.type === "number" ? Number(input.value) : (input.value || null); });
+        ["script_tone_custom","rendering_style_custom"].forEach(function(key) { next[key]=next[key] || ""; });
+        architectDraft = {};
         delete next.reading_direction;
         saveProject({ settings: next, current_step: "settings" }, "漫画化設定を保存しました", true);
       });
@@ -1454,7 +1498,7 @@
           : "";
         const layoutOptions = [{value:"classic", label:"自動"}, {value:"drama", label:"標準ドラマ"}, {value:"conversation", label:"会話"}, {value:"action", label:"アクション"}, {value:"psychological", label:"心理"}, {value:"four_panel", label:"4コマ（均等）"}, {value:"hero", label:"1コマ"}, {value:"wide", label:"横長重視"}].map(function (option) { return '<option value="' + option.value + '"' + (option.value === (page.layout || "classic") ? " selected" : "") + '>' + option.label + '</option>'; }).join("");
         const resolvedTemplate = page.layout_geometry?.template || "未計算";
-        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + String(pageIndex + 1).padStart(2, "0") + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header>' + fallbackNotice + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
+        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + (page.page_kind === 'cover' ? '表紙' : String(page.page_number).padStart(2, '0')) + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header>' + fallbackNotice + pageBoundaryFields(page) + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
       }).join("");
       const body = pages.length ? jobNotice + '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : jobNotice + '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
@@ -1462,11 +1506,22 @@
       bindStoryboardEvents();
     }
 
+    function pageBoundaryFields(page) {
+      const fields={start_state:"開始状態",allowed_events:"このページの出来事",first_reveal:"初めて明かす情報",forbidden_until_later:"後のページまで描かないこと",dialogue_scope:"セリフの範囲",page_end_state:"終了状態",carry_over:"次ページへ持ち越すこと"};
+      return '<details class="panel-padding"><summary>ページの進行・先取り防止</summary><div class="settings-grid">'+Object.entries(fields).map(function(entry) { const value=page[entry[0]]; return '<label class="editor-label">'+escapeHtml(entry[1])+'<textarea rows="2" data-page-boundary="'+entry[0]+'" data-page-id="'+escapeAttr(page.id)+'">'+escapeHtml(Array.isArray(value) ? value.join('\n') : value || '')+'</textarea></label>'; }).join('')+'</div><button type="button" class="secondary-button compact-button" data-save-boundary="'+escapeAttr(page.id)+'">ページの進行を保存</button></details>';
+    }
+
     function newPanel(order) {
       return { id: uuid("panel"), order: order, description: "追加したコマの意図を入力", panel_role: "", scene_type: "dialogue", importance: "medium", shot_type: "バストアップ", characters: [], action: "", expression: "", background: "", dialogue: [], narration: [], sfx: [], bubble_order: [], narration_order: [], sfx_order: [], generation_prompt: "", image_url: null, generation_status: "not_started", generation_error: null, revision: 0, crop_mode: "fit" };
     }
 
     function bindStoryboardEvents() {
+      content.querySelectorAll('[data-save-boundary]').forEach(function(button) { button.onclick=function() {
+        const pages=structuredClone(state.storyboard);
+        const page=pages.find(function(p) { return p.id===button.dataset.saveBoundary; });
+        content.querySelectorAll('[data-page-boundary]').forEach(function(input) { if(input.dataset.pageId!==page.id) return; const key=input.dataset.pageBoundary; page[key]=['allowed_events','forbidden_until_later','dialogue_scope','carry_over'].includes(key) ? listFromText(input.value) : input.value; });
+        saveStoryboard(pages,"ページの進行を保存しました。生成には再確認が必要です。");
+      }; });
       content.querySelector("[data-generate-storyboard]")?.addEventListener("click", generateStoryboard);
       content.querySelector("[data-next-step]")?.addEventListener("click", function () { goToStep("generate"); });
       content.querySelector("[data-add-page]")?.addEventListener("click", function () {
@@ -1509,7 +1564,8 @@
     }
 
     function saveStoryboard(storyboard, message) {
-      storyboard.forEach(function (page, index) { page.page_number = index + 1; page.panels = (page.panels || []).map(function (panel, panelIndex) { return { ...panel, order: panelIndex + 1, bubble_order: (panel.dialogue || []).map(function (_item, itemIndex) { return itemIndex + 1; }), narration_order: (panel.narration || []).map(function (_item, itemIndex) { return itemIndex + 1; }), sfx_order: (panel.sfx || []).map(function (_item, itemIndex) { return itemIndex + 1; }) }; }); });
+      let contentPageNumber = 0;
+      storyboard.forEach(function (page, index) { page.page_number = page.page_kind === "cover" ? 0 : ++contentPageNumber; page.panels = (page.panels || []).map(function (panel, panelIndex) { return { ...panel, order: panelIndex + 1, bubble_order: (panel.dialogue || []).map(function (_item, itemIndex) { return itemIndex + 1; }), narration_order: (panel.narration || []).map(function (_item, itemIndex) { return itemIndex + 1; }), sfx_order: (panel.sfx || []).map(function (_item, itemIndex) { return itemIndex + 1; }) }; }); });
       saveProject({ storyboard: storyboard, current_step: "storyboard" }, message, true);
     }
 
@@ -1918,15 +1974,36 @@
       const globalStatus = snapshot.active ? '<div class="generation-global-status" role="status" aria-live="polite"><strong>' + aggregate.completed + ' / ' + aggregate.total + ' 完了</strong><span>' + (aggregate.generating ? '生成中 ' + aggregate.generating + ' ・ ' : '') + (aggregate.waiting ? '待機 ' + aggregate.waiting + ' ・ ' : '') + (aggregate.failed ? '失敗 ' + aggregate.failed : '処理を継続しています') + '</span>' + (snapshot.current_page && snapshot.current_panel ? '<span>現在：ページ' + escapeHtml(snapshot.current_page) + '・コマ' + escapeHtml(snapshot.current_panel) + '</span>' : '') + '</div>' : '';
       const disabled = panelBusy ? " disabled" : "";
       const layoutPreview = panels.length && state.storyboard?.[0]?.composition ? '<section class="surface-panel generation-layout-preview"><div class="generation-toolbar"><div><strong>画像生成前のページ設計</strong><p>主役コマの面積、人物・顔・小物と文字の予約領域を確認してください。未生成部分の色付き領域は設計図で、画像ではありません。</p></div></div>' + state.storyboard.map(function (page, index) { return '<details' + (index === 0 ? ' open' : '') + '><summary>ページ ' + escapeHtml(page.page_number) + ' の設計</summary>' + pageStage(page) + '</details>'; }).join('') + '</section>' : '';
-      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding">' + renderPanelRecoveryNotice() + '<div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all' + disabled + '>未生成をまとめて生成</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary">' + layoutPreview + '<div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
-      content.querySelector("[data-generate-all]")?.addEventListener("click", function () { queueGeneration([], false, false); });
-      content.querySelector("[data-retry-failed]")?.addEventListener("click", function () { queueGeneration([], true, false); });
-      content.querySelectorAll("[data-retry-panel]").forEach(function (button) { button.addEventListener("click", function () { queueGeneration([button.dataset.retryPanel], true, true); }); });
-      content.querySelectorAll("[data-regenerate-panel]").forEach(function (button) { button.addEventListener("click", function () { queueGeneration([button.dataset.regeneratePanel], false, true); }); });
+      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding">' + renderPanelRecoveryNotice() + '<div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all' + disabled + '>未生成の設計を確認</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary">' + layoutPreview + '<div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
+      content.querySelector("[data-generate-all]")?.addEventListener("click", function () { reviewGeneration([], false, false); });
+      content.querySelector("[data-retry-failed]")?.addEventListener("click", function () { reviewGeneration([], true, false); });
+      content.querySelectorAll("[data-retry-panel]").forEach(function (button) { button.addEventListener("click", function () { reviewGeneration([button.dataset.retryPanel], true, true); }); });
+      content.querySelectorAll("[data-regenerate-panel]").forEach(function (button) { button.addEventListener("click", function () { reviewGeneration([button.dataset.regeneratePanel], false, true); }); });
       content.querySelector("[data-panel-recheck]")?.addEventListener("click", function () { recheckPanelGenerationState(); });
       content.querySelector("[data-panel-reload]")?.addEventListener("click", function () { window.location.reload(); });
       content.querySelector("[data-goto-storyboard]")?.addEventListener("click", function () { goToStep("storyboard"); });
       content.querySelector("[data-next-step]")?.addEventListener("click", function () { goToStep("edit"); });
+    }
+
+    async function reviewGeneration(panelIds, retryFailed, force) {
+      const selected=allPanels().filter(function(item) { const status=item.panel.generation_status || "not_started"; return (!panelIds.length || panelIds.includes(item.panel.id)) && !["queued","processing"].includes(status) && (force || status !== "completed") && (retryFailed || force || status !== "failed"); });
+      if (!selected.length) { showToast("生成対象はありません"); return; }
+      content.innerHTML=heading("生成する内容を確認", "各コマの構図・人物・セリフ・描画方式を確認してください。生成には費用がかかる場合があります。") + '<div data-approval-cards role="status">設計を検証しています…</div><button type="button" class="secondary-button" data-cancel-approval>戻る</button>';
+      content.querySelector('[data-cancel-approval]').onclick=renderGenerate;
+      try {
+        const designs=await Promise.all(selected.map(function(item) { return api("/api/projects/"+encodeURIComponent(state.id)+"/panels/"+encodeURIComponent(item.panel.id)+"/design"); }));
+        const host=content.querySelector('[data-approval-cards]'); if (!host) return;
+        host.innerHTML=designs.map(function(design,index) {
+          const item=selected[index];
+          return '<section class="surface-panel panel-padding approval-card"><h3>'+ (design.page_design?.page_kind === 'cover' ? '表紙' : 'ページ '+escapeHtml(design.page_number)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+pageStage(design.page_design || item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(design.characters.join('、'))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p><p>この先まで描かない：'+escapeHtml((design.event_boundary.forbidden_until_later || []).join(' / '))+'</p><p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
+        }).join('');
+        host.querySelectorAll('[data-approve-target]').forEach(function(button) { button.onclick=async function() {
+          button.disabled=true;
+          const design=designs[Number(button.dataset.approveTarget)];
+          try { await api("/api/projects/"+encodeURIComponent(state.id)+"/panels/"+encodeURIComponent(design.target_id)+"/approval",{method:"POST",body:JSON.stringify({design_hash:design.design_hash})}); await queueGeneration([design.target_id],retryFailed,force); }
+          catch(error) { showToast(error.message,"error"); button.disabled=false; }
+        }; });
+      } catch(error) { showToast(error.message,"error"); renderGenerate(); }
     }
 
     async function queueGeneration(panelIds, retryFailed, force) {

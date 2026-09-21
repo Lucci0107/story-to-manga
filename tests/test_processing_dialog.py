@@ -116,7 +116,7 @@ def test_generation_progress_uses_job_state_and_preserves_selective_retry() -> N
     assert '"partially_failed"' in APP_SCRIPT
     assert '30 * 60 * 1000' in APP_SCRIPT
     assert '"失敗したコマは生成画面から再試行できます。"' not in APP_SCRIPT
-    assert "queueGeneration([button.dataset.retryPanel], true, true)" in APP_SCRIPT
+    assert "reviewGeneration([button.dataset.retryPanel], true, true)" in APP_SCRIPT
 
 
 def test_processing_dialog_blocks_escape_and_reduces_motion() -> None:

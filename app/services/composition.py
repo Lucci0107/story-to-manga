@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 
 # v2は既存Projectの保存形式として維持する。v3は新規Projectで使う意味的な
@@ -660,7 +660,7 @@ def _build_v2_page_composition(
 
     overlays: List[Dict[str, Any]] = []
     page_number = int(page.get("page_number", 1) or 1)
-    if page_number == 1 and str(page.get("title", "")).strip():
+    if (page_number == 1 or page.get("page_kind") == "cover") and page.get("show_title", True) and str(page.get("title", "")).strip():
         overlays.append(
             {
                 "id": "page-title",
@@ -825,7 +825,7 @@ def _build_v3_page_composition(
     overlays: List[Dict[str, Any]] = []
     page_number = int(page.get("page_number", 1) or 1)
     # タイトルは1ページ目の明示タイトルだけ。大きなPage overlayは意味的イベント時のみ。
-    if page_number == 1 and str(page.get("title", "")).strip():
+    if (page_number == 1 or page.get("page_kind") == "cover") and page.get("show_title", True) and str(page.get("title", "")).strip():
         overlays.append(
             {
                 "id": "page-title",
@@ -1174,7 +1174,7 @@ def composition_quality_issues(page: Mapping[str, Any]) -> List[Dict[str, str]]:
         for right in breakouts[left_index + 1 :]:
             if _rect_intersects(left, right, 0.0):
                 issues.append({"key": f"composition-breakout-collision-{page_number}-{left.get('id', left_index)}-{right.get('id', 'breakout')}", "label": f"ページ{page_number}のBreakout衝突", "detail": "前景Breakout同士が重なっています。"})
-    if page_number != "1" and any(str(item.get("type")) == "title" for item in composition.get("overlays", []) if isinstance(item, Mapping)):
+    if page_number != "1" and page.get("page_kind") != "cover" and any(str(item.get("type")) == "title" for item in composition.get("overlays", []) if isinstance(item, Mapping)):
         issues.append({"key": f"composition-title-repeat-{page_number}", "label": f"ページ{page_number}のタイトル", "detail": "2ページ目以降に大きなタイトルを繰り返さないでください。"})
 
     if version >= SEMANTIC_COMPOSITION_VERSION:

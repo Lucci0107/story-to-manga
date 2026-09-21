@@ -83,6 +83,11 @@ def test_project_pipeline_and_export(tmp_path: Path) -> None:
     assert storyboard.status_code == 200
     assert storyboard.json()["project"]["storyboard"]
 
+    for page in storyboard.json()['project']['storyboard']:
+        for panel in page['panels']:
+            design = client.get(f"/api/projects/{project_id}/panels/{panel['id']}/design").json()
+            approval = client.post(f"/api/projects/{project_id}/panels/{panel['id']}/approval", json={'design_hash':design['design_hash']})
+            assert approval.status_code == 200, approval.text
     generated = client.post(f"/api/projects/{project_id}/generate", json={"panel_ids": []})
     assert generated.status_code == 200
     status = client.get(f"/api/projects/{project_id}/generation/status")
@@ -94,6 +99,8 @@ def test_project_pipeline_and_export(tmp_path: Path) -> None:
     assert duplicate.status_code == 200
     assert duplicate.json()["queued_panel_ids"] == []
     first_panel_id = status.json()["panels"][0]["id"]
+    design = client.get(f"/api/projects/{project_id}/panels/{first_panel_id}/design").json()
+    assert client.post(f"/api/projects/{project_id}/panels/{first_panel_id}/approval",json={'design_hash':design['design_hash']}).status_code == 200
     retried = client.post(f"/api/projects/{project_id}/panels/{first_panel_id}/retry")
     assert retried.status_code == 200
     retried_status = client.get(f"/api/projects/{project_id}/generation/status")
