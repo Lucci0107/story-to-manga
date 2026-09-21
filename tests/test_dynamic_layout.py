@@ -146,12 +146,12 @@ def test_long_dialogue_prefers_regular_geometry():
     for panel in page["panels"]:
         panel["dialogue"] = ["言葉を確かめて、落ち着いて進めよう。" * 6]
     result = reflow_page(page, SETTINGS)
-    assert not result["composition"]["shared_edges"]
+    assert all(e["angle"] == 0 for e in result["composition"]["shared_edges"])
     assert all(g["shape"] == "rectangle" for g in result["composition"]["panels"])
 
 
 def test_psychological_does_not_force_diagonal():
-    assert fixture_pages()[2]["composition"]["shared_edges"] == []
+    assert all(e["angle"] == 0 for e in fixture_pages()[2]["composition"]["shared_edges"])
 
 
 def test_explicit_full_bleed_requires_climax_reason_and_one_panel():
@@ -278,7 +278,7 @@ def test_explicit_four_panel_grid_is_retained():
     page = fixture_pages()[0]
     page.update(layout="four_panel", panels=page["panels"][:4])
     result = reflow_page(page, SETTINGS)
-    assert result["composition"]["shared_edges"] == []
+    assert all(e["angle"] == 0 for e in result["composition"]["shared_edges"])
     areas = [polygon_area(g["polygon_points"]) for g in result["composition"]["panels"]]
     assert max(areas) / min(areas) < 1.001
 

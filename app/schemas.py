@@ -694,14 +694,17 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
         safe = value.get('outer_bounds')
         if isinstance(safe, dict):
             result['outer_bounds'] = {k: _normalized_ratio(safe.get(k)) for k in ('left', 'right', 'top', 'bottom')}
+        result['shared_gutter_version'] = 2 if value.get('shared_gutter_version') == 2 else 1
         result['shared_edges'] = []
-        for edge in value.get('shared_edges', [])[:2] if isinstance(value.get('shared_edges'), list) else []:
+        for edge in value.get('shared_edges', [])[:96] if isinstance(value.get('shared_edges'), list) else []:
             if not isinstance(edge, dict) or edge.get('axis') not in ('vertical', 'horizontal'):
                 continue
             line, ids = edge.get('center_line'), edge.get('panel_ids')
             if not isinstance(line, list) or len(line) != 2 or not all(isinstance(p, list) and len(p) == 2 for p in line) or not isinstance(ids, list) or len(ids) != 2:
                 continue
             result['shared_edges'].append(dict(id=str(edge.get('id', ''))[:80], axis=edge['axis'],
+                                               full_span=bool(edge.get('full_span', True)), band_id=str(edge.get('band_id', ''))[:80],
+                                               angle=_bounded_float(edge.get('angle'), 0, -90, 90), angle_family=str(edge.get('angle_family', 'vertical'))[:30],
                                                center_line=[[_normalized_ratio(v) for v in p] for p in line],
                                                panel_ids=[str(v)[:120] for v in ids], width=_normalized_ratio(edge.get('width'), .014)))
     raw_panels = value.get("panels", [])
@@ -723,7 +726,7 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
                 "row": _bounded_int(raw.get('row'), 1, 1, 24),
                 "base_box": {k: _normalized_ratio(raw['base_box'].get(k)) for k in ('x', 'y', 'width', 'height')} if isinstance(raw.get('base_box'), dict) else None,
                 "full_bleed_effect": bool(raw.get('full_bleed_effect')),
-                "shared_edge_ids": [str(v)[:80] for v in raw.get('shared_edge_ids', [])[:2]] if isinstance(raw.get('shared_edge_ids'), list) else [],
+                "shared_edge_ids": [str(v)[:80] for v in raw.get('shared_edge_ids', [])[:24]] if isinstance(raw.get('shared_edge_ids'), list) else [],
                 "x": _normalized_ratio(raw.get("x")),
                 "y": _normalized_ratio(raw.get("y")),
                 "width": panel_width,

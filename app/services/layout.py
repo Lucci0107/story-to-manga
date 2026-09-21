@@ -24,7 +24,7 @@ from .composition import (
     MIN_PANEL_HEIGHT_RATIO,
     panel_allows_detail_geometry,
 )
-from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, apply_shared_geometry, choose_family, inside, rectangle, shared_diagonal, bounds, text_length
+from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, apply_shared_geometry, choose_family, inside, rectangle, materialize_gutters, scale_gutter_band, align_partial_segments, text_length
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 from .text_composition import separate_text_from_unverified_artwork
 from .visual_style import apply_text_direction, resolve_visual_style
@@ -635,23 +635,18 @@ def _fit_shared_boundaries(geometries, panels, edges, settings):
     """最終の文字・人物領域に合わせ共有の傾きだけを段階的に弱める。"""
     by_id = {g['panel_id']: g for g in geometries}
     sources = {p['id']: p for p in panels}
-    accepted = []
-    for edge in edges:
-        pair = [by_id[key] for key in edge['panel_ids']]
-        bases = [{**g, **g.get('base_box', {})} for g in pair]
-        coordinate = 0 if edge['axis'] == 'vertical' else 1
-        magnitude = (edge['center_line'][0][coordinate]-edge['center_line'][1][coordinate])/2
-        # 傾きを弱める局所修復を先に試す。最後だけ二コマを矩形へ戻す。
+    accepted = deepcopy(edges)
+    for band in dict.fromkeys(e.get('band_id') for e in edges):
+        ids = {key for e in edges if e.get('band_id') == band for key in e['panel_ids']}
+        pair = [by_id[key] for key in ids]
         factors = (0.,) if any(g.get('artwork_viewport') for g in pair) else (1., .65, .35, .18, 0.)
         for factor in factors:
-            ap, bp, candidate = shared_diagonal(*bases, edge['axis'], magnitude*factor, edge['width'], edge['id'])
-            for g, points in zip(pair, (ap, bp)):
-                g.update(bounds(points))
-                g['polygon_points'] = points
-                g['area'] = _round(g['width']*g['height'])
-                g['gutter']['type'] = 'diagonal' if factor else 'normal'
-                if factor == 0:
-                    g.update(shape='rectangle', shape_reason='', shared_edge_ids=[])
+            candidate = scale_gutter_band(accepted, band, factor)
+            updated = materialize_gutters(by_id, candidate)
+            for key, g in updated.items():
+                by_id[key].update(g)
+            safe = True
+            for g in pair:
                 source = sources[g['panel_id']]
                 if not source.get('image_url'):
                     planned = plan_panel_direction(source, settings or {})
@@ -660,9 +655,6 @@ def _fit_shared_boundaries(geometries, panels, edges, settings):
                     g['protected_zones'] = deepcopy(planned['protected_zones'])
                     g['text_safe_zones'] = {item['item_id']: item for item in planned['reserved_text_zones']}
                     apply_text_direction(source, settings or {})
-            safe = True
-            for g in pair:
-                source = sources[g['panel_id']]
                 zones = list(g.get('protected_zones') or []) + list(source.get('text_layout', {}).get('items', []))
                 for zone in zones:
                     if not all(k in zone for k in ('x', 'y', 'width', 'height')):
@@ -671,10 +663,9 @@ def _fit_shared_boundaries(geometries, panels, edges, settings):
                     if not all(inside(point, g['polygon_points']) for point in points):
                         safe = False
             if safe or factor == 0:
-                if factor:
-                    accepted.append(candidate)
+                accepted = candidate
                 break
-    return accepted
+    return align_partial_segments(by_id, accepted)
 
 
 def reflow_page(
@@ -967,7 +958,7 @@ def reflow_page(
 
     if dynamic_mode:
         shared_edges = _fit_shared_boundaries(geometries, panels, shared_edges, settings)
-        next_page['dynamic_layout'] = {'family': layout_family, 'shared_edges': shared_edges,
+        next_page['dynamic_layout'] = {'shared_gutter_version': 2, 'family': layout_family, 'shared_edges': shared_edges,
                                      'outer_bounds': dict(left=PAGE_SIDE_MARGIN, right=1-PAGE_SIDE_MARGIN, top=top_margin, bottom=1-PAGE_BOTTOM_MARGIN)}
     signature = _page_signature(next_page, settings)
     next_page["layout_version"] = LAYOUT_VERSION

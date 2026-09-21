@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, geometry_metrics, polygons_overlap, lock_outer_edges, polygon_safety_metrics
+from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, geometry_metrics, polygons_overlap, lock_outer_edges, polygon_safety_metrics, normalize_legacy_gutters
 
 import re
 from copy import deepcopy
@@ -939,7 +939,7 @@ def build_page_composition(
         if composition_version >= DYNAMIC_COMPOSITION_VERSION:
             composition['composition_version'] = DYNAMIC_COMPOSITION_VERSION
             composition.update(deepcopy(page.get('dynamic_layout') or {}))
-            composition['effect_budget']['angled_panels'] = 2 if composition.get('shared_edges') else 0
+            composition['effect_budget']['angled_panels'] = sum(p.get('shape') == 'trapezoid' for p in composition['panels'])
         composition["style_profile"] = resolve_visual_style(settings or {})
         composition["page_direction"] = {
             "page_role": str(page.get("page_role") or composition["semantic_family"]),
@@ -1022,6 +1022,8 @@ def composition_for_page(page: Mapping[str, Any]) -> Dict[str, Any]:
                     points = panel.get('polygon_points', [])
                     if len(points) == 4:
                         panel['polygon_points'] = lock_outer_edges(points, panel, safe)
+            if result.get('panels') and any(p.get('shape') in {'trapezoid', 'slanted-left', 'slanted-right'} for p in result['panels']):
+                result = normalize_legacy_gutters(result)
             return result
     return build_legacy_composition(page)
 
