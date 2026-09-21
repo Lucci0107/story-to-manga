@@ -2137,7 +2137,7 @@ def api_page_composition_image(project_id: str, page_id: str, user=Depends(curre
 async def api_repair_page_layout(project_id: str, page_id: str, composition_version: Optional[int] = None, user=Depends(current_user)):
     """Artworkを再生成せず、指定Pageのgeometryと文字配置だけを再計算する。"""
 
-    if composition_version not in (None, 3):
+    if composition_version not in (None, 3, 4):
         raise HTTPException(status_code=422, detail="再計算の対象バージョンが不正です")
     project = require_project(project_id, user["id"])
     if not any(str(page.get("id")) == page_id for page in project.get("storyboard", [])):

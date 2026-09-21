@@ -20,11 +20,11 @@ from .composition import (
     simplify_composition,
     panel_shape_for,
     shape_points,
-    PAGE_SAFE_MARGIN,
     MIN_DETAIL_HEIGHT_RATIO,
     MIN_PANEL_HEIGHT_RATIO,
     panel_allows_detail_geometry,
 )
+from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, apply_shared_geometry, choose_family, inside, rectangle, shared_diagonal, bounds, text_length
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 from .text_composition import separate_text_from_unverified_artwork
 from .visual_style import apply_text_direction, resolve_visual_style
@@ -60,7 +60,7 @@ def _requested_composition_version(page: Mapping[str, Any], settings: Mapping[st
         except (TypeError, ValueError):
             continue
         if version >= SEMANTIC_COMPOSITION_VERSION:
-            return SEMANTIC_COMPOSITION_VERSION
+            return min(version, DYNAMIC_COMPOSITION_VERSION)
         if version == 2:
             return 2
     return 2
@@ -434,6 +434,8 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
     }
     if any(panel.get("dialogue_types") or panel.get("sfx_types") for panel in page.get("panels", [])):
         payload["text_semantics"] = [{"dialogue_types": panel.get("dialogue_types"), "sfx_types": panel.get("sfx_types")} for panel in page.get("panels", [])]
+    if _requested_composition_version(page, settings) >= DYNAMIC_COMPOSITION_VERSION:
+        payload["page_number"] = page.get("page_number")
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
@@ -629,6 +631,52 @@ def place_text_elements(
     }
 
 
+def _fit_shared_boundaries(geometries, panels, edges, settings):
+    """最終の文字・人物領域に合わせ共有の傾きだけを段階的に弱める。"""
+    by_id = {g['panel_id']: g for g in geometries}
+    sources = {p['id']: p for p in panels}
+    accepted = []
+    for edge in edges:
+        pair = [by_id[key] for key in edge['panel_ids']]
+        bases = [{**g, **g.get('base_box', {})} for g in pair]
+        coordinate = 0 if edge['axis'] == 'vertical' else 1
+        magnitude = (edge['center_line'][0][coordinate]-edge['center_line'][1][coordinate])/2
+        # 傾きを弱める局所修復を先に試す。最後だけ二コマを矩形へ戻す。
+        factors = (0.,) if any(g.get('artwork_viewport') for g in pair) else (1., .65, .35, .18, 0.)
+        for factor in factors:
+            ap, bp, candidate = shared_diagonal(*bases, edge['axis'], magnitude*factor, edge['width'], edge['id'])
+            for g, points in zip(pair, (ap, bp)):
+                g.update(bounds(points))
+                g['polygon_points'] = points
+                g['area'] = _round(g['width']*g['height'])
+                g['gutter']['type'] = 'diagonal' if factor else 'normal'
+                if factor == 0:
+                    g.update(shape='rectangle', shape_reason='', shared_edge_ids=[])
+                source = sources[g['panel_id']]
+                if not source.get('image_url'):
+                    planned = plan_panel_direction(source, settings or {})
+                    source['panel_direction'] = planned
+                    source['text_layout'] = deepcopy(planned['text_layout'])
+                    g['protected_zones'] = deepcopy(planned['protected_zones'])
+                    g['text_safe_zones'] = {item['item_id']: item for item in planned['reserved_text_zones']}
+                    apply_text_direction(source, settings or {})
+            safe = True
+            for g in pair:
+                source = sources[g['panel_id']]
+                zones = list(g.get('protected_zones') or []) + list(source.get('text_layout', {}).get('items', []))
+                for zone in zones:
+                    if not all(k in zone for k in ('x', 'y', 'width', 'height')):
+                        continue
+                    points = [[g['x']+p[0]*g['width'], g['y']+p[1]*g['height']] for p in rectangle(zone)]
+                    if not all(inside(point, g['polygon_points']) for point in points):
+                        safe = False
+            if safe or factor == 0:
+                if factor:
+                    accepted.append(candidate)
+                break
+    return accepted
+
+
 def reflow_page(
     page: Mapping[str, Any],
     settings: Mapping[str, Any],
@@ -645,22 +693,43 @@ def reflow_page(
             panel["id"] = f"layout-panel-{panel_index}"
     next_page["panels"] = panels
     composition_version = _requested_composition_version(next_page, settings) if enable_composition else 2
+    if composition_version < DYNAMIC_COMPOSITION_VERSION:
+        next_page.pop("dynamic_layout", None)
     semantic_mode = composition_version >= SEMANTIC_COMPOSITION_VERSION
     template = select_layout_template(next_page)
     language = canonicalize_stored_settings(settings).get("language")
     panel_gap = resolve_visual_style(settings or {})["gutter_width"] if semantic_mode else PANEL_GAP
     family = semantic_page_family(next_page) if semantic_mode else ""
     dominant_index = semantic_dominant_panel_index(next_page) if semantic_mode else None
+    if composition_version >= DYNAMIC_COMPOSITION_VERSION and dominant_index is None and panels:
+        strongest = max(range(len(panels)), key=lambda i: panel_importance(panels[i]))
+        if panel_importance(panels[strongest]) >= IMPORTANCE_SCORES['high']:
+            dominant_index = strongest
     rows = _rows_for_panels(
         template,
         panels,
         force_dominant=not semantic_mode or dominant_index is not None,
         dominant_index=dominant_index,
     )
+    dynamic_mode = composition_version >= DYNAMIC_COMPOSITION_VERSION
+    layout_family = choose_family(next_page, family, dominant_index, len(panels)) if dynamic_mode else ""
+    if dynamic_mode and dominant_index is None and len(panels) in (4, 5, 6) and layout_family != 'four-panel':
+        patterns = {'conversation-asymmetric': {4: [2, 2], 5: [2, 2, 1], 6: [2, 3, 1]},
+                    'diagonal-middle': {4: [1, 2, 1], 5: [2, 1, 2], 6: [1, 2, 2, 1]},
+                    'vertical-anchor': {4: [2, 2], 5: [2, 2, 1], 6: [2, 2, 2]}}
+        pattern = patterns.get(layout_family, {}).get(len(panels))
+        if pattern:
+            rows, cursor = [], 0
+            for size in pattern:
+                rows.append(list(range(cursor, cursor+size)))
+                cursor += size
     row_weights = _row_base_weights(template, len(rows))
     for row_index, indices in enumerate(rows):
         importance = max((panel_importance(panels[index]) for index in indices), default=2.0)
         row_weights[row_index] *= 1 + max(0.0, importance - 2.0) * (0.24 if len(indices) == 1 else 0.10)
+    if dynamic_mode:
+        for i, indices in enumerate(rows):
+            row_weights[i] *= 1+min(1.0, max(text_length(panels[k]) for k in indices)/180)
     highlighted_rows = [
         row_index
         for row_index, indices in enumerate(rows)
@@ -698,6 +767,48 @@ def reflow_page(
             remaining = total_height - floor_total
             row_heights = [floor + remaining * weight / weight_total for floor, weight in zip(floors, row_weights)]
 
+    if dynamic_mode and len(rows) > 1:
+        for index in highlighted_rows:
+            excess = max(0., row_heights[index]-total_height*.50)
+            row_heights[index] -= excess
+            others = sum(h for i, h in enumerate(row_heights) if i != index)
+            for i in range(len(rows)):
+                if i != index:
+                    row_heights[i] += excess*row_heights[i]/others
+    planned_boxes, shared_edges = {}, []
+    box_y = top_margin
+    for row_number, (indices, height) in enumerate(zip(rows, row_heights), 1):
+        for key, value in _physical_boxes_for_row(indices, panels, str(language), box_y, height, template == TEMPLATE_FOUR_PANEL, gap=panel_gap).items():
+            planned_boxes[key] = {**value, "row": row_number, "panel_id": panels[key]["id"]}
+        box_y += height + panel_gap
+    if dynamic_mode and layout_family == 'vertical-anchor' and dominant_index is None and len(panels) in (4, 5, 6):
+        # 最初の二段を縦の主役＋反対側の三段へ。第三段以降の読順は保持する。
+        end = sum(len(row) for row in rows[:2])
+        original_boxes = deepcopy(planned_boxes)
+        anchor = planned_boxes[0]
+        full_height = sum(row_heights[:2])+panel_gap
+        anchor_width = .50
+        anchor.update(x=PAGE_SIDE_MARGIN if language == LANGUAGE_EN else 1-PAGE_SIDE_MARGIN-anchor_width,
+                      width=anchor_width, height=full_height, column=1 if language == LANGUAGE_EN else 2, row=1)
+        stack_width = 1-2*PAGE_SIDE_MARGIN-anchor_width-panel_gap
+        h = (full_height-panel_gap*(end-2))/(end-1)
+        if h >= MIN_PANEL_HEIGHT_RATIO:
+            for key in range(1, end):
+                planned_boxes[key].update(x=1-PAGE_SIDE_MARGIN-stack_width if language == LANGUAGE_EN else PAGE_SIDE_MARGIN,
+                                          width=stack_width, y=top_margin+(key-1)*(h+panel_gap), height=h,
+                                          column=2 if language == LANGUAGE_EN else 1, row=key+1)
+            for key in range(end, len(panels)):
+                planned_boxes[key]['row'] += end-2
+        else:
+            # 最低寸法が満たせない場合は元の非均等段組を使う。
+            planned_boxes = original_boxes
+            layout_family = 'conversation-asymmetric'
+    full_bleed = bool(dynamic_mode and len(panels) == 1 and family == 'climax' and page.get('special_emphasis')
+                      and panels[0].get('panel_shape') == 'large-bleed' and panels[0].get('shape_reason'))
+    if full_bleed:
+        planned_boxes[0].update(x=0., y=0., width=1., height=.96, full_bleed_effect=True)
+    if dynamic_mode:
+        planned_boxes, shared_edges = apply_shared_geometry(planned_boxes, panels, layout_family, str(language), int(next_page.get('page_number', 1) or 1), panel_gap)
     geometries: List[Dict[str, Any]] = []
     angled_used = 0
     y = top_margin
@@ -712,12 +823,12 @@ def reflow_page(
             gap=panel_gap,
         )
         for panel_index in indices:
-            box = boxes[panel_index]
+            box = planned_boxes[panel_index] if dynamic_mode else boxes[panel_index]
             importance = normalize_importance(panels[panel_index])
             geometry = {
                 "panel_id": str(panels[panel_index].get("id", "")),
                 **box,
-                "row": row_index,
+                "row": box.get("row", row_index),
                 "row_span": max(1, round(box["height"] * 12)),
                 "column_span": max(1, round(box["width"] * 12)),
                 "importance": importance,
@@ -737,11 +848,13 @@ def reflow_page(
                 else:
                     shape = panel_shape_for(template, panels[panel_index], row_index, int(box["column"]), len(panels))
                     shape_reason = ""
+                if dynamic_mode:
+                    shape, shape_reason = box['shape'], box['shape_reason']
                 geometry["shape"] = shape
-                geometry["polygon_points"] = shape_points(box, shape)
+                geometry["polygon_points"] = deepcopy(box['polygon_points']) if dynamic_mode else shape_points(box, shape)
                 geometry["shape_reason"] = shape_reason
                 geometry["z_index"] = 1 + max(0, round(panel_importance(panels[panel_index]) - 2.0))
-                geometry["bleed"] = bool(next_page.get("page_number", 1) == 1 and len(panels) == 1)
+                geometry["bleed"] = bool(full_bleed or next_page.get("page_number", 1) == 1 and len(panels) == 1)
                 geometry["gutter"] = {
                     "type": "diagonal" if shape != "rectangle" else "normal",
                     "width": _round(panel_gap),
@@ -852,6 +965,10 @@ def reflow_page(
                 _allow_fallback=False,
             )
 
+    if dynamic_mode:
+        shared_edges = _fit_shared_boundaries(geometries, panels, shared_edges, settings)
+        next_page['dynamic_layout'] = {'family': layout_family, 'shared_edges': shared_edges,
+                                     'outer_bounds': dict(left=PAGE_SIDE_MARGIN, right=1-PAGE_SIDE_MARGIN, top=top_margin, bottom=1-PAGE_BOTTOM_MARGIN)}
     signature = _page_signature(next_page, settings)
     next_page["layout_version"] = LAYOUT_VERSION
     next_page["layout_geometry"] = {
@@ -893,7 +1010,7 @@ def _stored_geometry_is_current(page: Mapping[str, Any], settings: Mapping[str, 
         stored_version = 0
     # 新規Projectでv3を指定した場合だけ、未作成のCompositionを計算する。
     # 既存v2はsettings更新やProject読込だけでは自動変更しない。
-    if requested_version >= SEMANTIC_COMPOSITION_VERSION and stored_version not in {SEMANTIC_COMPOSITION_VERSION}:
+    if requested_version >= SEMANTIC_COMPOSITION_VERSION and stored_version != requested_version:
         return False
     if requested_version >= SEMANTIC_COMPOSITION_VERSION and layout.get("semantic_policy_version") != SEMANTIC_POLICY_VERSION:
         return False
@@ -972,8 +1089,8 @@ def repair_storyboard_page(
         if not isinstance(page, Mapping):
             continue
         if str(page.get("id")) == str(page_id):
-            if composition_version == SEMANTIC_COMPOSITION_VERSION:
-                page = {**page, "composition_version": SEMANTIC_COMPOSITION_VERSION}
+            if composition_version in (SEMANTIC_COMPOSITION_VERSION, DYNAMIC_COMPOSITION_VERSION):
+                page = {**page, "composition_version": composition_version}
             repaired = reflow_page(page, canonical_settings)
             if int(repaired.get("composition_version", 0) or 0) >= SEMANTIC_COMPOSITION_VERSION and composition_quality_issues(repaired):
                 repaired = simplify_composition(repaired)

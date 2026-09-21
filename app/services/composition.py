@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, geometry_metrics, polygons_overlap, lock_outer_edges, polygon_safety_metrics
+
 import re
 from copy import deepcopy
 from typing import Any, Dict, List, Mapping, Sequence
@@ -11,7 +13,7 @@ from typing import Any, Dict, List, Mapping, Sequence
 # ポリシー付きCompositionで、既存v2を暗黙に書き換えない。
 COMPOSITION_VERSION = 2
 SEMANTIC_COMPOSITION_VERSION = 3
-CURRENT_COMPOSITION_VERSION = SEMANTIC_COMPOSITION_VERSION
+CURRENT_COMPOSITION_VERSION = DYNAMIC_COMPOSITION_VERSION
 LEGACY_COMPOSITION_VERSION = 1
 PAGE_SIZE = (900, 1200)
 PAGE_SAFE_MARGIN = 0.04
@@ -771,7 +773,7 @@ def _build_v3_page_composition(
     geometry_by_id = {str(item.get("panel_id")): item for item in geometries if isinstance(item, Mapping)}
     family = semantic_page_family(page)
     budget = semantic_effect_budget(page)
-    dominant_index = semantic_dominant_panel_index(page)
+    dominant_index = next((i for i, g in enumerate(geometries) if g.get('dominant')), None) if page.get('dynamic_layout') else semantic_dominant_panel_index(page)
     composition_panels: List[Dict[str, Any]] = []
     for index, panel in enumerate(panels):
         panel_id = str(panel.get("id", ""))
@@ -793,6 +795,10 @@ def _build_v3_page_composition(
         protected_zones = geometry.get("protected_zones") or semantic_protected_zones(panel)
         item = {
             "panel_id": panel_id,
+            "row": geometry.get("row"),
+            "base_box": deepcopy(geometry.get("base_box")),
+            "full_bleed_effect": bool(geometry.get("full_bleed_effect")),
+            "shared_edge_ids": deepcopy(geometry.get("shared_edge_ids", [])),
             **box,
             "area": _round(box["width"] * box["height"]),
             "bounding_box": dict(box),
@@ -930,6 +936,10 @@ def build_page_composition(
         from .visual_style import resolve_visual_style
 
         composition = _build_v3_page_composition(page, geometries, settings)
+        if composition_version >= DYNAMIC_COMPOSITION_VERSION:
+            composition['composition_version'] = DYNAMIC_COMPOSITION_VERSION
+            composition.update(deepcopy(page.get('dynamic_layout') or {}))
+            composition['effect_budget']['angled_panels'] = 2 if composition.get('shared_edges') else 0
         composition["style_profile"] = resolve_visual_style(settings or {})
         composition["page_direction"] = {
             "page_role": str(page.get("page_role") or composition["semantic_family"]),
@@ -1004,6 +1014,14 @@ def composition_for_page(page: Mapping[str, Any]) -> Dict[str, Any]:
                     breakout["render_suppressed_reason"] = "ellipse_without_valid_semantic_inset"
                 safe_breakouts.append(breakout)
             result["breakouts"] = safe_breakouts
+            if version < DYNAMIC_COMPOSITION_VERSION and result.get('panels'):
+                panels = result['panels']
+                safe = dict(left=min(p['x'] for p in panels), right=max(p['x']+p['width'] for p in panels),
+                            top=min(p['y'] for p in panels), bottom=max(p['y']+p['height'] for p in panels))
+                for panel in panels:
+                    points = panel.get('polygon_points', [])
+                    if len(points) == 4:
+                        panel['polygon_points'] = lock_outer_edges(points, panel, safe)
             return result
     return build_legacy_composition(page)
 
@@ -1077,9 +1095,14 @@ def composition_quality_issues(page: Mapping[str, Any]) -> List[Dict[str, str]]:
 
     for left_index, left in enumerate(geometry_rects):
         for right_index, right in enumerate(geometry_rects[left_index + 1 :], start=left_index + 2):
-            if _intersection_area(left, right) > 0.0001:
+            if (_intersection_area(left, right) > 0.0001 and polygons_overlap(normalize_polygon(panels[left_index].get("polygon_points"), left), normalize_polygon(panels[right_index-1].get("polygon_points"), right))):
                 issues.append({"key": f"composition-panel-overlap-{page_number}-{left_index + 1}-{right_index}", "label": f"ページ{page_number}のコマ重複", "detail": "Panel領域同士が重なっています。"})
 
+    if version >= DYNAMIC_COMPOSITION_VERSION:
+        metrics = {**geometry_metrics(composition), **polygon_safety_metrics(page)}
+        for key in ('outer_edge_slant_count', 'boundary_alignment_error', 'gutter_consistency_error', 'polygon_protected_clip_count', 'polygon_text_clip_count'):
+            if metrics[key]:
+                issues.append({'key': f'composition-boundary-{key}-{page_number}', 'label': f'ページ{page_number}の共有境界', 'detail': '外周または共有ガターが一致していません。配置を再計算してください。'})
     orders = [int(_float(panel.get("reading_order"), 0)) for panel in panels]
     expected_ids = [str(item.get("panel_id")) for item in sorted(panels, key=lambda item: int(_float(item.get("reading_order"), 0)))]
     layout_geometry = page.get("layout_geometry") if isinstance(page.get("layout_geometry"), Mapping) else {}
@@ -1192,7 +1215,7 @@ def composition_quality_issues(page: Mapping[str, Any]) -> List[Dict[str, str]]:
                 panel_area = polygon_area(panel.get("polygon_points"))
                 total_area = sum(areas) or 1.0
                 ratio = panel_area / total_area
-                if family in {"action", "comedy", "climax", "establishing"} and not 0.30 <= ratio <= 0.55:
+                if len(panels) > 1 and family in {"action", "comedy", "climax", "establishing"} and not 0.30 <= ratio <= 0.55:
                     issues.append({"key": f"composition-v3-dominant-area-{page_number}-{index}", "label": f"ページ{page_number}の主役コマ面積", "detail": "主役コマはページ面積の30〜50%を目安にしてください。"})
         breakouts_v3 = [item for item in composition.get("breakouts", []) if isinstance(item, Mapping) and item.get("enabled", True)]
         allowed_breakouts = max(0, int(budget.get("character_breakouts", 0) or 0))
@@ -1263,7 +1286,7 @@ def composition_quality_issues(page: Mapping[str, Any]) -> List[Dict[str, str]]:
             if str(overlay.get("type")) in {"bubble", "narration", "sfx"} and overlay.get("breakout") and not str(overlay.get("reason", "")).strip():
                 issues.append({"key": f"composition-v3-overlay-reason-{page_number}-{overlay_index}", "label": f"ページ{page_number}の文字越境理由", "detail": "Panel外へ出す文字要素には意味的な理由が必要です。"})
         if family in {"dialogue", "psychological", "establishing"}:
-            if non_rectangles:
+            if non_rectangles and version < DYNAMIC_COMPOSITION_VERSION:
                 issues.append({"key": f"composition-v3-quiet-shape-{page_number}", "label": f"ページ{page_number}の静かな形状", "detail": "会話・心理・導入ページでは特殊形状を抑制してください。"})
             if breakouts_v3:
                 issues.append({"key": f"composition-v3-quiet-breakout-{page_number}", "label": f"ページ{page_number}の静かなBreakout", "detail": "会話・心理・導入ページでは人物Breakoutを原則使いません。"})
@@ -1272,7 +1295,7 @@ def composition_quality_issues(page: Mapping[str, Any]) -> List[Dict[str, str]]:
     return issues
 
 
-def composition_quality_metrics(page: Mapping[str, Any]) -> Dict[str, int]:
+def composition_quality_metrics(page: Mapping[str, Any]) -> Dict[str, Any]:
     """描画結果へ結び付く、決定的なページ品質メトリクス。"""
 
     composition = page.get("composition") if isinstance(page.get("composition"), Mapping) else {}
@@ -1377,9 +1400,13 @@ def composition_quality_metrics(page: Mapping[str, Any]) -> Dict[str, int]:
         invalid_crop_count = 0
 
     return {
+        **geometry_metrics(composition),
+        **polygon_safety_metrics(page),
+        "circle_mask_count": sum(1 for item in composition.get("breakouts", []) if isinstance(item, Mapping) and item.get("enabled", True) and str(item.get("clip_shape", item.get("mask_shape", ""))).lower() == "circle"),
         "face_balloon_overlap_count": face_balloon_overlap_count,
         "important_subject_balloon_overlap_count": important_subject_balloon_overlap_count,
         "extreme_sliver_panel_count": sum(issue["key"].startswith("composition-sliver-") for issue in issues),
+        "meaningless_sliver_count": sum(issue["key"].startswith("composition-sliver-") for issue in issues),
         "ellipse_mask_count": ellipse_mask_count,
         "ambiguous_reading_order_count": sum(issue["key"].startswith("composition-reading-order-") for issue in issues),
         "text_overflow_count": text_overflow_count,
@@ -1403,6 +1430,14 @@ def composition_quality_score(page: Mapping[str, Any]) -> Dict[str, Any]:
     face_visibility = max(0, 100 - metrics["face_balloon_overlap_count"] * 35)
     decoration = max(0, 100 - sum(1 for issue in issues if "budget" in issue["key"] or "quiet-" in issue["key"]) * 25)
     return {
+        "outer_edge_alignment_score": max(0, 100 - 50*metrics["outer_edge_slant_count"]),
+        "gutter_consistency_score": max(0, 100 - 50*metrics["gutter_consistency_error"]),
+        "dynamic_layout_score": min(100, metrics["meaningful_dynamic_boundary_count"]*100),
+        "panel_size_variation_score": min(100, round((max(areas)/min(areas)-1)*100)) if areas and min(areas)>0 else 0,
+        "semantic_area_match_score": hierarchy,
+        "reading_order_score": max(0, 100-50*metrics['ambiguous_reading_order_count']),
+        "balloon_fit_score": readability,
+        "subject_safety_score": max(0, 100-35*(metrics['important_subject_balloon_overlap_count']+metrics['polygon_protected_clip_count'])),
         "readability": readability,
         "visual_hierarchy": hierarchy,
         "face_visibility": face_visibility,
@@ -1422,6 +1457,8 @@ def simplify_composition(page: Mapping[str, Any]) -> Dict[str, Any]:
     result = deepcopy(dict(page))
     composition = result.get("composition")
     if not isinstance(composition, Mapping) or int(composition.get("composition_version", 1) or 1) < SEMANTIC_COMPOSITION_VERSION:
+        return result
+    if int(composition.get("composition_version", 0)) >= DYNAMIC_COMPOSITION_VERSION:
         return result
     next_composition = deepcopy(dict(composition))
     family = str(next_composition.get("semantic_family") or "dialogue")

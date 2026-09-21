@@ -295,8 +295,9 @@ def test_quality_report_exposes_semantic_composition_score() -> None:
     assert report["composition_quality"]["average_readability"] is not None
 
 
-def test_new_project_default_is_v3() -> None:
-    assert DEFAULT_SETTINGS["composition_version"] == SEMANTIC_COMPOSITION_VERSION
+def test_new_project_default_is_current() -> None:
+    from app.services.composition import CURRENT_COMPOSITION_VERSION
+    assert DEFAULT_SETTINGS["composition_version"] == CURRENT_COMPOSITION_VERSION
 
 
 def test_v3_preview_pdf_zip_share_same_png(tmp_path) -> None:

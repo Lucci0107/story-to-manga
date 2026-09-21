@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .services.composition import COMPOSITION_VERSION, SEMANTIC_COMPOSITION_VERSION
+from .services.composition import COMPOSITION_VERSION, SEMANTIC_COMPOSITION_VERSION, CURRENT_COMPOSITION_VERSION
 from .services.layout import ensure_storyboard_layout, normalize_importance
 from .services.reading_order import (
     ALLOWED_LANGUAGES,
@@ -116,7 +116,7 @@ class SettingsPayload(BaseModel):
     pacing: str = "balanced"
     dialogue_density: str = "medium"
     # 新規Projectのv3選択を保存する。Noneは既存v2設定を意味する。
-    composition_version: Optional[int] = Field(default=None, ge=COMPOSITION_VERSION, le=SEMANTIC_COMPOSITION_VERSION)
+    composition_version: Optional[int] = Field(default=None, ge=COMPOSITION_VERSION, le=CURRENT_COMPOSITION_VERSION)
 
     @field_validator("language")
     @classmethod
@@ -672,7 +672,7 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
         return None
     raw_background = value.get("background") if isinstance(value.get("background"), dict) else {}
     result: Dict[str, Any] = {
-        "composition_version": max(COMPOSITION_VERSION, min(SEMANTIC_COMPOSITION_VERSION, version)),
+        "composition_version": max(COMPOSITION_VERSION, min(CURRENT_COMPOSITION_VERSION, version)),
         "policy": "semantic" if version >= SEMANTIC_COMPOSITION_VERSION else "legacy",
         "semantic_family": str(value.get("semantic_family", ""))[:40],
         "effect_budget": {
@@ -689,6 +689,21 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
         "overlays": [],
         "moved_text_items": [],
     }
+    if version >= 4:
+        result['family'] = str(value.get('family', ''))[:50]
+        safe = value.get('outer_bounds')
+        if isinstance(safe, dict):
+            result['outer_bounds'] = {k: _normalized_ratio(safe.get(k)) for k in ('left', 'right', 'top', 'bottom')}
+        result['shared_edges'] = []
+        for edge in value.get('shared_edges', [])[:2] if isinstance(value.get('shared_edges'), list) else []:
+            if not isinstance(edge, dict) or edge.get('axis') not in ('vertical', 'horizontal'):
+                continue
+            line, ids = edge.get('center_line'), edge.get('panel_ids')
+            if not isinstance(line, list) or len(line) != 2 or not all(isinstance(p, list) and len(p) == 2 for p in line) or not isinstance(ids, list) or len(ids) != 2:
+                continue
+            result['shared_edges'].append(dict(id=str(edge.get('id', ''))[:80], axis=edge['axis'],
+                                               center_line=[[_normalized_ratio(v) for v in p] for p in line],
+                                               panel_ids=[str(v)[:120] for v in ids], width=_normalized_ratio(edge.get('width'), .014)))
     raw_panels = value.get("panels", [])
     if isinstance(raw_panels, list):
         for raw in raw_panels[:24]:
@@ -705,6 +720,10 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
             panel_height = _normalized_ratio(raw.get("height"), 0.2)
             panel = {
                 "panel_id": str(raw.get("panel_id", ""))[:120],
+                "row": _bounded_int(raw.get('row'), 1, 1, 24),
+                "base_box": {k: _normalized_ratio(raw['base_box'].get(k)) for k in ('x', 'y', 'width', 'height')} if isinstance(raw.get('base_box'), dict) else None,
+                "full_bleed_effect": bool(raw.get('full_bleed_effect')),
+                "shared_edge_ids": [str(v)[:80] for v in raw.get('shared_edge_ids', [])[:2]] if isinstance(raw.get('shared_edge_ids'), list) else [],
                 "x": _normalized_ratio(raw.get("x")),
                 "y": _normalized_ratio(raw.get("y")),
                 "width": panel_width,

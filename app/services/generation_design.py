@@ -84,6 +84,8 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
             word in issue["key"]
             for word in (
                 "sliver",
+                "boundary",
+                "panel-overlap",
                 "protected-collision",
                 "face-collision",
                 "reading-order",

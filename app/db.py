@@ -39,7 +39,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "pacing": "balanced",
     "dialogue_density": "medium",
     # 新規Projectだけv3を既定にする。既存設定にない場合はv2を維持する。
-    "composition_version": 3,
+    "composition_version": 4,
 }
 
 
