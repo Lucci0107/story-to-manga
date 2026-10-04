@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping
 
+from ..config import DEFAULT_IMAGE_MODEL
 from .composition import PAGE_SIZE
+from .model_registry import capability
 
 
 DIRECT_GENERATION = "direct"
@@ -150,8 +152,9 @@ def resolve_generation_strategy(panel: Mapping[str, Any]) -> dict:
 
 
 def _generation_size_for_ratio(ratio: float, model_id: str | None = None) -> str:
-    model = model_id or "gpt-image-2"
-    if model in {"gpt-image-2", "gpt-image-2-2026-04-21"}:
+    model = model_id or DEFAULT_IMAGE_MODEL
+    model_capability = capability(model)
+    if (model_capability and model_capability.supports_custom_image_size) or model == "gpt-image-2-2026-04-21":
         bounded_ratio = max(1 / 3, min(3, ratio))
         candidates = []
         for width in range(592, 1777, 16):
@@ -170,7 +173,7 @@ def _generation_size_for_ratio(ratio: float, model_id: str | None = None) -> str
 def artwork_generation_size(panel: Mapping[str, Any], model_id: str | None = None) -> str:
     """対応サイズのうちcover時の切り落とし面積が最小になるものを選ぶ。"""
     ratio = artwork_aspect_ratio(panel)
-    model = model_id or panel.get("generation_image_model") or "gpt-image-2"
+    model = model_id or panel.get("generation_image_model") or DEFAULT_IMAGE_MODEL
     direction = _direction_from_panel(panel)
     stored_canvas = direction.get("generation_canvas") if isinstance(direction, Mapping) else None
     stored_size = None

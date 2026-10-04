@@ -16,7 +16,13 @@ python3 -m venv .venv
 
 `.env.example` を参照してください。`OPENAI_API_KEY` が未設定の場合はデモAIとデモアートが動作します。実AIを利用する場合は、サーバー側の環境変数またはプロジェクト直下の`.env`だけにキーを設定し、`AI_PROVIDER=openai` と `IMAGE_PROVIDER=openai` を指定してください。キーはクライアントへ渡しません。
 
-テキスト処理はOpenAI Responses APIのStructured Outputs（JSON Schema）を使い、`OPENAI_TEXT_MODEL`でモデルを変更できます。パネル画像はOpenAI Images APIを使い、`OPENAI_IMAGE_MODEL`で変更できます。既定値はそれぞれ`gpt-5.6-luna`と`gpt-image-2`です。通常のテキスト処理とは別に、Storyboardは`OPENAI_STORYBOARD_TIMEOUT_SECONDS`（既定240秒）と`OPENAI_STORYBOARD_MAX_RETRIES`（既定1回）で大きなStructured Outputへ対応します。すべての再試行回数と最大出力トークンには上限があります。
+テキスト処理はOpenAI Responses APIのStructured Outputs（JSON Schema）を使い、設定画面で工程ごとのモデルを選択できます。自動・バランスは`gpt-6.1-sol`を中心に、確認工程は`gpt-6-luna`、最高品質は`gpt-6-astra`、コスト優先は`gpt-6-luna`を使います。推論強度は自動・low・medium・high・xhigh・maxに対応し、自動はモデルの標準値を使います。[OpenAIのモデル仕様](https://developers.openai.com/api/docs/guides/latest-model)を2026年10月4日に確認しました。
+
+画像生成の既定値は`gpt-image-2.5-sunburst`で、高速制作向けの`gpt-image-2.5-flare`も選択できます。コマ比率に合う任意サイズと保存済みトリミングを引き継ぎ、生成品質は従来どおり`low`です。[画像APIの仕様](https://developers.openai.com/api/docs/guides/image-generation#customize-image-output)に合わせています。設定画面の「最新の標準設定を選択」から保存すると、最新の既定値へ戻せます。既存の個別モデル設定・プロジェクトの指定・生成済み画像は保持します。
+
+設定画面を未導入の既存利用者やモデル指定のない直接呼び出しには、`OPENAI_TEXT_MODEL`（既定`gpt-6-luna`）と`OPENAI_IMAGE_MODEL`（既定`gpt-image-2.5-sunburst`）を使います。Astraが利用できない場合はGPT-6.1 Solへ、GPT-6.1 SolとGPT-6 Lunaが利用できない場合は同系列の5.6モデルへ一度だけ切り替え、実際のモデルと推論を履歴に記録します。通信障害や認証エラーではモデルを切り替えません。
+
+通常のテキスト処理とは別に、Storyboardは`OPENAI_STORYBOARD_TIMEOUT_SECONDS`（既定240秒）と`OPENAI_STORYBOARD_MAX_RETRIES`（既定1回）で大きなStructured Outputへ対応します。すべての再試行回数と最大出力トークンには上限があります。
 
 ## 対応形式
 

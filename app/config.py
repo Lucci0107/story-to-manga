@@ -8,6 +8,8 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_TEXT_MODEL = "gpt-6-luna"
+DEFAULT_IMAGE_MODEL = "gpt-image-2.5-sunburst"
 
 
 def _load_local_env() -> None:
@@ -157,14 +159,14 @@ def get_settings() -> Settings:
         ),
         openai_text_model=os.getenv(
             "OPENAI_TEXT_MODEL",
-            os.getenv("OPENAI_MODEL", "gpt-5.6-luna"),
+            os.getenv("OPENAI_MODEL", DEFAULT_TEXT_MODEL),
         ),
         # 旧環境変数との互換性を保つための別名。
         openai_model=os.getenv(
             "OPENAI_TEXT_MODEL",
-            os.getenv("OPENAI_MODEL", "gpt-5.6-luna"),
+            os.getenv("OPENAI_MODEL", DEFAULT_TEXT_MODEL),
         ),
-        openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"),
+        openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", DEFAULT_IMAGE_MODEL),
         openai_timeout_seconds=max(5.0, min(300.0, _float_env("OPENAI_TIMEOUT_SECONDS", 90.0))),
         # StoryboardはStructured Outputが大きいため、短いテキスト処理と分離する。
         openai_storyboard_timeout_seconds=max(

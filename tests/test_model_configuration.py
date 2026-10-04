@@ -1,4 +1,4 @@
-"""AIモデル設定・解決・Astraフォールバックの決定論的テスト。"""
+"""AIモデル設定・推論強度・フォールバックの決定論的テスト。"""
 
 from __future__ import annotations
 
@@ -13,10 +13,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import db
+from app.config import get_settings
 from app.main import app
-from app.services.ai_pipeline import OpenAIProvider
+from app.services.ai_pipeline import AIProviderError, OpenAIProvider
+from app.services.openai_client import OpenAIRequestError
 from app.services.model_registry import (
     DEFAULT_AI_MODEL_SETTINGS,
+    MODEL_TASKS,
     TEXT_MODEL_IDS,
     _AVAILABILITY_CACHE,
     get_model_availability,
@@ -94,9 +97,13 @@ def valid_analysis() -> dict:
 def test_registry_accepts_supported_models_and_rejects_arbitrary_ids() -> None:
     assert "gpt-6-astra" in TEXT_MODEL_IDS
     assert is_allowed_text_model("gpt-6-astra")
+    assert is_allowed_text_model("gpt-6.1-sol")
+    assert is_allowed_text_model("gpt-6-luna")
     assert is_allowed_text_model("auto", allow_auto=True)
     assert not is_allowed_text_model("gpt-unknown")
     assert is_allowed_image_model("gpt-image-2")
+    assert is_allowed_image_model("gpt-image-2.5-sunburst")
+    assert is_allowed_image_model("gpt-image-2.5-flare")
     assert not is_allowed_image_model("gpt-6-astra")
     with pytest.raises(ValueError):
         validate_model_settings({"story_analysis_model": "gpt-unknown"}, partial=True)
@@ -108,12 +115,12 @@ def test_preset_and_project_override_resolution() -> None:
     highest = resolve_model_settings({"preset": "highest_quality"})
     assert highest["story_analysis_model"] == "gpt-6-astra"
     assert highest["settings_recommendation_model"] == "gpt-6-astra"
-    assert highest["character_model"] == "gpt-5.6-sol"
+    assert highest["character_model"] == "gpt-6.1-sol"
     balanced = resolve_model_settings(
         {"preset": "balanced"}, {"storyboard_model": "gpt-6-astra"}
     )
-    assert balanced["story_analysis_model"] == "gpt-5.6-terra"
-    assert balanced["settings_recommendation_model"] == "gpt-5.6-terra"
+    assert balanced["story_analysis_model"] == "gpt-6.1-sol"
+    assert balanced["settings_recommendation_model"] == "gpt-6.1-sol"
     assert balanced["storyboard_model"] == "gpt-6-astra"
     legacy = resolve_model_settings(
         None, legacy_text_model="gpt-5.6-luna", legacy_image_model="gpt-image-2"
@@ -124,10 +131,67 @@ def test_preset_and_project_override_resolution() -> None:
 
 def test_invalid_saved_model_falls_back_without_breaking_and_reasoning_is_capability_aware() -> None:
     resolved = resolve_model_settings({"preset": "balanced", "story_analysis_model": "bad-model"})
-    assert resolved["story_analysis_model"] == "gpt-5.6-terra"
+    assert resolved["story_analysis_model"] == "gpt-6.1-sol"
     assert reasoning_for_model({"reasoning_effort": "high"}, "gpt-6-astra") == "high"
     assert reasoning_for_model({"reasoning_effort": "none"}, "gpt-6-astra") == "auto"
-    assert DEFAULT_AI_MODEL_SETTINGS["image_model"] == "gpt-image-2"
+    assert DEFAULT_AI_MODEL_SETTINGS["image_model"] == "gpt-image-2.5-sunburst"
+
+
+def test_latest_defaults_and_legacy_project_pins_coexist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.config._load_local_env", lambda: None)
+    for key in ("OPENAI_MODEL", "OPENAI_TEXT_MODEL", "OPENAI_IMAGE_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+    assert get_settings().openai_text_model == "gpt-6-luna"
+    assert get_settings().openai_image_model == "gpt-image-2.5-sunburst"
+    settings = resolve_model_settings(DEFAULT_AI_MODEL_SETTINGS)
+    assert settings["storyboard_model"] == "gpt-6.1-sol"
+    assert settings["qa_model"] == "gpt-6-luna"
+    assert settings["reasoning_effort"] == "auto"
+    economy = resolve_model_settings({"preset": "economy"})
+    assert all(economy[f"{task}_model"] == "gpt-6-luna" for task in MODEL_TASKS)
+    pinned = resolve_model_settings(DEFAULT_AI_MODEL_SETTINGS, {
+        "storyboard_model": "gpt-5.6-sol", "image_model": "gpt-image-2", "reasoning_effort": "high",
+    })
+    assert pinned["storyboard_model"] == "gpt-5.6-sol"
+    assert pinned["image_model"] == "gpt-image-2"
+    assert pinned["reasoning_effort"] == "high"
+
+
+def test_registry_exposes_current_reasoning_without_unsupported_ultra() -> None:
+    view = model_registry_view()
+    assert [item["id"] for item in view["reasoning_levels"]] == ["auto", "low", "medium", "high", "xhigh", "max"]
+    for model in view["text_models"]:
+        assert model["ui_reasoning_levels"] == ["low", "medium", "high", "xhigh", "max"]
+    sol = next(model for model in view["text_models"] if model["id"] == "gpt-6.1-sol")
+    assert "none" not in sol["supported_reasoning_levels"]
+    assert "minimal" not in sol["supported_reasoning_levels"]
+    assert view["default_settings"] == DEFAULT_AI_MODEL_SETTINGS
+    assert view["preset_policies"]["auto"]["adaptation"] == "gpt-6.1-sol"
+    with pytest.raises(ValueError):
+        validate_model_settings({"reasoning_effort": "ultra"})
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"])
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+def test_latest_reasoning_is_sent_in_responses_and_recorded(monkeypatch, model, effort) -> None:
+    calls = []
+
+    def fake_request(url, **kwargs):
+        calls.append(kwargs["payload"])
+        return {**response_with_json(valid_analysis()), "model": model}
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.ai_pipeline.request_json", fake_request)
+    provider = OpenAIProvider({"story_analysis_model": model, "reasoning_effort": effort})
+    provider.analyze("本文", "作品")
+    assert len(calls) == 1
+    assert calls[0]["model"] == model
+    assert calls[0]["reasoning"] == {"effort": effort}
+    assert calls[0]["text"]["format"]["strict"] is True
+    assert calls[0]["store"] is False
+    assert not {"temperature", "top_p", "top_logprobs"} & calls[0].keys()
+    assert provider.last_generation_metadata["reasoning_effort"] == effort
+    assert provider.last_generation_metadata["actual_model"] == model
 
 
 def test_storyboard_auto_request_uses_allowlisted_model_and_strict_schema(
@@ -177,13 +241,18 @@ def test_storyboard_auto_request_uses_allowlisted_model_and_strict_schema(
     )
 
     assert result and result[0]["panels"]
-    assert calls[0]["model"] == "gpt-5.6-sol"
+    assert calls[0]["model"] == "gpt-6.1-sol"
     assert calls[0]["text"]["format"]["type"] == "json_schema"
     assert calls[0]["text"]["format"]["strict"] is True
 
 
-def test_astra_unavailable_falls_back_once_and_records_requested_actual_models(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("requested,fallback", [
+    ("gpt-6-astra", "gpt-6.1-sol"),
+    ("gpt-6.1-sol", "gpt-5.6-sol"),
+    ("gpt-6-luna", "gpt-5.6-luna"),
+])
+def test_model_unavailable_falls_back_once_and_records_requested_actual_models(
+    monkeypatch: pytest.MonkeyPatch, requested: str, fallback: str,
 ) -> None:
     calls: list[dict] = []
 
@@ -201,18 +270,18 @@ def test_astra_unavailable_falls_back_once_and_records_requested_actual_models(
 
     monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
     monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
-    provider = OpenAIProvider({"preset": "highest_quality", "reasoning_effort": "high"})
+    provider = OpenAIProvider({"story_analysis_model": requested, "reasoning_effort": "max"})
     result = provider.analyze("蒼は灯台へ向かった。", "灯台")
 
     assert result["title"] == "灯台"
-    assert [call["model"] for call in calls] == ["gpt-6-astra", "gpt-5.6-sol"]
-    assert calls[0]["reasoning"] == {"effort": "high"}
+    assert [call["model"] for call in calls] == [requested, fallback]
+    assert all(call["reasoning"] == {"effort": "max"} for call in calls)
     assert provider.last_generation_metadata == {
         "task": "story_analysis",
-        "requested_model": "gpt-6-astra",
-        "actual_model": "gpt-5.6-sol",
+        "requested_model": requested,
+        "actual_model": fallback,
         "fallback": True,
-        "reasoning_effort": "high",
+        "reasoning_effort": "max",
         "provider": "openai",
         "created_at": provider.last_generation_metadata["created_at"],
     }
@@ -234,19 +303,45 @@ def test_astra_available_dispatches_selected_model(monkeypatch: pytest.MonkeyPat
     assert provider.last_generation_metadata["fallback"] is False
 
 
+@pytest.mark.parametrize("category,code,expected_calls", [
+    ("invalid_request", "model_not_found", 2),
+    ("authentication", "invalid_api_key", 1),
+    ("rate_limit", "rate_limit_exceeded", 1),
+])
+def test_new_model_fallback_is_bounded_and_only_for_access_errors(monkeypatch, category, code, expected_calls) -> None:
+    calls = []
+
+    def fail_request(url, **kwargs):
+        calls.append(kwargs["payload"]["model"])
+        raise OpenAIRequestError("利用できません", category=category, error_code=code)
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.ai_pipeline.request_json", fail_request)
+    provider = OpenAIProvider({"story_analysis_model": "gpt-6.1-sol", "reasoning_effort": "max"})
+    with pytest.raises(AIProviderError) as error:
+        provider.analyze("本文", "作品")
+    assert len(calls) == expected_calls
+    assert error.value.retryable is False
+    assert error.value.requested_model == "gpt-6.1-sol"
+    assert error.value.actual_model == calls[-1]
+
+
 def test_model_availability_is_cached_and_does_not_expose_key(monkeypatch: pytest.MonkeyPatch) -> None:
     _AVAILABILITY_CACHE.clear()
     calls: list[str] = []
 
     def fake_urlopen(request, timeout):
         calls.append(request.full_url)
-        return FakeHTTPResponse({"data": [{"id": "gpt-6-astra"}, {"id": "gpt-5.6-sol"}]})
+        return FakeHTTPResponse({"data": [{"id": "gpt-6-astra"}, {"id": "gpt-6.1-sol"}, {"id": "gpt-image-2.5-sunburst"}]})
 
     monkeypatch.setattr("app.services.model_registry.get_settings", runtime_settings)
     monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
     first = get_model_availability()
     second = get_model_availability()
     assert first["gpt-6-astra"]["status"] == "available"
+    assert first["gpt-6.1-sol"]["status"] == "available"
+    assert first["gpt-6-luna"]["status"] == "unavailable"
+    assert first["gpt-image-2.5-sunburst"]["status"] == "available"
     assert second == first
     assert len(calls) == 1
     assert "test-key" not in json.dumps(first)
@@ -278,6 +373,17 @@ def test_model_settings_api_persists_global_and_project_override(tmp_path: Path)
     assert override.json()["settings"]["global"]["story_analysis_model"] == "gpt-6-astra"
     assert override.json()["settings"]["project"]["story_analysis_model"] == "gpt-5.6-terra"
     assert override.json()["settings"]["effective"]["story_analysis_model"] == "gpt-5.6-terra"
+    latest = client.put("/api/settings/ai-models", json={
+        **DEFAULT_AI_MODEL_SETTINGS,
+        "story_analysis_model": "gpt-6.1-sol", "image_model": "gpt-image-2.5-sunburst", "reasoning_effort": "max",
+    })
+    assert latest.status_code == 200
+    restored = client.get(f"/api/projects/{project['id']}/ai-model-settings").json()["settings"]
+    assert restored["global"]["story_analysis_model"] == "gpt-6.1-sol"
+    assert restored["effective"]["story_analysis_model"] == "gpt-5.6-terra"
+    assert restored["effective"]["image_model"] == "gpt-image-2.5-sunburst"
+    assert restored["effective"]["reasoning_effort"] == "max"
+    assert client.put("/api/settings/ai-models", json={"reasoning_effort": "ultra"}).status_code == 422
     invalid = client.put(
         "/api/settings/ai-models", json={"story_analysis_model": "arbitrary-model"}
     )

@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 from PIL import Image, ImageColor, ImageDraw
 
-from ..config import get_settings
+from ..config import DEFAULT_IMAGE_MODEL, get_settings
 from .artwork_geometry import artwork_generation_size, generation_canvas_zones
 from .openai_client import OpenAIRequestError, request_bytes, request_json
 from .model_registry import is_allowed_image_model, model_for_task, new_generation_metadata
@@ -184,7 +184,7 @@ def save_openai_image(
     ensure_storage_capacity(storage, operation="image_generation")
     requested_model = model_id if is_allowed_image_model(str(model_id or "")) else runtime.openai_image_model
     if not is_allowed_image_model(str(requested_model)):
-        requested_model = "gpt-image-2"
+        requested_model = DEFAULT_IMAGE_MODEL
     generation_size = artwork_generation_size(panel, str(requested_model))
     prompt = panel.get("generation_prompt") or "漫画のコマ。文字は描かない。"
     if panel.get("panel_direction"):

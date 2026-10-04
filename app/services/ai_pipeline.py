@@ -664,7 +664,7 @@ def _language_reference(settings: Optional[Dict[str, Any]]) -> str:
 
 
 def _is_model_access_error(error: OpenAIRequestError) -> bool:
-    """Astraの利用不可だけを判定し、一般的な入力エラーは再試行しない。"""
+    """モデルの利用不可を判定し、一般的な入力エラーは再試行しない。"""
 
     if getattr(error, "category", None) == "model_access":
         return True
@@ -883,7 +883,7 @@ class OpenAIProvider(DemoAIProvider):
         )
         fallback_model = capability(requested_model).fallback_model if capability(requested_model) else None
         candidates = [requested_model]
-        if requested_model == "gpt-6-astra" and fallback_model:
+        if fallback_model:
             candidates.append(fallback_model)
         for candidate_index, actual_model in enumerate(candidates):
             reasoning = reasoning_for_model(self.model_settings, actual_model)
@@ -954,11 +954,9 @@ class OpenAIProvider(DemoAIProvider):
                     client_request_id,
                 )
                 is_access_error = (
-                    requested_model == "gpt-6-astra"
-                    and candidate_index == 0
-                    and _is_model_access_error(exc)
+                    _is_model_access_error(exc)
                 )
-                if is_access_error and len(candidates) > 1:
+                if is_access_error and candidate_index + 1 < len(candidates):
                     continue
                 raise AIProviderError(
                     str(exc),

@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional
 
-from ..config import get_settings
+from ..config import DEFAULT_IMAGE_MODEL, DEFAULT_TEXT_MODEL, get_settings
 from .openai_client import OpenAIRequestError, request_json
 
 
@@ -37,6 +37,7 @@ class ModelCapability:
     supports_reasoning: bool = False
     supported_reasoning_levels: tuple[str, ...] = ()
     supports_image_generation: bool = False
+    supports_custom_image_size: bool = False
     fallback_model: Optional[str] = None
     enabled: bool = True
 
@@ -53,14 +54,40 @@ MODEL_REGISTRY: Dict[str, ModelCapability] = {
         supports_structured_outputs=True,
         supports_reasoning=True,
         supported_reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+        fallback_model="gpt-6.1-sol",
+    ),
+    "gpt-6.1-sol": ModelCapability(
+        id="gpt-6.1-sol",
+        display_name="GPT-6.1 Sol",
+        provider="openai",
+        type=TEXT_MODEL_TYPE,
+        description="最新の標準モデル。複雑な漫画化と人物・コマの一貫性を重視する制作向け。",
+        quality_label="高品質・標準",
+        supports_responses=True,
+        supports_structured_outputs=True,
+        supports_reasoning=True,
+        supported_reasoning_levels=("low", "medium", "high", "xhigh", "max"),
         fallback_model="gpt-5.6-sol",
+    ),
+    "gpt-6-luna": ModelCapability(
+        id="gpt-6-luna",
+        display_name="GPT-6 Luna",
+        provider="openai",
+        type=TEXT_MODEL_TYPE,
+        description="最新の軽量モデル。確認・反復処理・大量処理のコストを抑えます。",
+        quality_label="エコノミー",
+        supports_responses=True,
+        supports_structured_outputs=True,
+        supports_reasoning=True,
+        supported_reasoning_levels=("none", "low", "medium", "high", "xhigh", "max"),
+        fallback_model="gpt-5.6-luna",
     ),
     "gpt-5.6-sol": ModelCapability(
         id="gpt-5.6-sol",
         display_name="GPT-5.6 Sol",
         provider="openai",
         type=TEXT_MODEL_TYPE,
-        description="高品質。複雑な生成と一貫性を重視する制作向け。",
+        description="旧世代の高品質モデル。保存済み設定と代替モデルとして利用できます。",
         quality_label="高品質",
         supports_responses=True,
         supports_structured_outputs=True,
@@ -72,7 +99,7 @@ MODEL_REGISTRY: Dict[str, ModelCapability] = {
         display_name="GPT-5.6 Terra",
         provider="openai",
         type=TEXT_MODEL_TYPE,
-        description="品質とコストのバランスに優れた標準モデル。",
+        description="旧世代の標準モデル。保存済み設定を引き継ぐために選択できます。",
         quality_label="バランス",
         supports_responses=True,
         supports_structured_outputs=True,
@@ -84,21 +111,42 @@ MODEL_REGISTRY: Dict[str, ModelCapability] = {
         display_name="GPT-5.6 Luna",
         provider="openai",
         type=TEXT_MODEL_TYPE,
-        description="コストを抑えたい反復処理・大量処理向け。",
+        description="旧世代の軽量モデル。保存済み設定と代替モデルとして利用できます。",
         quality_label="エコノミー",
         supports_responses=True,
         supports_structured_outputs=True,
         supports_reasoning=True,
         supported_reasoning_levels=("none", "low", "medium", "high", "xhigh", "max"),
     ),
+    "gpt-image-2.5-sunburst": ModelCapability(
+        id="gpt-image-2.5-sunburst",
+        display_name="GPT-Image-2.5 Sunburst",
+        provider="openai",
+        type=IMAGE_MODEL_TYPE,
+        description="最新の高品質画像モデル。人物・構図の指示を反映するコマ画像向け。",
+        quality_label="画像・最高品質",
+        supports_image_generation=True,
+        supports_custom_image_size=True,
+    ),
+    "gpt-image-2.5-flare": ModelCapability(
+        id="gpt-image-2.5-flare",
+        display_name="GPT-Image-2.5 Flare",
+        provider="openai",
+        type=IMAGE_MODEL_TYPE,
+        description="最新の高速画像モデル。下書きや反復制作向け。",
+        quality_label="画像・高速",
+        supports_image_generation=True,
+        supports_custom_image_size=True,
+    ),
     "gpt-image-2": ModelCapability(
         id="gpt-image-2",
         display_name="GPT-Image-2",
         provider="openai",
         type=IMAGE_MODEL_TYPE,
-        description="コマ画像生成専用。テキストモデルとは別に設定します。",
-        quality_label="画像生成",
+        description="旧世代の画像モデル。保存済み設定を引き継ぐために選択できます。",
+        quality_label="画像・旧世代",
         supports_image_generation=True,
+        supports_custom_image_size=True,
     ),
 }
 
@@ -109,7 +157,7 @@ IMAGE_MODEL_IDS = tuple(
     model_id for model_id, capability in MODEL_REGISTRY.items() if capability.type == IMAGE_MODEL_TYPE
 )
 SUPPORTED_PRESETS = ("auto", "highest_quality", "balanced", "economy")
-SUPPORTED_REASONING_LEVELS = (AUTO_REASONING, "low", "medium", "high")
+SUPPORTED_REASONING_LEVELS = (AUTO_REASONING, "low", "medium", "high", "xhigh", "max")
 MODEL_TASKS = (
     "story_analysis",
     "adaptation",
@@ -120,77 +168,77 @@ MODEL_TASKS = (
     "panel_prompt",
 )
 TASK_LABELS = {
-    "story_analysis": "Story Analysis",
-    "adaptation": "Manga Adaptation",
+    "story_analysis": "物語解析",
+    "adaptation": "漫画化脚本",
     "settings_recommendation": "漫画化設定の推奨",
-    "character": "Character Bible",
-    "storyboard": "Storyboard",
-    "qa": "Knowledge-aware QA",
-    "panel_prompt": "Panel Prompt",
-    "image": "Image Generation",
+    "character": "キャラクター設定",
+    "storyboard": "ネーム・コマ設計",
+    "qa": "原作・ナレッジの確認",
+    "panel_prompt": "コマ画像の指示文",
+    "image": "画像生成",
 }
 
 PRESET_LABELS = {
-    "auto": "Auto",
-    "highest_quality": "Highest Quality",
-    "balanced": "Balanced",
-    "economy": "Economy",
+    "auto": "自動",
+    "highest_quality": "最高品質",
+    "balanced": "バランス",
+    "economy": "コスト優先",
 }
 
 PRESET_DESCRIPTIONS = {
     "auto": "工程ごとに品質とコストのバランスを自動選択します。",
-    "highest_quality": "Astraを優先し、利用できない場合はSolへ切り替えます。",
+    "highest_quality": "Astraを優先し、利用できない場合はGPT-6.1 Solへ切り替えます。",
     "balanced": "日常的な制作に向いた品質とコストの設定です。",
     "economy": "反復処理や大量処理のコストを抑えます。",
 }
 
 PRESET_POLICIES: Dict[str, Dict[str, str]] = {
     "auto": {
-        "story_analysis": "gpt-5.6-terra",
-        "adaptation": "gpt-5.6-sol",
-        "settings_recommendation": "gpt-5.6-terra",
-        "character": "gpt-5.6-sol",
-        "storyboard": "gpt-5.6-sol",
-        "qa": "gpt-5.6-luna",
-        "panel_prompt": "gpt-5.6-terra",
-        "image": "gpt-image-2",
+        "story_analysis": "gpt-6.1-sol",
+        "adaptation": "gpt-6.1-sol",
+        "settings_recommendation": "gpt-6.1-sol",
+        "character": "gpt-6.1-sol",
+        "storyboard": "gpt-6.1-sol",
+        "qa": "gpt-6-luna",
+        "panel_prompt": "gpt-6.1-sol",
+        "image": DEFAULT_IMAGE_MODEL,
     },
     "highest_quality": {
         "story_analysis": "gpt-6-astra",
         "adaptation": "gpt-6-astra",
         "settings_recommendation": "gpt-6-astra",
-        "character": "gpt-5.6-sol",
+        "character": "gpt-6.1-sol",
         "storyboard": "gpt-6-astra",
-        "qa": "gpt-5.6-terra",
-        "panel_prompt": "gpt-5.6-sol",
-        "image": "gpt-image-2",
+        "qa": "gpt-6.1-sol",
+        "panel_prompt": "gpt-6.1-sol",
+        "image": DEFAULT_IMAGE_MODEL,
     },
     "balanced": {
-        "story_analysis": "gpt-5.6-terra",
-        "adaptation": "gpt-5.6-terra",
-        "settings_recommendation": "gpt-5.6-terra",
-        "character": "gpt-5.6-terra",
-        "storyboard": "gpt-5.6-terra",
-        "qa": "gpt-5.6-luna",
-        "panel_prompt": "gpt-5.6-terra",
-        "image": "gpt-image-2",
+        "story_analysis": "gpt-6.1-sol",
+        "adaptation": "gpt-6.1-sol",
+        "settings_recommendation": "gpt-6.1-sol",
+        "character": "gpt-6.1-sol",
+        "storyboard": "gpt-6.1-sol",
+        "qa": "gpt-6-luna",
+        "panel_prompt": "gpt-6.1-sol",
+        "image": DEFAULT_IMAGE_MODEL,
     },
     "economy": {
-        "story_analysis": "gpt-5.6-luna",
-        "adaptation": "gpt-5.6-luna",
-        "settings_recommendation": "gpt-5.6-luna",
-        "character": "gpt-5.6-luna",
-        "storyboard": "gpt-5.6-luna",
-        "qa": "gpt-5.6-luna",
-        "panel_prompt": "gpt-5.6-luna",
-        "image": "gpt-image-2",
+        "story_analysis": "gpt-6-luna",
+        "adaptation": "gpt-6-luna",
+        "settings_recommendation": "gpt-6-luna",
+        "character": "gpt-6-luna",
+        "storyboard": "gpt-6-luna",
+        "qa": "gpt-6-luna",
+        "panel_prompt": "gpt-6-luna",
+        "image": DEFAULT_IMAGE_MODEL,
     },
 }
 
 DEFAULT_AI_MODEL_SETTINGS: Dict[str, Any] = {
     "preset": "auto",
     **{f"{task}_model": AUTO_MODEL for task in MODEL_TASKS},
-    "image_model": "gpt-image-2",
+    "image_model": DEFAULT_IMAGE_MODEL,
     "reasoning_effort": AUTO_REASONING,
 }
 
@@ -240,7 +288,7 @@ def validate_model_settings(value: Mapping[str, Any], *, partial: bool = False) 
     if "reasoning_effort" in value and value.get("reasoning_effort") is not None:
         reasoning = str(value["reasoning_effort"])
         if reasoning not in SUPPORTED_REASONING_LEVELS:
-            raise ValueError("Reasoning設定が不正です")
+            raise ValueError("推論強度の設定が不正です")
         result["reasoning_effort"] = reasoning
     for task in MODEL_TASKS:
         key = f"{task}_model"
@@ -265,8 +313,8 @@ def validate_model_settings(value: Mapping[str, Any], *, partial: bool = False) 
 def _legacy_settings(legacy_text_model: str, legacy_image_model: str) -> Dict[str, Any]:
     """モデル設定未導入の既存ユーザーが従来のモデルを継続利用するための値。"""
 
-    text_model = legacy_text_model if legacy_text_model in TEXT_MODEL_IDS else "gpt-5.6-luna"
-    image_model = legacy_image_model if legacy_image_model in IMAGE_MODEL_IDS else "gpt-image-2"
+    text_model = legacy_text_model if legacy_text_model in TEXT_MODEL_IDS else DEFAULT_TEXT_MODEL
+    image_model = legacy_image_model if legacy_image_model in IMAGE_MODEL_IDS else DEFAULT_IMAGE_MODEL
     return {
         "preset": "auto",
         **{f"{task}_model": text_model for task in MODEL_TASKS},
@@ -279,8 +327,8 @@ def resolve_model_settings(
     global_settings: Optional[Mapping[str, Any]] = None,
     project_settings: Optional[Mapping[str, Any]] = None,
     *,
-    legacy_text_model: str = "gpt-5.6-luna",
-    legacy_image_model: str = "gpt-image-2",
+    legacy_text_model: str = DEFAULT_TEXT_MODEL,
+    legacy_image_model: str = DEFAULT_IMAGE_MODEL,
 ) -> Dict[str, Any]:
     """グローバル → Project override → preset → taskの順で実効値を解決する。"""
 
@@ -313,7 +361,7 @@ def resolve_model_settings(
         if value == AUTO_MODEL or not is_allowed_text_model(value or ""):
             resolved[f"{task}_model"] = policy[task]
     image_value = base.get("image_model")
-    resolved["image_model"] = image_value if is_allowed_image_model(image_value or "") else "gpt-image-2"
+    resolved["image_model"] = image_value if is_allowed_image_model(image_value or "") else DEFAULT_IMAGE_MODEL
     return resolved
 
 
@@ -323,10 +371,10 @@ def model_for_task(settings: Mapping[str, Any], task: str) -> str:
     key = "image_model" if task in {"image", "image_generation"} else f"{task}_model"
     value = str(settings.get(key, ""))
     if key == "image_model":
-        return value if is_allowed_image_model(value) else "gpt-image-2"
+        return value if is_allowed_image_model(value) else DEFAULT_IMAGE_MODEL
     if is_allowed_text_model(value):
         return value
-    return PRESET_POLICIES["auto"].get(task, "gpt-5.6-luna")
+    return PRESET_POLICIES["auto"].get(task, DEFAULT_TEXT_MODEL)
 
 
 def reasoning_for_model(settings: Mapping[str, Any], model_id: str) -> str:
@@ -350,24 +398,27 @@ def model_registry_view() -> Dict[str, Any]:
             continue
         data = asdict(model)
         data["supported_reasoning_levels"] = list(model.supported_reasoning_levels)
-        # UIでは過剰な内部能力値を使わないが、検証済みの推奨選択肢だけを渡す。
         data["ui_reasoning_levels"] = [
-            level for level in ("low", "medium", "high") if level in model.supported_reasoning_levels
+            level for level in SUPPORTED_REASONING_LEVELS if level in model.supported_reasoning_levels
         ]
         options.append(data)
     return {
         "text_models": [item for item in options if item["type"] == TEXT_MODEL_TYPE],
         "image_models": [item for item in options if item["type"] == IMAGE_MODEL_TYPE],
+        "default_settings": dict(DEFAULT_AI_MODEL_SETTINGS),
+        "preset_policies": {preset: dict(policy) for preset, policy in PRESET_POLICIES.items()},
         "tasks": [{"id": task, "label": TASK_LABELS[task]} for task in MODEL_TASKS],
         "presets": [
             {"id": preset, "label": PRESET_LABELS[preset], "description": PRESET_DESCRIPTIONS[preset]}
             for preset in SUPPORTED_PRESETS
         ],
         "reasoning_levels": [
-            {"id": AUTO_REASONING, "label": "Auto"},
-            {"id": "low", "label": "Low"},
-            {"id": "medium", "label": "Medium"},
-            {"id": "high", "label": "High"},
+            {"id": AUTO_REASONING, "label": "自動（モデルの標準値）"},
+            {"id": "low", "label": "低（low）"},
+            {"id": "medium", "label": "中（medium）"},
+            {"id": "high", "label": "高（high）"},
+            {"id": "xhigh", "label": "非常に高い（xhigh）"},
+            {"id": "max", "label": "最大（max）"},
         ],
     }
 
@@ -387,7 +438,7 @@ def get_model_availability(*, force: bool = False) -> Dict[str, Any]:
     runtime = get_settings()
     checked_at = datetime.now(timezone.utc).isoformat()
     if not runtime.openai_api_key or runtime.ai_provider != "openai":
-        return {model_id: {"status": "not_checked", "checked_at": None} for model_id in TEXT_MODEL_IDS}
+        return {model_id: {"status": "not_checked", "checked_at": None} for model_id in MODEL_REGISTRY}
     key = _cache_key(runtime.openai_api_key)
     cached = _AVAILABILITY_CACHE.get(key)
     now = time.monotonic()
@@ -412,12 +463,12 @@ def get_model_availability(*, force: bool = False) -> Dict[str, Any]:
                 status="available" if model_id in model_ids else "unavailable",
                 checked_at=checked_at,
             )
-            for model_id in TEXT_MODEL_IDS
+            for model_id in MODEL_REGISTRY
         }
     except (OpenAIRequestError, TypeError, ValueError, AttributeError):
         result = {
             model_id: ModelAvailability(status="temporarily_unavailable", checked_at=checked_at)
-            for model_id in TEXT_MODEL_IDS
+            for model_id in MODEL_REGISTRY
         }
     _AVAILABILITY_CACHE[key] = (now, result)
     return {model_id: asdict(status) for model_id, status in result.items()}

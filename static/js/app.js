@@ -367,21 +367,20 @@
     let state = parseJson(dataNode.textContent || "{}", {});
     const taskOrder = ["story_analysis", "adaptation", "settings_recommendation", "character", "storyboard", "qa", "panel_prompt"];
     const taskKeys = taskOrder.map(function (task) { return task + "_model"; });
-    const defaultValues = {
-      preset: "auto",
-      story_analysis_model: "auto",
-      adaptation_model: "auto",
-      settings_recommendation_model: "auto",
-      character_model: "auto",
-      storyboard_model: "auto",
-      qa_model: "auto",
-      panel_prompt_model: "auto",
-      image_model: "gpt-image-2",
-      reasoning_effort: "auto"
+    const taskHelp = {
+      story_analysis: "物語の構造化解析",
+      adaptation: "漫画用脚本への変換",
+      settings_recommendation: "解析結果から初期設定を推定",
+      character: "人物の一貫性設定",
+      storyboard: "ページ・コマ設計",
+      qa: "原作とナレッジの確認",
+      panel_prompt: "コマ画像用の指示文"
     };
 
     function values() {
-      return { ...defaultValues, ...(state.settings?.global || {}) };
+      const saved = state.settings ? state.settings.global : state.saved;
+      const effective = state.settings ? state.settings.effective : state.effective;
+      return { ...(state.registry?.default_settings || {}), ...(saved || effective || {}) };
     }
 
     function statusInfo(modelId) {
@@ -390,58 +389,91 @@
       return { status: item.status || "not_checked", label: labels[item.status] || labels.not_checked };
     }
 
-    function modelLabel(modelId, fallback) {
+    function modelLabel(modelId) {
       const models = [...(state.registry?.text_models || []), ...(state.registry?.image_models || [])];
-      const model = models.find(function (item) { return item.id === modelId; });
-      return model?.display_name || fallback || modelId;
+      return models.find(function (item) { return item.id === modelId; })?.display_name || modelId;
+    }
+
+    function formValues(form) {
+      const current = { preset: form.querySelector("[data-ai-preset]")?.value || "auto" };
+      form.querySelectorAll("[data-ai-model-field]").forEach(function (field) { current[field.dataset.aiModelField] = field.value; });
+      return current;
+    }
+
+    function updateEffectiveModels(form) {
+      const current = formValues(form);
+      const policy = state.registry?.preset_policies?.[current.preset] || {};
+      form.querySelectorAll("[data-ai-effective]").forEach(function (item) {
+        const key = item.dataset.aiEffective;
+        const modelId = current[key] === "auto" ? policy[key.replace(/_model$/, "")] : current[key];
+        const status = statusInfo(modelId);
+        item.textContent = "実効: " + modelLabel(modelId) + " · " + status.label;
+      });
+      const help = form.querySelector("[data-ai-preset-help]");
+      if (help) help.textContent = (state.registry?.presets || []).find(function (item) { return item.id === current.preset; })?.description || "工程ごとにモデルを選択します。";
     }
 
     function render() {
       const current = values();
       const registry = state.registry || { text_models: [], image_models: [], tasks: [], presets: [], reasoning_levels: [] };
-      const textModels = registry.text_models || [];
-      const imageModels = registry.image_models || [];
-      const presetOptions = (registry.presets || []).map(function (item) {
-        return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current.preset ? " selected" : "") + '>' + escapeHtml(item.label) + '</option>';
-      }).join("");
-      const modelSelect = function (key, label, help) {
-        const options = '<option value="auto"' + (current[key] === "auto" ? " selected" : "") + '>Auto（プリセット）</option>' + textModels.map(function (item) {
-          return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current[key] ? " selected" : "") + '>' + escapeHtml(item.display_name) + '</option>';
+      const options = function (items, selected) {
+        return items.map(function (item) {
+          return '<option value="' + escapeAttr(item.id) + '"' + (item.id === selected ? " selected" : "") + '>' + escapeHtml(item.label || item.display_name) + '</option>';
         }).join("");
-        const selected = current[key] === "auto" ? "Auto（プリセット）" : modelLabel(current[key], current[key]);
-        const availability = current[key] === "gpt-6-astra" || (current[key] === "auto" && ["highest_quality"].includes(current.preset)) ? statusInfo("gpt-6-astra") : null;
-        return '<label class="ai-model-field"><span>' + escapeHtml(label) + '<small>' + escapeHtml(help || "") + '</small></span><select aria-label="' + escapeAttr(label) + 'のモデル" data-ai-model-field="' + key + '">' + options + '</select>' + (availability ? '<em class="availability-state availability-' + escapeAttr(availability.status) + '">Astra: ' + escapeHtml(availability.label) + '</em>' : '<em class="ai-model-effective">実効: ' + escapeHtml(selected) + '</em>') + '</label>';
       };
-      const imageOptions = imageModels.map(function (item) {
-        return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current.image_model ? " selected" : "") + '>' + escapeHtml(item.display_name) + '</option>';
-      }).join("");
-      const reasoningOptions = (registry.reasoning_levels || []).map(function (item) {
-        return '<option value="' + escapeAttr(item.id) + '"' + (item.id === current.reasoning_effort ? " selected" : "") + '>' + escapeHtml(item.label) + '</option>';
-      }).join("");
-      const astra = statusInfo("gpt-6-astra");
-      rootNode.innerHTML = '<form class="ai-model-form" id="ai-model-form"><div class="ai-model-preset-row"><label class="editor-label"><span>プリセット</span><select aria-label="プリセット" data-ai-preset>' + presetOptions + '</select></label><div class="ai-model-preset-help">' + escapeHtml((registry.presets || []).find(function (item) { return item.id === current.preset; })?.description || "工程ごとにモデルを選択します。") + '</div></div><div class="ai-availability-note"><span class="availability-dot availability-' + escapeAttr(astra.status) + '"></span><strong>GPT-6 Astra</strong><span>' + escapeHtml(astra.label) + '。アカウントの権限により、利用時はGPT-5.6 Solへ自動フォールバックします。</span></div><details class="ai-advanced"><summary>工程ごとの詳細設定</summary><div class="ai-model-grid">' + modelSelect("story_analysis_model", "Story Analysis", "物語の構造化解析") + modelSelect("adaptation_model", "Manga Adaptation", "漫画用脚本への変換") + modelSelect("settings_recommendation_model", "漫画化設定の推奨", "Analysisから初期設定を推定") + modelSelect("character_model", "Character Bible", "人物の一貫性設定") + modelSelect("storyboard_model", "Storyboard", "ページ・コマ設計") + modelSelect("qa_model", "Knowledge-aware QA", "原作とKnowledgeの確認") + modelSelect("panel_prompt_model", "Panel Prompt", "コマ画像用Prompt") + '</div><div class="ai-model-bottom-row"><label class="ai-model-field"><span>Image Generation<small>画像生成はテキストモデルと分離</small></span><select aria-label="Image Generationのモデル" data-ai-model-field="image_model">' + imageOptions + '</select><em class="ai-model-effective">実効: GPT-Image-2</em></label><label class="ai-model-field"><span>Reasoning<small>対応モデルでのみ送信</small></span><select aria-label="推論強度" data-ai-model-field="reasoning_effort">' + reasoningOptions + '</select></label></div></details><div class="save-row"><span class="field-help" data-ai-model-status>保存済みの設定は次回の制作にも適用されます。</span><button type="submit" class="primary-button compact-button">AIモデル設定を保存</button></div></form>';
+      const modelSelect = function (task) {
+        const key = task + "_model";
+        const label = (registry.tasks || []).find(function (item) { return item.id === task; })?.label || task;
+        const items = [{ id: "auto", label: "自動（プリセット）" }, ...(registry.text_models || [])];
+        return '<label class="ai-model-field"><span>' + escapeHtml(label) + '<small>' + escapeHtml(taskHelp[task] || "") + '</small></span><select aria-label="' + escapeAttr(label) + 'のモデル" data-ai-model-field="' + key + '">' + options(items, current[key]) + '</select><em class="ai-model-effective" data-ai-effective="' + key + '"></em></label>';
+      };
+      const astra = (registry.text_models || []).find(function (item) { return item.id === "gpt-6-astra"; });
+      const availability = statusInfo(astra?.id);
+      const fallbackNote = astra?.fallback_model ? "。利用できない場合は" + modelLabel(astra.fallback_model) + "へ切り替えます。" : "";
+      rootNode.innerHTML = `
+        <form class="ai-model-form" id="ai-model-form">
+          <div class="ai-model-preset-row">
+            <label class="editor-label"><span>プリセット</span><select aria-label="プリセット" data-ai-preset>${options(registry.presets || [], current.preset)}</select></label>
+            <div class="ai-model-preset-help" data-ai-preset-help></div>
+          </div>
+          <div class="ai-availability-note"><span class="availability-dot availability-${escapeAttr(availability.status)}"></span><strong>${escapeHtml(astra?.display_name || "最高品質モデル")}</strong><span>${escapeHtml(availability.label + fallbackNote)}</span></div>
+          <details class="ai-advanced"><summary>工程ごとの詳細設定</summary>
+            <div class="ai-model-grid">${taskOrder.map(modelSelect).join("")}</div>
+            <div class="ai-model-bottom-row">
+              <label class="ai-model-field"><span>画像生成<small>人物・構図の品質重視はSunburst、高速制作はFlare</small></span><select aria-label="画像生成のモデル" data-ai-model-field="image_model">${options(registry.image_models || [], current.image_model)}</select><em class="ai-model-effective" data-ai-effective="image_model"></em></label>
+              <label class="ai-model-field"><span>推論強度<small>高いほど時間・費用が増えます。自動はモデルの標準値です。</small></span><select aria-label="推論強度" data-ai-model-field="reasoning_effort">${options(registry.reasoning_levels || [], current.reasoning_effort)}</select></label>
+            </div>
+          </details>
+          <div class="save-row"><button type="button" class="secondary-button compact-button" data-ai-latest-defaults>最新の標準設定を選択</button><button type="submit" class="primary-button compact-button">AIモデル設定を保存</button></div>
+          <p class="field-help" data-ai-model-status>保存した設定は次回の制作に適用されます。既存の作品は保持されます。</p>
+        </form>`;
       const form = rootNode.querySelector("#ai-model-form");
-      form?.addEventListener("change", function (event) {
-        if (event.target.matches("[data-ai-preset]") && event.target.value !== "auto") {
-          form.querySelectorAll("[data-ai-model-field]").forEach(function (field) {
-            if (field.dataset.aiModelField.endsWith("_model") && field.dataset.aiModelField !== "image_model") field.value = "auto";
-          });
+      updateEffectiveModels(form);
+      form.addEventListener("change", function (event) {
+        if (event.target.matches("[data-ai-preset]")) {
+          taskKeys.forEach(function (key) { form.querySelector('[data-ai-model-field="' + key + '"]').value = "auto"; });
         }
+        updateEffectiveModels(form);
       });
-      form?.addEventListener("submit", async function (event) {
+      form.querySelector("[data-ai-latest-defaults]").addEventListener("click", function () {
+        const defaults = registry.default_settings || {};
+        form.querySelector("[data-ai-preset]").value = defaults.preset || "auto";
+        form.querySelectorAll("[data-ai-model-field]").forEach(function (field) { field.value = defaults[field.dataset.aiModelField]; });
+        updateEffectiveModels(form);
+        form.querySelector("[data-ai-model-status]").textContent = "最新の標準設定を選びました。「AIモデル設定を保存」で適用します。";
+      });
+      form.addEventListener("submit", async function (event) {
         event.preventDefault();
         const button = form.querySelector("button[type=submit]");
         const status = form.querySelector("[data-ai-model-status]");
         if (!button || button.disabled) return;
-        const payload = { preset: form.querySelector("[data-ai-preset]")?.value || "auto" };
-        form.querySelectorAll("[data-ai-model-field]").forEach(function (field) { payload[field.dataset.aiModelField] = field.value; });
         button.disabled = true;
         button.textContent = "保存中…";
         if (status) status.textContent = "保存しています…";
         try {
-          const response = await fetch("/api/settings/ai-models", { method: "PUT", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+          const response = await fetch("/api/settings/ai-models", { method: "PUT", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(formValues(form)) });
           const data = await response.json().catch(function () { return {}; });
-          if (!response.ok) throw new Error(data.detail || "AIモデル設定を保存できませんでした");
+          if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "AIモデル設定の入力を確認してください");
           state = data;
           showToast("AIモデル設定を保存しました");
           render();
@@ -454,9 +486,6 @@
       });
     }
 
-    window.addEventListener("resize", function () {
-      if (activeStep === "edit" || activeStep === "preview") scheduleMangaTextFit();
-    });
     render();
     fetch("/api/settings/ai-models", { headers: { Accept: "application/json" } }).then(function (response) {
       if (!response.ok) throw new Error("モデルの利用状況を確認できませんでした");

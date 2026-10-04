@@ -190,6 +190,7 @@ class AIModelSettingsPayload(BaseModel):
     preset: Optional[str] = Field(default=None, max_length=40)
     story_analysis_model: Optional[str] = Field(default=None, max_length=80)
     adaptation_model: Optional[str] = Field(default=None, max_length=80)
+    settings_recommendation_model: Optional[str] = Field(default=None, max_length=80)
     character_model: Optional[str] = Field(default=None, max_length=80)
     storyboard_model: Optional[str] = Field(default=None, max_length=80)
     qa_model: Optional[str] = Field(default=None, max_length=80)

@@ -25,9 +25,9 @@ services:
       - key: OPENAI_IMAGE_URL
         value: https://api.openai.com/v1/images/generations
       - key: OPENAI_TEXT_MODEL
-        value: gpt-5.6-luna
+        value: gpt-6-luna
       - key: OPENAI_IMAGE_MODEL
-        value: gpt-image-2
+        value: gpt-image-2.5-sunburst
       - key: OPENAI_TIMEOUT_SECONDS
         value: "90"
       - key: OPENAI_MAX_RETRIES

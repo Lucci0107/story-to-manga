@@ -35,15 +35,17 @@ def test_nearest_supported_ratio_limits_crop():
 
 
 @pytest.mark.parametrize("ratio", [0.34, 0.5, 0.75, 1, 1.3, 2.08, 2.8, 3])
-def test_flexible_model_matches_panel_without_large_crop(ratio):
+@pytest.mark.parametrize("model", ["gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"])
+def test_flexible_model_matches_panel_without_large_crop(ratio, model):
     panel = {"geometry": {"width": ratio / 3, "height": 0.25}}
-    width, height = map(int, artwork_generation_size(panel, "gpt-image-2").split("x"))
+    width, height = map(int, artwork_generation_size(panel, model).split("x"))
     assert width % 16 == height % 16 == 0
     assert 900_000 <= width * height <= 1_200_000
     assert abs((width / height) / ratio - 1) < 0.01
 
 
-def test_image_api_receives_flexible_size_and_confirmed_regions(monkeypatch, tmp_path):
+@pytest.mark.parametrize("model", ["gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"])
+def test_image_api_receives_flexible_size_and_confirmed_regions(monkeypatch, tmp_path, model):
     import base64
     from io import BytesIO
     from types import SimpleNamespace
@@ -64,8 +66,11 @@ def test_image_api_receives_flexible_size_and_confirmed_regions(monkeypatch, tmp
 
     monkeypatch.setattr(artwork, "request_json", fake_request)
     runtime = SimpleNamespace(openai_image_model="gpt-image-2", openai_image_url="https://example.invalid", openai_api_key="test-only")
-    artwork.save_openai_image(panel, runtime, LocalFileStorage(tmp_path), "test.png")
+    actual = artwork.save_openai_image(panel, runtime, LocalFileStorage(tmp_path), "test.png", model_id=model)
     assert len(captured) == 1
+    assert actual == model
+    assert captured[0]["model"] == model
+    assert captured[0]["quality"] == "low"
     assert captured[0]["size"] == artwork_generation_size(panel)
     assert captured[0]["size"] != "1536x1024"
     assert "face_safe_zone" in captured[0]["prompt"]
