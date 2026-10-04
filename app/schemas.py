@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -90,6 +90,9 @@ class SettingsPayload(BaseModel):
     character_proportion: Optional[str] = None
     mood_lighting: Optional[str] = None
     title_mode: str = "none"
+    layout_policy: Optional[Literal["content_driven", "expressive"]] = None
+    source_kind: Literal["unspecified", "fiction", "documentary"] = "unspecified"
+    style_adjustments: str = Field(default="", max_length=1000)
 
     @model_validator(mode="after")
     def validate_architect(self) -> "SettingsPayload":
@@ -240,6 +243,13 @@ class GenerateRequest(BaseModel):
     force: bool = False
 
 
+class DialogueDetail(BaseModel):
+    speaker: str = Field(default="", max_length=80)
+    addressee: str = Field(default="", max_length=80)
+    source: Literal["source_quote", "adaptation", "unspecified"] = "unspecified"
+    reaction: str = Field(default="", max_length=240)
+
+
 class PanelPatch(BaseModel):
     """コマの編集項目。"""
 
@@ -249,7 +259,11 @@ class PanelPatch(BaseModel):
     action: Optional[str] = Field(default=None, max_length=500)
     expression: Optional[str] = Field(default=None, max_length=240)
     background: Optional[str] = Field(default=None, max_length=500)
+    location: Optional[str] = Field(default=None, max_length=240)
+    spatial_relationship: Optional[str] = Field(default=None, max_length=500)
+    reaction: Optional[str] = Field(default=None, max_length=500)
     dialogue: Optional[List[str]] = Field(default=None, max_length=16)
+    dialogue_details: Optional[List[DialogueDetail]] = Field(default=None, max_length=16)
     narration: Optional[List[str]] = Field(default=None, max_length=16)
     sfx: Optional[List[str]] = Field(default=None, max_length=16)
     generation_prompt: Optional[str] = Field(default=None, max_length=4_000)
@@ -485,6 +499,10 @@ def normalize_characters(value: Any) -> List[Dict[str, Any]]:
         "visual_prompt",
         "negative_constraints",
         "reference_image_url",
+        "height",
+        "palette_notes",
+        "identity_notes",
+        "costume_detail_notes",
     ]
     normalized: List[Dict[str, Any]] = []
     for item in value[:64]:
@@ -497,8 +515,23 @@ def normalize_characters(value: Any) -> List[Dict[str, Any]]:
         roles = item.get("reference_roles", ["CHARACTER_IDENTITY"] if item.get("reference_image_url") else [])
         character["reference_roles"] = [role for role in roles if role in {"CHARACTER_IDENTITY", "STYLE_REFERENCE"}][:2] if isinstance(roles,list) else []
         character["knowledge_refs"] = normalize_knowledge_refs(item.get("knowledge_refs", []))
+        character["sheet_ratio"] = item.get("sheet_ratio") if item.get("sheet_ratio") in {"3:4", "3:2"} else "3:4"
         normalized.append(character)
     return normalized
+
+
+def normalize_dialogue_details(value: Any, count: int) -> List[Dict[str, Any]]:
+    details = value if isinstance(value, list) else []
+    result = []
+    for index in range(count):
+        item = details[index] if index < len(details) and isinstance(details[index], dict) else {}
+        result.append({
+            "speaker": str(item.get("speaker") or "")[:80],
+            "addressee": str(item.get("addressee") or "")[:80],
+            "source": item.get("source") if item.get("source") in {"source_quote", "adaptation", "unspecified"} else "unspecified",
+            "reaction": str(item.get("reaction") or "")[:240],
+        })
+    return result
 
 
 def normalize_knowledge_refs(value: Any) -> List[Dict[str, Any]]:
@@ -535,6 +568,7 @@ def normalize_generation_metadata(value: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(value, dict):
         return None
     allowed = {
+        "name_script_version_id", "name_script_version_number",
         "task",
         "target_id",
         "requested_model",
@@ -834,6 +868,9 @@ def normalize_storyboard(
                 "allow_breakout": bool(raw_panel.get("allow_breakout", False)),
                 "intentional_whitespace": bool(raw_panel.get("intentional_whitespace", False)),
                 "shape_reason": str(raw_panel.get("shape_reason") or "")[:160],
+                "location": str(raw_panel.get("location") or "")[:240],
+                "spatial_relationship": str(raw_panel.get("spatial_relationship") or "")[:500],
+                "reaction": str(raw_panel.get("reaction") or "")[:500],
                 "breakout_reason": str(raw_panel.get("breakout_reason") or "")[:160],
                 "semantic_reason": str(raw_panel.get("semantic_reason") or "")[:160],
                 "character_position": str(raw_panel.get("character_position") or "")[:80],
@@ -875,6 +912,7 @@ def normalize_storyboard(
                 panel[field] = [str(entry)[:500] for entry in source[:16] if str(entry).strip()] if isinstance(source, list) else []
             # 配列自体が読順のSource of Truth。テキストは翻訳せず順序メタデータだけ再計算する。
             panel["bubble_order"] = list(range(1, len(panel["dialogue"]) + 1))
+            panel["dialogue_details"] = normalize_dialogue_details(raw_panel.get("dialogue_details"), len(panel["dialogue"]))
             panel["narration_order"] = list(range(1, len(panel["narration"]) + 1))
             panel["sfx_order"] = list(range(1, len(panel["sfx"]) + 1))
             panels.append(panel)
@@ -890,6 +928,9 @@ def normalize_storyboard(
                 "title": str(item.get("title", f"ページ {page_index + 1}"))[:200],
                 "layout": layout,
                 "page_role": str(item.get("page_role") or "")[:120],
+                "panel_count_reason": str(item.get("panel_count_reason") or "")[:500],
+                "layout_reason": str(item.get("layout_reason") or "")[:500],
+                "location_time": str(item.get("location_time") or "")[:500],
                 "scene_type": str(item.get("scene_type") or "")[:80],
                 "emotion": str(item.get("emotion") or "")[:240],
                 "action_intensity": str(item.get("action_intensity") or "")[:80],
@@ -908,12 +949,21 @@ def normalize_storyboard(
                 "composition_fallbacks": _normalize_fallback_records(item.get("composition_fallbacks")),
                 "panels": panels,
                 "composition": normalized_composition,
+                "knowledge_refs": normalize_knowledge_refs(item.get("knowledge_refs", [])),
             }
         if normalized_composition:
             try:
                 normalized_page["composition_version"] = int(normalized_composition.get("composition_version", COMPOSITION_VERSION))
             except (TypeError, ValueError):
                 normalized_page["composition_version"] = COMPOSITION_VERSION
+        if item.get("layout_policy") in {"content_driven", "expressive"}:
+            normalized_page["layout_policy"] = item["layout_policy"]
+        if item.get("name_review_required") is True:
+            normalized_page["name_review_required"] = True
+        source = item.get("architect_source")
+        if isinstance(source, dict):
+            normalized_page["architect_source"] = {key: str(source.get(key) or "")[:80] for key in ("name", "instructions_version", "knowledge_version")}
+            normalized_page["architect_source"]["sections"] = [str(v)[:20] for v in source.get("sections", [])[:8]] if isinstance(source.get("sections"), list) else []
         for field in ("start_state", "first_reveal", "page_end_state"):
             normalized_page[field] = str(item.get(field) or "")[:2000]
         for field in ("allowed_events", "forbidden_until_later", "dialogue_scope", "carry_over"):

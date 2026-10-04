@@ -436,6 +436,8 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
         payload["text_semantics"] = [{"dialogue_types": panel.get("dialogue_types"), "sfx_types": panel.get("sfx_types")} for panel in page.get("panels", [])]
     if _requested_composition_version(page, settings) >= DYNAMIC_COMPOSITION_VERSION:
         payload["page_number"] = page.get("page_number")
+    if page.get("layout_policy") or settings.get("layout_policy"):
+        payload["layout_policy"] = page.get("layout_policy") or settings.get("layout_policy")
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
@@ -678,6 +680,9 @@ def reflow_page(
     """一つのPageだけを再計算し、Artwork情報はそのまま維持する。"""
 
     next_page = deepcopy(dict(page))
+    layout_policy = page.get("layout_policy") or settings.get("layout_policy")
+    if layout_policy:
+        next_page["layout_policy"] = layout_policy
     panels = [deepcopy(dict(panel)) for panel in page.get("panels", []) if isinstance(panel, Mapping)]
     for panel_index, panel in enumerate(panels, start=1):
         if not str(panel.get("id") or "").strip():
@@ -799,7 +804,7 @@ def reflow_page(
     if full_bleed:
         planned_boxes[0].update(x=0., y=0., width=1., height=.96, full_bleed_effect=True)
     if dynamic_mode:
-        planned_boxes, shared_edges = apply_shared_geometry(planned_boxes, panels, layout_family, str(language), int(next_page.get('page_number', 1) or 1), panel_gap)
+        planned_boxes, shared_edges = apply_shared_geometry(planned_boxes, panels, layout_family, str(language), int(next_page.get('page_number', 1) or 1), panel_gap, content_driven=layout_policy == "content_driven")
     geometries: List[Dict[str, Any]] = []
     angled_used = 0
     y = top_margin
@@ -958,6 +963,10 @@ def reflow_page(
 
     if dynamic_mode:
         shared_edges = _fit_shared_boundaries(geometries, panels, shared_edges, settings)
+        if layout_policy == "content_driven":
+            source_by_id = {p["id"]: p for p in panels}
+            for geometry in geometries:
+                geometry["shape_reason"] = str(source_by_id[geometry["panel_id"]].get("shape_reason") or "") if geometry.get("shape") != "rectangle" else ""
         next_page['dynamic_layout'] = {'shared_gutter_version': 2, 'family': layout_family, 'shared_edges': shared_edges,
                                      'outer_bounds': dict(left=PAGE_SIDE_MARGIN, right=1-PAGE_SIDE_MARGIN, top=top_margin, bottom=1-PAGE_BOTTOM_MARGIN)}
     signature = _page_signature(next_page, settings)

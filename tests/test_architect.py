@@ -81,7 +81,7 @@ def test_all_style_constraints_survive_compiler(style_id):
 
 
 def test_style_profiles_differ_beyond_color():
-    assert len({style_signature(p) for p in STYLES.values()}) == 31
+    assert len({style_signature(p) for p in STYLES.values()}) == len(STYLES)
     assert "uneven" in json.dumps(STYLES["STYLE-029"])
     assert "scribble" in json.dumps(STYLES["STYLE-030"])
     assert "continuous-line" in json.dumps(STYLES["STYLE-031"])

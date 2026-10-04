@@ -82,6 +82,8 @@ def choose_family(
     requested = page.get("layout_family")
     if requested in {"conversation-asymmetric", "vertical-anchor", "diagonal-middle"}:
         return requested
+    if page.get("layout_policy") == "content_driven":
+        return "conversation-asymmetric"
     number = int(page.get("page_number", 1) or 1)
     choices = ("conversation-asymmetric", "vertical-anchor", "diagonal-middle")
     return choices[(number - 1) % len(choices)]
@@ -277,7 +279,7 @@ def scale_gutter_band(
     return result
 
 
-def apply_shared_geometry(boxes, panels, family, language, number, gap):
+def apply_shared_geometry(boxes, panels, family, language, number, gap, *, content_driven=False):
     edges = detect_shared_gutters(boxes, gap)
     groups = {}
     source_by_id = {box["panel_id"]: panels[key] for key, box in boxes.items()}
@@ -293,10 +295,15 @@ def apply_shared_geometry(boxes, panels, family, language, number, gap):
             and ids.intersection(e["panel_ids"])
             for e in edges
         )
-        if not conflicts and all(text_length(source_by_id[key]) <= 100 for key in ids):
+        justified = all(
+            source_by_id[key].get("panel_shape") in {"trapezoid", "slanted-left", "slanted-right", "polygon"}
+            and str(source_by_id[key].get("shape_reason") or "").strip()
+            for key in ids
+        )
+        if not conflicts and (not content_driven or justified) and all(text_length(source_by_id[key]) <= 100 for key in ids):
             candidates.append(band)
     if candidates and family not in {"psychological", "four-panel"}:
-        band = candidates[(number - 1) % len(candidates)]
+        band = candidates[0] if content_driven else candidates[(number - 1) % len(candidates)]
         group = groups[band]
         dimension = "width" if group[0]["axis"] == "vertical" else "height"
         ids = {key for e in group for key in e["panel_ids"]}
@@ -321,6 +328,10 @@ def apply_shared_geometry(boxes, panels, family, language, number, gap):
             edge["center_line"][1][axis] -= amount
         edges = scale_gutter_band(edges, band, 1.0)
     geometries = materialize_gutters(boxes, edges)
+    if content_driven:
+        for geometry in geometries.values():
+            if geometry.get("shape") not in {"rectangle", "wide", "tall"}:
+                geometry["shape_reason"] = str(source_by_id[geometry["panel_id"]].get("shape_reason") or "")
     return geometries, align_partial_segments(geometries, edges)
 
 

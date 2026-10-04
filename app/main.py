@@ -61,6 +61,11 @@ from .services.knowledge import (
     retrieve_knowledge_context,
 )
 from .services.layout import reflow_page, repair_storyboard_page
+from .services.manga_documents import (
+    name_script_summary, prepare_name_document, name_validation, name_snapshot,
+    character_sheet_design, content_digest, render_sheet_markdown,
+)
+from .services.manga_contract import contract_metadata
 from .services.model_registry import (
     DEFAULT_AI_MODEL_SETTINGS,
     get_model_availability,
@@ -275,6 +280,7 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
         "generated_panel_count": generated,
         "failed_panel_count": failed,
         "knowledge": db.list_project_knowledge(project["id"], project["user_id"]) or [],
+        "name_script": name_script_summary(project),
     }
 
 
@@ -701,6 +707,9 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             current_page,current_panel = find_panel(current_project,str(job['target_id']))
             if design_hash(generation_design(current_project,current_page,current_panel,user_id)) != approval['design_hash']:
                 raise ArtworkGenerationError("生成準備中に設計が変わりました。再確認してください。")
+            name = name_script_summary(current_project)
+            if name["required"] and name["state"] != "confirmed":
+                raise ArtworkGenerationError("全編ネームが変更されました。最新の版を確定してください。")
             storage_key = save_panel_artwork(
                 latest["id"], latest_panel, latest["settings"], model_settings
             )
@@ -708,6 +717,9 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             if isinstance(image_metadata, dict):
                 image_event = dict(image_metadata)
                 image_event["target_id"] = str(latest_panel["id"])
+                if name["required"]:
+                    image_event["name_script_version_id"] = name["version_id"]
+                    image_event["name_script_version_number"] = name["version_number"]
                 db.record_generation_metadata(project_id, user_id, image_event)
             latest_panel["image_url"] = asset_url(latest["id"], storage_key)
             latest_panel["generation_status"] = "completed"
@@ -925,6 +937,7 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             record_provider_generation(project_id, user_id, provider)
         record_provider_generation(project_id, user_id, provider)
         for page in storyboard:
+            page["knowledge_refs"] = knowledge_context.get("references", [])
             for panel in page.get("panels", []):
                 panel["knowledge_refs"] = knowledge_context.get("references", [])
         if not db.complete_storyboard_job(
@@ -2052,6 +2065,7 @@ async def api_generate_storyboard(
     storyboard = normalize_storyboard(storyboard, project["settings"])
     record_provider_generation(project_id, user["id"], provider)
     for page in storyboard:
+        page["knowledge_refs"] = knowledge_context.get("references", [])
         for panel in page.get("panels", []):
             panel["knowledge_refs"] = knowledge_context.get("references", [])
     updated = db.update_project(
@@ -2079,7 +2093,7 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
         db.invalidate_generation_approvals(project_id,user["id"])
     visual_changed = False
     structure_changed = False
-    structure_keys = {"description", "characters", "shot_type", "action", "expression", "background"}
+    structure_keys = {"description", "characters", "shot_type", "action", "expression", "background", "location", "spatial_relationship", "reaction"}
     visual_keys = structure_keys | {"generation_prompt"}
     for key, value in values.items():
         if key in visual_keys and panel.get(key) != value:
@@ -2121,6 +2135,84 @@ async def api_update_panel(project_id: str, panel_id: str, payload: PanelPatch, 
     next_status = "storyboard_ready" if visual_changed and project.get("status") == "completed" else None
     updated = db.update_project(project_id, user["id"], storyboard=project["storyboard"], status=next_status, clear_quality_check=True)
     return {"project": project_view(updated or project)}
+
+
+@app.get("/api/projects/{project_id}/name-script")
+async def api_name_script_status(project_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    return {"name_script": name_script_summary(project)}
+
+
+@app.post("/api/projects/{project_id}/name-script")
+async def api_prepare_name_script(project_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    try:
+        document, validation = prepare_name_document(project)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"document": {key: document.get(key) for key in ("id", "version_number", "content_hash", "markdown", "provided_at", "approved_at")},
+            "validation": validation, "name_script": name_script_summary(project)}
+
+
+def manga_document_download(project: dict, document: dict) -> Response:
+    from urllib.parse import quote
+    filename = f"{project['title']}-{document['kind']}-v{document['version_number']}.md"
+    db.mark_manga_document_provided(project["id"], project["user_id"], document["id"])
+    return Response(document["markdown"].encode("utf-8"), media_type="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename, safe=""), "Cache-Control": "private, no-store"})
+
+
+@app.get("/api/projects/{project_id}/manga-documents/{document_id}/download")
+async def api_download_manga_document(project_id: str, document_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    document = db.get_manga_document(project_id, user["id"], document_id)
+    if not document:
+        raise HTTPException(404, "制作資料が見つかりません")
+    return manga_document_download(project, document)
+
+
+@app.post("/api/projects/{project_id}/name-script/confirmation")
+async def api_confirm_name_script(project_id: str, payload: ApprovalRequest, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    summary = name_script_summary(project)
+    if summary["content_hash"] != payload.design_hash or not summary["version_id"]:
+        raise HTTPException(409, "ネームが変更されました。最新の全編を出力して確認してください。")
+    errors = name_validation(project, name_snapshot(project))["errors"]
+    if errors:
+        raise HTTPException(422, " / ".join(errors))
+    if not summary["provided_at"]:
+        raise HTTPException(409, "先にこの版の全編Markdownをダウンロードして確認してください。")
+    if not db.confirm_name_document(project, summary["version_id"]):
+        raise HTTPException(409, "作品が更新されました。最新のネームを確認してください。")
+    return {"name_script": name_script_summary(project)}
+
+
+def require_character(project: dict, character_id: str) -> dict:
+    character = next((c for c in project.get("characters") or [] if c.get("id") == character_id), None)
+    if character is None:
+        raise HTTPException(404, "人物が見つかりません")
+    return character
+
+
+@app.get("/api/projects/{project_id}/characters/{character_id}/style-sheet")
+async def api_character_style_sheet(project_id: str, character_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    design = character_sheet_design(project, require_character(project, character_id))
+    versions = db.manga_document_versions(project_id, user["id"], "character_sheet", character_id)
+    digest = content_digest(design)
+    current = next((version for version in versions if version["content_hash"] == digest), None)
+    return {"sheet": design, "versions": versions, "document": current}
+
+
+@app.get("/api/projects/{project_id}/characters/{character_id}/style-sheet.md")
+async def api_download_character_sheet(project_id: str, character_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    design = character_sheet_design(project, require_character(project, character_id))
+    try:
+        document = db.save_manga_document(project, "character_sheet", character_id, content_digest(design), design, lambda n: render_sheet_markdown(design, n))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return manga_document_download(project, document)
 
 
 @app.get("/api/projects/{project_id}/pages/{page_id}/composition.png")
@@ -2190,6 +2282,7 @@ async def api_architect_catalog(user=Depends(current_user)):
         genres=GENRES,
         proportions=PROPORTIONS,
         moods=MOODS,
+        source=contract_metadata(),
     )
 
 

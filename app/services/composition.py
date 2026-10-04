@@ -500,7 +500,7 @@ def semantic_shape_plan(
     if explicit in {"wide", "tall", "rectangle"}:
         return explicit, "", angled_used
     # 意味が明確なページでも、斜め要素は1つまで。面積差を主役にする。
-    if family in {"action", "climax"} and dominant_index == index and angled_used < budget["angled_panels"]:
+    if page.get("layout_policy") != "content_driven" and family in {"action", "climax"} and dominant_index == index and angled_used < budget["angled_panels"]:
         return "slanted-left", "impact transition" if family == "action" else "climax emphasis", angled_used + 1
     return "rectangle", "", angled_used
 
@@ -1434,8 +1434,8 @@ def composition_quality_score(page: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "outer_edge_alignment_score": max(0, 100 - 50*metrics["outer_edge_slant_count"]),
         "gutter_consistency_score": max(0, 100 - 50*metrics["gutter_consistency_error"]),
-        "dynamic_layout_score": min(100, metrics["meaningful_dynamic_boundary_count"]*100),
-        "panel_size_variation_score": min(100, round((max(areas)/min(areas)-1)*100)) if areas and min(areas)>0 else 0,
+        "dynamic_layout_score": 100 if page.get("layout_policy") == "content_driven" else min(100, metrics["meaningful_dynamic_boundary_count"]*100),
+        "panel_size_variation_score": 100 if page.get("layout_policy") == "content_driven" else min(100, round((max(areas)/min(areas)-1)*100)) if areas and min(areas)>0 else 0,
         "semantic_area_match_score": hierarchy,
         "reading_order_score": max(0, 100-50*metrics['ambiguous_reading_order_count']),
         "balloon_fit_score": readability,

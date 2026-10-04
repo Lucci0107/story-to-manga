@@ -40,6 +40,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "dialogue_density": "medium",
     # 新規Projectだけv3を既定にする。既存設定にない場合はv2を維持する。
     "composition_version": 4,
+    "layout_policy": "content_driven",
 }
 
 
@@ -117,6 +118,26 @@ def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
                 approved_by TEXT NOT NULL,
                 approved_at TEXT NOT NULL,
                 job_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS manga_workflows (
+                project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+                name_review_required INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS manga_documents (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                version_number INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                markdown TEXT NOT NULL,
+                provided_at TEXT,
+                approved_at TEXT,
+                approved_by TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(project_id, kind, target_id, content_hash),
+                UNIQUE(project_id, kind, target_id, version_number)
             );
             CREATE TABLE IF NOT EXISTS generation_jobs (
                 id TEXT PRIMARY KEY,
@@ -1274,7 +1295,83 @@ def update_project(
                 user_id,
             ),
         )
+        if storyboard is not None and any(p.get("name_review_required") for p in storyboard):
+            conn.execute("INSERT INTO manga_workflows (project_id) VALUES (?) ON CONFLICT (project_id) DO NOTHING", (project_id,))
     return get_project(project_id, user_id)
+
+
+def name_review_required(project_id: str) -> bool:
+    with connection() as conn:
+        row = conn.execute("SELECT name_review_required FROM manga_workflows WHERE project_id=?", (project_id,)).fetchone()
+    return bool(row and row["name_review_required"])
+
+
+def _manga_document_from_row(row: Mapping[str, Any]) -> dict:
+    result = dict(row)
+    result["snapshot"] = _loads(result.pop("snapshot_json"), {})
+    return result
+
+
+def manga_document_versions(project_id: str, user_id: str, kind: str, target_id: str) -> List[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT d.id,d.version_number,d.content_hash,d.provided_at,d.approved_at,d.created_at
+            FROM manga_documents d JOIN projects p ON p.id=d.project_id
+            WHERE p.id=? AND p.user_id=? AND d.kind=? AND d.target_id=? ORDER BY d.version_number DESC""",
+            (project_id, user_id, kind, target_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_manga_document(project_id: str, user_id: str, document_id: str) -> Optional[dict]:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT d.* FROM manga_documents d JOIN projects p ON p.id=d.project_id
+            WHERE p.id=? AND p.user_id=? AND d.id=?""", (project_id, user_id, document_id),
+        ).fetchone()
+    return _manga_document_from_row(row) if row else None
+
+
+def save_manga_document(project: dict, kind: str, target_id: str, digest: str, snapshot: dict, render: Callable[[int], str]) -> dict:
+    """同じ設計を重複保存せず、改訂は旧版を保持して追加する。"""
+    with connection() as conn:
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project["id"], project["user_id"]))
+        row = conn.execute("SELECT updated_at FROM projects WHERE id=? AND user_id=?", (project["id"], project["user_id"])).fetchone()
+        if not row or row["updated_at"] != project["updated_at"]:
+            raise ValueError("作品が更新されました。最新の内容を読み直してください。")
+        previous = conn.execute("SELECT * FROM manga_documents WHERE project_id=? AND kind=? AND target_id=? AND content_hash=?", (project["id"], kind, target_id, digest)).fetchone()
+        if previous:
+            return _manga_document_from_row(previous)
+        row = conn.execute("SELECT COALESCE(MAX(version_number),0) AS latest FROM manga_documents WHERE project_id=? AND kind=? AND target_id=?", (project["id"], kind, target_id)).fetchone()
+        number = int(row["latest"]) + 1
+        document_id = str(uuid.uuid4())
+        conn.execute(
+            """INSERT INTO manga_documents (id,project_id,kind,target_id,version_number,content_hash,snapshot_json,markdown,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)""", (document_id, project["id"], kind, target_id, number, digest, _json(snapshot), render(number), utc_now()),
+        )
+    result = get_manga_document(project["id"], project["user_id"], document_id)
+    if result is None:
+        raise ValueError("制作資料を保存できませんでした。再試行してください。")
+    return result
+
+
+def mark_manga_document_provided(project_id: str, user_id: str, document_id: str) -> None:
+    with connection() as conn:
+        conn.execute("""UPDATE manga_documents SET provided_at=COALESCE(provided_at,?)
+        WHERE id=? AND project_id=? AND EXISTS (SELECT 1 FROM projects WHERE id=? AND user_id=?)""",
+        (utc_now(), document_id, project_id, project_id, user_id))
+
+
+def confirm_name_document(project: dict, document_id: str) -> bool:
+    with connection() as conn:
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project["id"], project["user_id"]))
+        row = conn.execute("SELECT updated_at FROM projects WHERE id=? AND user_id=?", (project["id"], project["user_id"])).fetchone()
+        if not row or row["updated_at"] != project["updated_at"]:
+            return False
+        cursor = conn.execute("""UPDATE manga_documents SET approved_at=COALESCE(approved_at,?), approved_by=?
+        WHERE id=? AND project_id=? AND kind='name_script' AND provided_at IS NOT NULL""",
+        (utc_now(), project["user_id"], document_id, project["id"]))
+    return cursor.rowcount == 1
 
 
 def save_manga_settings_recommendation(
@@ -1369,6 +1466,8 @@ def record_generation_metadata(
             if str(key)
             in {
                 "task",
+                "name_script_version_id",
+                "name_script_version_number",
                 "target_id",
                 "requested_model",
                 "actual_model",
@@ -1710,6 +1809,8 @@ def complete_storyboard_job(
             """,
             (now, now, job_id, project_id),
         )
+        if any(p.get("name_review_required") for p in storyboard):
+            conn.execute("INSERT INTO manga_workflows (project_id) VALUES (?) ON CONFLICT (project_id) DO NOTHING", (project_id,))
     return True
 
 

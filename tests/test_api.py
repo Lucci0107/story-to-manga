@@ -83,6 +83,10 @@ def test_project_pipeline_and_export(tmp_path: Path) -> None:
     assert storyboard.status_code == 200
     assert storyboard.json()["project"]["storyboard"]
 
+    name = client.post(f"/api/projects/{project_id}/name-script").json()
+    assert client.get(f"/api/projects/{project_id}/manga-documents/{name['document']['id']}/download").status_code == 200
+    assert client.post(f"/api/projects/{project_id}/name-script/confirmation", json={"design_hash": name['document']['content_hash']}).status_code == 200
+
     for page in storyboard.json()['project']['storyboard']:
         for panel in page['panels']:
             design = client.get(f"/api/projects/{project_id}/panels/{panel['id']}/design").json()

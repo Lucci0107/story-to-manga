@@ -115,7 +115,6 @@ def resolve_generation_strategy(panel: Mapping[str, Any]) -> dict:
         }
     framing = direction.get("camera_framing")
     framing = framing if isinstance(framing, Mapping) else direction
-    head_clearance = direction.get("head_clearance") or framing.get("head_clearance") or {}
     # head_clearance.targetはPanel内のhead zone開始位置であり、画像上端からの
     # 余白率とは別物。safe-crop/promptへはshot-awareなheadroom targetを渡す。
     head_target = float(

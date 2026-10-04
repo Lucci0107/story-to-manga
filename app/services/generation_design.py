@@ -61,6 +61,11 @@ def design_hash(data: dict) -> str:
 def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
     settings = project.get("settings") or {}
     errors = event_issues(page)
+    from .manga_documents import name_script_summary
+    if project.get("id") and project.get("user_id"):
+        name = name_script_summary(project)
+        if name["required"] and name["state"] != "confirmed":
+            errors.append("ネーム画面で全編Markdownを出力・確認し、現在の版を確定してください。")
     from .panel_direction import direction_is_ready
     from .composition import composition_quality_issues
     from .composition_fallback import panel_spatial_complexity, COMPLEXITY_INFEASIBLE
@@ -109,10 +114,10 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
     if settings.get("rendering_style_id") and not rendering_profile(settings):
         errors.append("描画スタイルを選び直してください。")
     if (
-        settings.get("rendering_style_id") == "STYLE-012"
+        (settings.get("rendering_style_id") == "STYLE-012" or profile.get("color_mode") == "bw")
         and settings.get("color_mode") == "color"
     ):
-        errors.append("日本漫画モノクロには白黒を選んでください。")
+        errors.append("この描画方式には白黒を選んでください。")
     if (
         settings.get("rendering_style_id") == "custom"
         and not settings.get("rendering_style_custom", "").strip()
@@ -154,6 +159,7 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
 
 
 def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
+    from .manga_documents import name_script_summary
     errors = audit_design(project, page, panel)
     page_design = json.loads(json.dumps(page))
     for entry in page_design.get("panels", []):
@@ -173,6 +179,7 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
         "rendering_style": rendering_profile(project.get("settings") or {}),
         "script_tone": tone_parameters(project.get("settings") or {}),
         "settings": project.get("settings"),
+        "name_script": name_script_summary(project),
         "event_boundary": {
             k: page.get(k)
             for k in (
