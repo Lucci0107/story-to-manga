@@ -16,6 +16,7 @@ from app.services.ai_pipeline import OpenAIProvider
 from app.services.artwork import ArtworkGenerationError, save_openai_image
 from app.services.openai_client import OpenAIRequestError, request_json
 from app.services.storage import LocalFileStorage
+from app.services.story_profile import build_story_source_profile
 
 
 class FakeHTTPResponse:
@@ -211,6 +212,35 @@ def test_settings_recommendation_uses_structured_output_and_knowledge(
     assert requests[0]["model"] == "gpt-5.6-luna"
     assert "<knowledge_reference>" in requests[0]["input"]
     assert "余白を広くする" in requests[0]["input"]
+
+
+def test_recommendation_reads_all_source_chapters_and_repairs_a_digest_estimate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "\n\n".join(f"## 第{i}章\n\n" + "場所を移り、登場人物は次の行動を決めた。" * 75 for i in range(1, 32))
+    profile = build_story_source_profile(source)
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        value = valid_settings_recommendation()
+        value["recommended_page_count"] = 8 if len(requests) == 1 else 96
+        return FakeHTTPResponse(response_with_json(value))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    result = OpenAIProvider().recommend_settings(
+        valid_analysis(), {"language": "ja", "target_page_count": 8}, source_profile=profile,
+    )
+    assert result["recommended_page_count"] == 96
+    assert len(requests) == 2
+    prompt = json.loads(requests[0]["input"].split("\nrecommended_page_count", 1)[0])
+    assert "target_page_count" not in prompt["current_settings"]
+    assert "reference_page_count" not in prompt["source_profile"]
+    assert prompt["source_profile"]["chapter_count"] == 31
+    assert prompt["source_profile"]["sections"][-1]["title"] == "第31章"
+    assert len(requests[0]["input"]) < len(source)
+    assert "ダイジェストに圧縮しない" in requests[0]["instructions"]
 
 
 def test_invalid_structured_output_is_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:

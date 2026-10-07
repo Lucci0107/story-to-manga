@@ -1,4 +1,4 @@
-"""Story Analysisから漫画化設定の推奨値を作るサービス。
+"""Story Analysisと原稿の規模から漫画化設定の推奨値を作るサービス。
 
 AIの出力はこのモジュールで正規化し、AIが利用できない環境でも同じ契約で
 決定論的なフォールバックを返す。Projectの言語と読み方向は推奨対象にせず、
@@ -20,9 +20,12 @@ from ..schemas import (
     normalize_analysis,
 )
 from .reading_order import canonicalize_stored_settings
+from .story_profile import story_fingerprint
 
 
 MAX_RECOMMENDED_PAGE_COUNT = 120
+MAX_SCENE_BUDGET_ENTRIES = 64
+ESTIMATOR_VERSION = 2
 RECOMMENDATION_KEYS = (
     "recommended_page_count",
     "recommended_visual_style",
@@ -41,6 +44,10 @@ SCENE_TYPES = {
     "transition",
 }
 IMPORTANCE_LEVELS = {"low", "medium", "high"}
+
+
+class RecommendationCoverageError(ValueError):
+    """全編向けの推奨ページ数が、原稿の規模に対して不足している。"""
 
 
 def _language(settings: Optional[Dict[str, Any]]) -> str:
@@ -177,17 +184,36 @@ def _scene_type(label: str, index: int, total: int, analysis: Dict[str, Any]) ->
     return "dialogue" if _items(analysis, "conflicts") else "exposition"
 
 
-def _scene_budget(analysis: Dict[str, Any], page_count: int, language: str) -> List[Dict[str, Any]]:
+def _group_labels(labels: List[str], count: int) -> List[str]:
+    if len(labels) <= count:
+        return labels
+    result = []
+    for index in range(count):
+        group = labels[index * len(labels) // count:(index + 1) * len(labels) // count]
+        result.append(f"{group[0][:45]} ～ {group[-1][:45]}（{len(group)}場面）")
+    return result
+
+
+def _scene_budget(
+    analysis: Dict[str, Any], page_count: int, language: str,
+    source_profile: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     labels = _items(analysis, "scenes") or _items(analysis, "story_beats") or _items(analysis, "major_events")
+    if source_profile and (source_profile.get("chapter_count") or source_profile.get("section_count", 0) > 1):
+        labels = [item["title"] for item in source_profile.get("sections", [])]
     if not labels:
         labels = ["導入", "展開", "結末"] if language == "ja" else ["Opening", "Development", "Ending"]
-    labels = labels[: min(24, max(1, page_count))]
+    labels = _group_labels(labels, min(MAX_SCENE_BUDGET_ENTRIES, max(1, page_count)))
     weights: List[float] = []
     types: List[str] = []
+    source_sections = (source_profile or {}).get("sections", [])
+    average_characters = sum(item["characters"] for item in source_sections) / len(source_sections) if source_sections else 0
     for index, label in enumerate(labels):
         scene_type = _scene_type(label, index, len(labels), analysis)
         types.append(scene_type)
         weights.append({"climax": 2.4, "action": 1.8, "emotional": 1.6, "dialogue": 1.2, "establishing": 0.9, "transition": 0.8, "exposition": 1.0}.get(scene_type, 1.0))
+        if len(source_sections) == len(labels) and average_characters:
+            weights[-1] *= max(0.5, min(2.5, source_sections[index]["characters"] / average_characters))
     total_weight = sum(weights) or 1.0
     allocations = [max(1, round(page_count * weight / total_weight)) for weight in weights]
     # 端数調整は最重要シーンから行い、合計を推奨ページ数に合わせる。
@@ -233,7 +259,18 @@ def _fit_scene_budget(budget: List[Dict[str, Any]], page_count: int) -> List[Dic
 
     if not budget:
         return budget
-    result = [dict(item) for item in budget[: min(24, max(1, page_count))]]
+    count = min(MAX_SCENE_BUDGET_ENTRIES, max(1, page_count))
+    if len(budget) > count:
+        result = []
+        for index in range(count):
+            group = budget[index * len(budget) // count:(index + 1) * len(budget) // count]
+            item = dict(group[0])
+            item["scene"] = _group_labels([str(value["scene"]) for value in group], 1)[0]
+            item["estimated_pages"] = sum(int(value.get("estimated_pages", 1)) for value in group)
+            item["importance"] = "high" if any(value.get("importance") == "high" for value in group) else "medium"
+            result.append(item)
+    else:
+        result = [dict(item) for item in budget]
     while sum(int(item.get("estimated_pages", 1)) for item in result) > page_count:
         candidates = [index for index, item in enumerate(result) if int(item.get("estimated_pages", 1)) > 1]
         if not candidates:
@@ -247,10 +284,14 @@ def _fit_scene_budget(budget: List[Dict[str, Any]], page_count: int) -> List[Dic
     return result
 
 
-def fallback_recommendation(analysis: Any, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Analysisの複雑度から、安全な標準推奨を作る。"""
+def fallback_recommendation(
+    analysis: Any, settings: Optional[Dict[str, Any]] = None,
+    source_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """解析と原稿の規模から、明示的な参考推定を作る。"""
 
-    analysis = normalize_analysis(analysis)
+    raw_analysis = analysis if isinstance(analysis, dict) else {}
+    analysis = {**raw_analysis, **normalize_analysis(analysis)}
     language = _language(settings)
     metrics = _complexity(analysis)
     score = (
@@ -267,7 +308,8 @@ def fallback_recommendation(analysis: Any, settings: Optional[Dict[str, Any]] = 
         + min(8.0, metrics["action_count"] * 1.5)
         + min(6.0, metrics["emotional_count"] * 1.0)
     )
-    page_count = max(8, min(MAX_RECOMMENDED_PAGE_COUNT, int(round(score))))
+    source_pages = int((source_profile or {}).get("reference_page_count", 0))
+    page_count = max(8, min(MAX_RECOMMENDED_PAGE_COUNT, max(int(round(score)), source_pages)))
     all_text = " ".join(
         _items(analysis, "major_events")
         + _items(analysis, "story_beats")
@@ -293,6 +335,15 @@ def fallback_recommendation(analysis: Any, settings: Optional[Dict[str, Any]] = 
     else:
         reason = f"Based on {scene_count} key scenes and {event_count} major events, this leaves room for dialogue, emotion, and transitions."
         page_reason = f"{page_count} pages leave enough room for the setup, climax, and ending without compressing key beats."
+    if source_profile and source_profile.get("narrative_character_count"):
+        characters = int(source_profile["narrative_character_count"])
+        chapters = int(source_profile.get("chapter_count", 0))
+        sections = int(source_profile.get("section_count", 0))
+        if language == "ja":
+            structure = f"{chapters}章" if chapters else f"{sections}区間"
+            page_reason = f"原稿本文約{characters:,}文字・{structure}と解析結果から、全編の導入・会話・転換を描く参考値として{page_count}ページを見込みます。ネームで調整してください。"
+        else:
+            page_reason = f"Reference estimate: {page_count} pages for {characters:,} source characters across {sections} sections. Refine this during script review."
     return {
         "recommended_page_count": page_count,
         "recommended_visual_style": style,
@@ -302,7 +353,7 @@ def fallback_recommendation(analysis: Any, settings: Optional[Dict[str, Any]] = 
         "recommended_target_audience": audience,
         "recommendation_reason": reason[:240],
         "page_count_reason": page_reason[:240],
-        "scene_page_budget": _scene_budget(analysis, page_count, language),
+        "scene_page_budget": _scene_budget(analysis, page_count, language, source_profile),
     }
 
 
@@ -310,16 +361,20 @@ def normalize_settings_recommendation(
     value: Any,
     analysis: Any,
     settings: Optional[Dict[str, Any]] = None,
+    source_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Structured Outputをサーバー側で検証・補完する。"""
 
-    fallback = fallback_recommendation(analysis, settings)
+    fallback = fallback_recommendation(analysis, settings, source_profile)
     raw = value if isinstance(value, dict) else {}
     page_value = raw.get("recommended_page_count", fallback["recommended_page_count"])
     try:
         page_count = max(1, min(MAX_RECOMMENDED_PAGE_COUNT, int(page_value)))
     except (TypeError, ValueError):
         page_count = fallback["recommended_page_count"]
+    minimum = min(MAX_RECOMMENDED_PAGE_COUNT, int((source_profile or {}).get("minimum_page_count", 1)))
+    if page_count < minimum:
+        raise RecommendationCoverageError(f"原稿全体の規模に対して{page_count}ページは不足しています（最低目安{minimum}ページ）。")
     style = str(raw.get("recommended_visual_style", ""))
     color = str(raw.get("recommended_color_mode", ""))
     pacing = str(raw.get("recommended_pacing", ""))
@@ -327,9 +382,9 @@ def normalize_settings_recommendation(
     audience = _text(raw.get("recommended_target_audience"), 80)
     budget = raw.get("scene_page_budget")
     if not isinstance(budget, list) or not budget:
-        budget = _scene_budget(normalize_analysis(analysis), page_count, _language(settings))
+        budget = _scene_budget(normalize_analysis(analysis), page_count, _language(settings), source_profile)
     normalized_budget: List[Dict[str, Any]] = []
-    for item in budget[:24]:
+    for item in budget:
         if not isinstance(item, dict):
             continue
         try:
@@ -348,7 +403,7 @@ def normalize_settings_recommendation(
             }
         )
     if not normalized_budget:
-        normalized_budget = _scene_budget(normalize_analysis(analysis), page_count, _language(settings))
+        normalized_budget = _scene_budget(normalize_analysis(analysis), page_count, _language(settings), source_profile)
     normalized_budget = _fit_scene_budget(normalized_budget, page_count)
     normalized = {
         "recommended_page_count": page_count,
@@ -372,6 +427,8 @@ def enrich_recommendation(
     fallback: bool = False,
     user_override: bool = False,
     metadata: Optional[Dict[str, Any]] = None,
+    source_profile: Optional[Dict[str, Any]] = None,
+    fallback_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     result = dict(value)
     result.update(
@@ -380,8 +437,18 @@ def enrich_recommendation(
             "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
             "fallback": bool(fallback),
             "user_override": bool(user_override),
+            "estimator_version": ESTIMATOR_VERSION,
+            "source_fingerprint": (source_profile or {}).get("source_fingerprint", story_fingerprint("")),
         }
     )
+    if source_profile:
+        result["source_metrics"] = {key: source_profile[key] for key in (
+            "source_character_count", "narrative_character_count", "reference_character_count",
+            "chapter_count", "section_count", "paragraph_count", "quoted_passage_count",
+        ) if key in source_profile}
+        result["page_count_limit_reached"] = int(source_profile.get("reference_page_count", 0)) > MAX_RECOMMENDED_PAGE_COUNT
+    if fallback_reason:
+        result["fallback_reason"] = fallback_reason
     if isinstance(metadata, dict):
         result["generation_metadata"] = {
             key: metadata[key]
@@ -406,7 +473,11 @@ def recommendation_settings(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def recommendation_is_stale(value: Any, analysis: Any) -> bool:
-    if not isinstance(value, dict) or not value.get("analysis_fingerprint"):
+def recommendation_is_stale(value: Any, analysis: Any, source_text: Optional[str] = None) -> bool:
+    if not isinstance(value, dict):
         return False
-    return str(value.get("analysis_fingerprint")) != analysis_fingerprint(analysis)
+    return (
+        value.get("estimator_version") != ESTIMATOR_VERSION
+        or str(value.get("analysis_fingerprint")) != analysis_fingerprint(analysis)
+        or (source_text is not None and value.get("source_fingerprint") != story_fingerprint(source_text))
+    )

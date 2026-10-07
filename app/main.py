@@ -75,11 +75,13 @@ from .services.model_registry import (
     validate_model_settings,
 )
 from .services.settings_recommendation import (
+    RecommendationCoverageError,
     enrich_recommendation,
     fallback_recommendation,
     normalize_settings_recommendation,
     recommendation_is_stale,
 )
+from .services.story_profile import build_story_source_profile
 from .services.storage import (
     StorageCapacityError,
     StorageConfigurationError,
@@ -269,7 +271,7 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(recommendation, dict):
         recommendation = dict(recommendation)
         recommendation["stale"] = recommendation_is_stale(
-            recommendation, project.get("analysis") or {}
+            recommendation, project.get("analysis") or {}, project.get("original_text", "")
         )
     return {
         **project,
@@ -1667,14 +1669,14 @@ async def api_recommend_manga_settings(
     payload: SettingsRecommendationRequest,
     user=Depends(current_user),
 ):
-    """既存Story Analysisから漫画化設定の推奨値を取得する。"""
+    """原稿の規模とStory Analysisから漫画化設定の推奨値を取得する。"""
 
     project = require_project(project_id, user["id"])
     analysis = project.get("analysis")
     if not analysis:
         raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
     existing = project.get("manga_settings_recommendation")
-    stale = recommendation_is_stale(existing, analysis)
+    stale = recommendation_is_stale(existing, analysis, project.get("original_text", ""))
     if isinstance(existing, dict) and not payload.force and not stale:
         view = project_view(project)
         return {
@@ -1683,7 +1685,7 @@ async def api_recommend_manga_settings(
             "mode": "cached",
             "fallback": bool(existing.get("fallback")),
         }
-    # Analysis更新後の初回表示では、既存設定を勝手に変えず再提案を案内する。
+    # 原稿・解析・推定方式の更新後も、既存設定を勝手に変えず再提案を案内する。
     if isinstance(existing, dict) and stale and not payload.force:
         view = project_view(project)
         return {
@@ -1700,20 +1702,25 @@ async def api_recommend_manga_settings(
         str(analysis),
     )
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
+    source_profile = build_story_source_profile(project.get("original_text", ""))
     used_fallback = False
+    fallback_reason = None
     try:
         recommendation = provider.recommend_settings(
             analysis,
             project["settings"],
             knowledge_context,
+            source_profile=source_profile,
         )
         recommendation = normalize_settings_recommendation(
-            recommendation, analysis, project["settings"]
+            recommendation, analysis, project["settings"], source_profile
         )
-    except AIProviderError:
+    except (AIProviderError, RecommendationCoverageError) as exc:
         # 推奨失敗で設定画面を塞がず、説明可能な決定論的フォールバックを保存する。
         used_fallback = True
-        recommendation = fallback_recommendation(analysis, project["settings"])
+        coverage_error = isinstance(exc, RecommendationCoverageError) or isinstance(exc.__cause__, RecommendationCoverageError)
+        fallback_reason = "insufficient_coverage" if coverage_error else "provider_unavailable"
+        recommendation = fallback_recommendation(analysis, project["settings"], source_profile)
     previous_override = bool(existing.get("user_override")) if isinstance(existing, dict) else False
     recommendation = enrich_recommendation(
         recommendation,
@@ -1721,6 +1728,8 @@ async def api_recommend_manga_settings(
         fallback=used_fallback,
         user_override=previous_override,
         metadata=getattr(provider, "last_generation_metadata", None),
+        source_profile=source_profile,
+        fallback_reason=fallback_reason,
     )
     saved = db.save_manga_settings_recommendation(
         project_id, user["id"], recommendation

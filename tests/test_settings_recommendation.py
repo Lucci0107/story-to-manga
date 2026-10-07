@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import db
@@ -13,7 +14,9 @@ from app.services.ai_pipeline import AIProviderError, DemoAIProvider
 from app.services.settings_recommendation import (
     fallback_recommendation,
     normalize_settings_recommendation,
+    RecommendationCoverageError,
 )
+from app.services.story_profile import build_story_source_profile
 
 
 def analysis_fixture(size: str) -> dict:
@@ -178,9 +181,10 @@ def test_recommendation_uses_knowledge_context_and_falls_back_on_provider_failur
     captured: dict = {}
 
     class CapturingProvider(DemoAIProvider):
-        def recommend_settings(self, analysis, settings, knowledge_context=None):
+        def recommend_settings(self, analysis, settings, knowledge_context=None, source_profile=None):
             captured["context"] = knowledge_context
-            return super().recommend_settings(analysis, settings, knowledge_context)
+            captured["source_profile"] = source_profile
+            return super().recommend_settings(analysis, settings, knowledge_context, source_profile)
 
     monkeypatch.setattr("app.main.get_ai_provider", lambda _settings: CapturingProvider())
     monkeypatch.setattr(
@@ -190,6 +194,7 @@ def test_recommendation_uses_knowledge_context_and_falls_back_on_provider_failur
     result = client.post(f"/api/projects/{project_id}/settings/recommendation", json={"force": True})
     assert result.status_code == 200
     assert captured["context"]["prompt_text"].startswith("1ページ")
+    assert captured["source_profile"]["source_character_count"] > 0
 
     class FailingProvider(DemoAIProvider):
         def recommend_settings(self, *_args, **_kwargs):
@@ -201,3 +206,67 @@ def test_recommendation_uses_knowledge_context_and_falls_back_on_provider_failur
     assert fallback.json()["fallback"] is True
     assert fallback.json()["recommendation"]["recommended_page_count"] > 0
 
+
+def long_story(chapters: int = 31) -> str:
+    return "\n\n".join(
+        f"## 第{number}章 場面{number}\n\n" + "新しい場所で出会い、迷いながら次の行動を決めた。\n\n" * 55
+        for number in range(1, chapters + 1)
+    )
+
+
+def test_long_source_is_not_estimated_from_its_short_synopsis() -> None:
+    analysis = {"synopsis": "ひとりの人生を描く。"}
+    profile = build_story_source_profile(long_story())
+    result = fallback_recommendation(analysis, {"language": "ja", "target_page_count": 8}, profile)
+    assert 60 <= result["recommended_page_count"] <= 120
+    assert len(result["scene_page_budget"]) == 31
+    assert result["scene_page_budget"][-1]["scene"].startswith("第31章")
+    assert sum(item["estimated_pages"] for item in result["scene_page_budget"]) == result["recommended_page_count"]
+    assert "31章" in result["page_count_reason"]
+
+
+def test_ai_digest_estimate_is_rejected_for_a_long_source() -> None:
+    profile = build_story_source_profile(long_story())
+    with pytest.raises(RecommendationCoverageError):
+        normalize_settings_recommendation({"recommended_page_count": 8}, {}, {}, profile)
+    accepted = normalize_settings_recommendation({"recommended_page_count": 96}, {}, {}, profile)
+    assert accepted["recommended_page_count"] == 96
+    assert accepted["scene_page_budget"][-1]["scene"].startswith("第31章")
+
+
+def test_source_update_and_old_estimator_mark_estimates_stale(tmp_path: Path) -> None:
+    client = client_for(tmp_path)
+    project_id = create_project_with_analysis(client, analysis_fixture("short"))
+    first = client.post(f"/api/projects/{project_id}/settings/recommendation", json={}).json()
+    assert first["recommendation"]["stale"] is False
+    updated = client.patch(f"/api/projects/{project_id}", json={"original_text": long_story(), "settings": {"target_page_count": 8}})
+    assert updated.json()["project"]["manga_settings_recommendation"]["stale"] is True
+    stale = client.post(f"/api/projects/{project_id}/settings/recommendation", json={}).json()
+    assert stale["mode"] == "stale"
+    assert stale["project"]["settings"]["target_page_count"] == 8
+    rerun = client.post(f"/api/projects/{project_id}/settings/recommendation", json={"force": True}).json()
+    assert rerun["recommendation"]["recommended_page_count"] > 60
+    assert rerun["recommendation"]["stale"] is False
+    assert rerun["project"]["settings"]["target_page_count"] == 8
+    user_id = rerun["project"]["user_id"]
+    old = dict(rerun["recommendation"])
+    old.pop("estimator_version")
+    db.save_manga_settings_recommendation(project_id, user_id, old)
+    assert client.post(f"/api/projects/{project_id}/settings/recommendation", json={}).json()["mode"] == "stale"
+
+
+def test_api_uses_source_fallback_when_provider_returns_eight_pages(tmp_path: Path, monkeypatch) -> None:
+    client = client_for(tmp_path)
+    project_id = create_project_with_analysis(client, analysis_fixture("short"))
+    client.patch(f"/api/projects/{project_id}", json={"original_text": long_story(), "settings": {"target_page_count": 17}})
+
+    class DigestProvider(DemoAIProvider):
+        def recommend_settings(self, *_args, **_kwargs):
+            return {"recommended_page_count": 8}
+
+    monkeypatch.setattr("app.main.get_ai_provider", lambda _settings: DigestProvider())
+    result = client.post(f"/api/projects/{project_id}/settings/recommendation", json={"force": True}).json()
+    assert result["fallback"] is True
+    assert result["recommendation"]["fallback_reason"] == "insufficient_coverage"
+    assert result["recommendation"]["recommended_page_count"] > 60
+    assert result["project"]["settings"]["target_page_count"] == 17
