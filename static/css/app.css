@@ -457,8 +457,12 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .recommendation-panel { display: grid; gap: 10px; margin-bottom: 15px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 11px; background: var(--accent-soft); padding: 15px 17px; color: var(--ink-soft); font-size: 11px; }
 .recommendation-panel > p { margin: 0; line-height: 1.7; }
 .recommendation-panel strong { color: var(--ink); font-size: 12px; }
-.recommendation-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recommendation-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .recommendation-header > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.recommendation-refresh-button { flex-shrink: 0; min-height: 44px; background: var(--accent-deep); color: var(--surface); font-size: 14px; }
+.recommendation-refresh-button:hover { background: var(--ink); }
+.recommendation-refresh-button:focus-visible { outline-color: var(--ink); }
+.recommendation-refresh-icon { font-size: 20px; line-height: 1; }
 .recommendation-budget { display: flex; flex-wrap: wrap; gap: 6px; }
 .recommendation-budget span { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 999px; background: var(--surface); padding: 5px 8px; color: var(--muted); font-family: monospace; font-size: 9px; }
 .recommendation-fallback, .recommendation-stale { border-color: transparent; margin: 0; padding: 8px 0 0; }
@@ -680,6 +684,7 @@ body.processing-dialog-open { overflow: hidden; }
   .workspace-heading { display: block; margin-bottom: 23px; }
   .workspace-heading h2 { font-size: 29px; }
   .workspace-heading-actions { justify-content: flex-start; margin-top: 15px; }
+  .recommendation-refresh-button { width: 100%; }
   .analysis-grid, .settings-grid, .panel-editor-grid { grid-template-columns: 1fr; }
   .knowledge-selection-fields { grid-template-columns: 1fr 1fr; }
   .knowledge-scope-field { grid-column: 1 / -1; }
