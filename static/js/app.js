@@ -1420,7 +1420,7 @@
           ? "処理状態を再確認"
           : jobStatus === "failed"
             ? "人物設定を再試行"
-            : characters.length ? "人物設定を作り直す" : "生成する";
+            : characters.length ? "原稿全体から人物設定を作り直す" : "生成する";
       const jobNotice = jobStatus === "failed"
         ? '<div class="form-notice error-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(characterJobState.error || "人物設定の生成に失敗しました。再試行できます。") + '</p></div>'
         : jobActive
@@ -1435,8 +1435,8 @@
         return '<article class="surface-panel character-card" data-character-id="' + escapeAttr(character.id) + '"><div class="character-card-header"><div><h3>' + escapeHtml(character.name || "名前未設定") + '</h3><p>' + escapeHtml(character.role || "役割未設定") + ' / ' + escapeHtml(character.age_range || "年齢未設定") + '</p></div><span class="character-stamp">' + String(index + 1).padStart(2, "0") + '</span></div><div class="character-fields">' + '<label class="editor-label">名前<input data-character-field="name" value="' + escapeAttr(character.name || "") + '"></label>' + '<label class="editor-label">役割<input data-character-field="role" value="' + escapeAttr(character.role || "") + '"></label>' + fields(character) + '</div><div class="sheet-actions"><button type="button" class="secondary-button compact-button" data-show-character-sheet="' + escapeAttr(character.id) + '">スタイルシート設計を確認</button></div><div data-character-sheet-view></div></article>';
       }).join("");
       const body = characters.length
-        ? '<div class="character-grid">' + cards + '</div><div class="save-row"><button type="button" class="secondary-button compact-button" data-regenerate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button><button type="button" class="primary-button compact-button" data-save-characters' + disabled + '>キャラクターを保存</button></div>' + next
-        : '<section class="surface-panel empty-panel"><h3>キャラクターバイブルを作る</h3><p>解析結果から、同じ人物を描き続けるための基準を作成します。</p><button type="button" class="primary-button compact-button" data-generate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button></section>';
+        ? '<div class="callout"><p><strong>登録人物：' + characters.length + '人</strong>　人物ごとにスタイルシート設計を作成できます。</p></div><div class="character-grid">' + cards + '</div><div class="save-row character-save-row"><button type="button" class="secondary-button compact-button" data-regenerate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button><button type="button" class="primary-button compact-button" data-save-characters' + disabled + '>キャラクターを保存</button></div>' + next
+        : '<section class="surface-panel empty-panel"><h3>キャラクターバイブルを作る</h3><p>原稿全体から主要人物・重要な脇役を抽出し、同じ人物を描き続けるための基準を作成します。</p><button type="button" class="primary-button compact-button" data-generate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button></section>';
       content.innerHTML = heading("キャラクターを固定する", "同一人物の外見・服装を後続コマへ引き継ぐための設定です。") + renderCharacterRecoveryNotice() + jobNotice + body;
       content.querySelector("[data-generate-characters]")?.addEventListener("click", generateCharacters);
       content.querySelector("[data-regenerate-characters]")?.addEventListener("click", generateCharacters);
@@ -1480,7 +1480,7 @@
       const button = content.querySelector("[data-generate-characters], [data-regenerate-characters]");
       const originalButtonText = button?.textContent || "生成する";
       if (button) { button.disabled = true; button.textContent = "人物設定を作成中…"; }
-      showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "人物の外見と関係性を整理しています", submessage: "後続のコマでも同じ人物として描ける設定を作成しています。" });
+      showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "原稿全体の登場人物と関係性を確認しています", submessage: "後続のコマでも同じ人物として描ける設定を作成しています。" });
       let handedOff = false;
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/characters", { method: "POST", body: "{}" });

@@ -17,6 +17,7 @@ from .services.reading_order import (
 
 
 ALLOWED_STEPS = {"story", "knowledge", "analysis", "settings", "characters", "storyboard", "generate", "edit", "qa", "preview", "export"}
+MAX_CHARACTERS = 64
 ALLOWED_DIRECTIONS = set(LEGACY_DIRECTION_ALIASES)
 ALLOWED_COLOR_MODES = {"bw", "color"}
 ALLOWED_STYLES = {"dynamic", "elegant", "cinematic", "comedy", "minimal", "webtoon"}
@@ -506,7 +507,7 @@ def normalize_characters(value: Any) -> List[Dict[str, Any]]:
         "costume_detail_notes",
     ]
     normalized: List[Dict[str, Any]] = []
-    for item in value[:64]:
+    for item in value[:MAX_CHARACTERS]:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "人物"))[:80].strip() or "人物"
@@ -516,6 +517,9 @@ def normalize_characters(value: Any) -> List[Dict[str, Any]]:
         roles = item.get("reference_roles", ["CHARACTER_IDENTITY"] if item.get("reference_image_url") else [])
         character["reference_roles"] = [role for role in roles if role in {"CHARACTER_IDENTITY", "STYLE_REFERENCE"}][:2] if isinstance(roles,list) else []
         character["knowledge_refs"] = normalize_knowledge_refs(item.get("knowledge_refs", []))
+        for key, length in (("aliases", 80), ("source_quotes", 2_000)):
+            entries = item.get(key, [])
+            character[key] = [entry[:length] for entry in entries[:16] if isinstance(entry, str)] if isinstance(entries, list) else []
         character["sheet_ratio"] = item.get("sheet_ratio") if item.get("sheet_ratio") in {"3:4", "3:2"} else "3:4"
         normalized.append(character)
     return normalized

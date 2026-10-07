@@ -344,6 +344,7 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .callout { margin-top: 22px; border-radius: 10px; background: var(--accent-soft); padding: 14px; color: var(--accent-deep); font-size: 11px; }
 .callout p { margin: 0; }
 .character-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(255px, 1fr)); gap: 15px; }
+.character-save-row { flex-wrap: wrap; }
 .character-card { display: grid; gap: 14px; padding: 18px; }
 .character-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 13px; }
 .character-card-header h3 { margin: 0 0 3px; font-size: 19px; }

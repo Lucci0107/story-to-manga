@@ -191,6 +191,58 @@ def test_character_request_uses_task_specific_timeout(monkeypatch: pytest.Monkey
     assert timeouts == [180.0]
 
 
+def test_long_character_source_covers_fourteen_people_and_repairs_missing_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """中間の人物も全文抽出へ届き、8人中4人だけの設定は再要求する。"""
+
+    names = [f"登場人物{i:02d}" for i in range(1, 15)]
+    source = "\n\n".join(f"## 第{i}章\n" + "これまでの出来事を振り返った。" * 140
+                         + f"\n{name}は主人公の決断を支えた。\n"
+                         + "次の場所へ進む準備をした。" * 140
+                         for i, name in enumerate(names, 1))
+    requests: list[dict] = []
+    profile_requests: list[list[str]] = []
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requests.append(payload)
+        context, _ = json.JSONDecoder().raw_decode(payload["input"])
+        if payload["text"]["format"]["name"] == "character_cast":
+            cast = [{"name": name, "aliases": [], "role": "決断を支える人物",
+                     "source_quotes": [f"{name}は主人公の決断を支えた。"]}
+                    for name in names if name in context["story_content"]]
+            return FakeHTTPResponse(response_with_json({"cast": cast}))
+        targets = [item["name"] for item in context["target_cast"]]
+        profile_requests.append(targets)
+        selected = targets[:4] if len(profile_requests) == 1 else targets
+        characters = [{**valid_character(), "name": name} for name in selected]
+        return FakeHTTPResponse(response_with_json({"characters": characters}))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIProvider({"preset": "balanced", "character_model": "gpt-6.1-sol",
+                              "reasoning_effort": "xhigh"})
+    heartbeats: list[bool] = []
+    provider.character_progress_callback = lambda: heartbeats.append(True)
+    result = provider.characters(source, valid_analysis(), {"prompt_text": "重要な支援者も対象にする。"})
+
+    assert [item["name"] for item in result] == names
+    assert len({item["id"] for item in result}) == 14
+    assert all(item["source_quotes"] for item in result)
+    cast_requests = [item for item in requests if item["text"]["format"]["name"] == "character_cast"]
+    assert len(cast_requests) >= 2
+    assert all(any(name in request["input"] for request in cast_requests) for name in names)
+    assert sum(len(json.JSONDecoder().raw_decode(item["input"])[0]["story_content"])
+               for item in cast_requests) >= len(source)
+    assert profile_requests == [names[:8], names[:8], names[8:]]
+    assert all(item["model"] == "gpt-6.1-sol" and item["reasoning"] == {"effort": "xhigh"}
+               for item in requests)
+    assert all("<knowledge_reference>" in item["input"] for item in requests)
+    assert len(heartbeats) == len(cast_requests) + 2
+    assert provider.last_generation_metadata["character_count"] == 14
+
+
 def test_settings_recommendation_uses_structured_output_and_knowledge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -801,6 +801,7 @@ def process_character_job(project_id: str, user_id: str, job_id: str) -> None:
             str(project["analysis"]),
         )
         provider = get_ai_provider(project_ai_model_settings(project, user_id))
+        provider.character_progress_callback = lambda: db.touch_generation_job(job_id)
         characters = provider.characters(
             project["original_text"],
             project["analysis"],
