@@ -66,6 +66,11 @@ def response_with_json(value: dict) -> dict:
     }
 
 
+def unchanged_cast_review(context: dict) -> dict:
+    return {"groups": [{"name": item["name"], "members": [item["name"]]} for item in context["candidates"]],
+            "excluded": []}
+
+
 def valid_analysis() -> dict:
     return {
         "title": "灯台の帰り道",
@@ -209,6 +214,8 @@ def test_long_character_source_covers_fourteen_people_and_repairs_missing_profil
         payload = json.loads(request.data.decode("utf-8"))
         requests.append(payload)
         context, _ = json.JSONDecoder().raw_decode(payload["input"])
+        if payload["text"]["format"]["name"] == "character_cast_review":
+            return FakeHTTPResponse(response_with_json(unchanged_cast_review(context)))
         if payload["text"]["format"]["name"] == "character_cast":
             cast = [{"name": name, "participation": "story_actor", "aliases": [], "role": "決断を支える人物",
                      "source_quotes": [f"{name}は主人公の決断を支えた。"]}
@@ -252,16 +259,20 @@ def test_long_character_source_covers_fourteen_people_and_repairs_missing_profil
         assert "今回の作成対象ではありません" in payload["instructions"]
 
 
-def test_long_source_with_seventy_reference_authors_preserves_all_fourteen_story_actors(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("excluded_reason,participation,expected_candidate_count", [
+    ("reference_only", "reference_only", 14), ("incidental_person", "story_actor", 84),
+])
+def test_long_source_with_seventy_nonessential_candidates_preserves_all_fourteen_story_actors(
+    monkeypatch: pytest.MonkeyPatch, excluded_reason: str, participation: str, expected_candidate_count: int,
 ) -> None:
-    """本文中の引用著者が64人を超えても、物語の人物設定は全員作れる。"""
+    """引用著者や一時的な対応者が64人を超えても、全編を照合して重要人物を固定する。"""
 
     names = [f"登場人物{i:02d}" for i in range(1, 15)]
     actors = [{"name": name, "participation": "story_actor", "aliases": [], "role": "相談相手",
                "source_quotes": [f"{name}は主人公の相談に応じた。"]} for name in names]
-    references = [{"name": f"引用著者{i:02d}", "participation": "reference_only", "aliases": [],
-                   "role": "読んだ著書の著者", "source_quotes": [f"引用著者{i:02d}の著書を読んだ。"]}
+    prefix = "引用著者" if excluded_reason == "reference_only" else "一時対応者"
+    references = [{"name": f"{prefix}{i:02d}", "participation": participation, "aliases": [],
+                   "role": "説明中の著者または短い挨拶だけの窓口担当", "source_quotes": [f"{prefix}{i:02d}へ短く言及した。"]}
                   for i in range(70)]
     other = [
         {"name": "一般的な医師", "participation": "generic_or_hypothetical", "aliases": [],
@@ -282,10 +293,17 @@ def test_long_source_with_seventy_reference_authors_preserves_all_fourteen_story
         payload = json.loads(request.data.decode("utf-8"))
         requests.append(payload)
         context = json.JSONDecoder().raw_decode(payload["input"])[0]
+        if payload["text"]["format"]["name"] == "character_cast_review":
+            assert len(context["candidates"]) == expected_candidate_count
+            return FakeHTTPResponse(response_with_json({
+                "groups": [{"name": name, "members": [name]} for name in names],
+                "excluded": [{"name": item["name"], "reason": excluded_reason}
+                             for item in context["candidates"] if item["name"] not in names],
+            }))
         if payload["text"]["format"]["name"] == "character_cast":
             cast = [item for item in actors + references + other
                     if item["source_quotes"][0] in context["story_content"]]
-            observed_references.update(item["name"] for item in cast if item["participation"] == "reference_only")
+            observed_references.update(item["name"] for item in cast if item["name"].startswith(prefix))
             return FakeHTTPResponse(response_with_json({"cast": cast}))
         profile_names.extend(item["name"] for item in context["target_cast"])
         return FakeHTTPResponse(response_with_json({"characters": [
@@ -299,6 +317,8 @@ def test_long_source_with_seventy_reference_authors_preserves_all_fourteen_story
 
     assert len(observed_references) == 70
     assert [item["name"] for item in result] == profile_names == names
+    assert provider.last_generation_metadata["character_candidate_count"] == expected_candidate_count
+    assert provider.last_generation_metadata["character_cast_reviewed"] is True
     assert all(quote in source for item in result for quote in item["source_quotes"])
     assert all(item["model"] == "gpt-6.1-sol" and item["reasoning"] == {"effort": "xhigh"}
                and "<knowledge_reference>" in item["input"] for item in requests)
@@ -333,6 +353,8 @@ def test_character_output_limit_splits_only_the_failed_part_and_keeps_every_pers
         requests.append(payload)
         context, _ = json.JSONDecoder().raw_decode(payload["input"])
         stage = payload["text"]["format"]["name"]
+        if stage == "character_cast_review":
+            return FakeHTTPResponse(response_with_json(unchanged_cast_review(context)))
         if stage == "character_bible":
             profile_requests.append([item["name"] for item in context["target_cast"]])
         if stage == limited_stage and not limited_input:
@@ -412,6 +434,9 @@ def test_unknown_real_person_appearance_succeeds_without_repeating_profile_gener
     def fake_urlopen(request, timeout):
         payload = json.loads(request.data.decode("utf-8"))
         requests.append(payload)
+        if payload["text"]["format"]["name"] == "character_cast_review":
+            context = json.JSONDecoder().raw_decode(payload["input"])[0]
+            return FakeHTTPResponse(response_with_json(unchanged_cast_review(context)))
         if payload["text"]["format"]["name"] == "character_cast":
             context = json.JSONDecoder().raw_decode(payload["input"])[0]
             return FakeHTTPResponse(response_with_json({"cast": [

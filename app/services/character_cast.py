@@ -17,6 +17,8 @@ from .story_profile import build_story_source_profile
 
 CHARACTER_SOURCE_CHUNK_SIZE = 8_000
 CHARACTER_PROFILE_BATCH_SIZE = 4
+# 251件以上の文字列enumには文字数の追加制限がある。長い人物名でも有効なSchemaへ収める。
+CAST_CANDIDATE_LIMIT = 250
 CAST_ROLE_MAX_LENGTH = 400
 CAST_QUOTE_MAX_LENGTH = 300
 CAST_MAX_QUOTES = 3
@@ -237,7 +239,7 @@ def normalize_character_profiles(value: Dict[str, Any]) -> List[Dict[str, Any]]:
     return characters
 
 
-def merge_cast(roster: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> None:
+def merge_cast(roster: List[Dict[str, Any]], candidates: List[Dict[str, Any]], *, limit: int = MAX_CHARACTERS) -> None:
     """名前・明示された別名を照合し、共有する一般呼称だけでは統合しない。"""
 
     for candidate in candidates:
@@ -254,9 +256,10 @@ def merge_cast(roster: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -
                             "先生・父・母などの共有呼称や、別の人物のnameをaliasesへ入れないでください。",
             )
         if not matches:
-            if len(roster) >= MAX_CHARACTERS:
+            if len(roster) >= limit:
                 raise CharacterValidationError(
-                    f"人物が保存上限の{MAX_CHARACTERS}人を超えています。漫画化する範囲を分けてください",
+                    f"人物が{'保存' if limit == MAX_CHARACTERS else '候補の処理'}上限の{limit}人を超えています。"
+                    "漫画化する範囲を分けてください",
                     category="character_limit",
                     repair_hint="castから同一人物の重複を除き、known_castのnameを再利用してください。",
                 )
@@ -267,6 +270,8 @@ def merge_cast(roster: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -
                                                  + [candidate["name"]]))
         existing["source_quotes"] = list(dict.fromkeys(existing["source_quotes"]
                                                        + candidate["source_quotes"]))
+        if candidate.get("source_parts"):
+            existing["source_parts"] = sorted(set(existing.get("source_parts", []) + candidate["source_parts"]))
         if candidate["role"] not in existing["role"]:
             existing["role"] = (existing["role"] + " / " + candidate["role"])[:CHARACTER_TEXT_MAX_LENGTH]
 
