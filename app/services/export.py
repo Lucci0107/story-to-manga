@@ -24,6 +24,7 @@ from .artwork import render_panel_image
 from .composition import PAGE_SIZE, composition_for_page, composition_quality_issues, is_explicit_elliptical_inset, moved_text_item_set, normalize_polygon
 from .artwork_geometry import resolve_final_crop_window
 from .layout import ensure_page_layout, reflow_page
+from .page_types import is_content_page
 from .storage import (
     StorageError,
     StorageObjectNotFound,
@@ -413,7 +414,7 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
         c.setFont(PDF_FONT, 18)
         c.drawString(42, height - 58, str(project.get("title", "Story to Manga")))
         c.setFont(PDF_FONT, 8)
-        c.drawCentredString(width / 2, 24, ("" if page.get("page_kind") == "cover" else str(page.get("page_number", ""))))
+        c.drawCentredString(width / 2, 24, (str(page.get("page_number", "")) if is_content_page(page) else ""))
         for panel, box in zip(
             page.get("panels", []),
             _page_panel_boxes(page, width, height, settings),
@@ -779,7 +780,7 @@ def _render_composition_png(
     for overlay in composition.get("overlays", []):
         if isinstance(overlay, Mapping):
             _draw_rotated_overlay(image, overlay, width, height)
-    ImageDraw.Draw(image).text((width // 2, height - round(height * 0.025)), ("" if page.get("page_kind") == "cover" else str(page.get("page_number", ""))), fill=(45, 47, 44, 255), font=_load_page_font(max(12, round(width * 0.016))), anchor="mm")
+    ImageDraw.Draw(image).text((width // 2, height - round(height * 0.025)), (str(page.get("page_number", "")) if is_content_page(page) else ""), fill=(45, 47, 44, 255), font=_load_page_font(max(12, round(width * 0.016))), anchor="mm")
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG", optimize=True)
     return output.getvalue()
@@ -811,7 +812,7 @@ def render_page_png(
         image.paste(panel_image, (x, y))
         draw.rounded_rectangle((x, y, x + box_width, y + box_height), radius=8, outline=(30, 32, 29), width=3)
         _draw_page_text(draw, panel, (x, y, box_width, box_height))
-    draw.text((width // 2, height - 28), ("" if prepared.get("page_kind") == "cover" else str(prepared.get("page_number", ""))), fill=(45, 47, 44), font=_load_page_font(14), anchor="mm")
+    draw.text((width // 2, height - 28), (str(prepared.get("page_number", "")) if is_content_page(prepared) else ""), fill=(45, 47, 44), font=_load_page_font(14), anchor="mm")
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
@@ -836,8 +837,9 @@ def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -
         }
         archive.writestr("project.json", json.dumps(manifest, ensure_ascii=False, indent=2))
         for page in storyboard:
+            page_name = "back-cover" if page.get("page_kind") == "back_cover" else f"page-{int(page.get('page_number', 0) or 0):03d}"
             archive.writestr(
-                f"pages/page-{int(page.get('page_number', 0) or 0):03d}.png",
+                f"pages/{page_name}.png",
                 render_page_png(project, page, storage),
             )
             for panel in page.get("panels", []):
@@ -849,5 +851,6 @@ def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -
                     content = storage.get_bytes(storage.asset_key(str(project["id"]), filename))
                 except (StorageError, StorageObjectNotFound):
                     continue
-                archive.writestr(f"pages/page-{page.get('page_number')}/{filename}", content)
+                asset_directory = "back-cover" if page.get("page_kind") == "back_cover" else f"page-{page.get('page_number')}"
+                archive.writestr(f"pages/{asset_directory}/{filename}", content)
     return output.getvalue()

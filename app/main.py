@@ -50,8 +50,9 @@ from .schemas import (
     validate_storyboard,
 )
 from .services.generation_design import design_data, design_hash, audit_design, public_design
-from .services.architect import recommend_architect, compile_architect
-from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider
+from .services.architect import recommend_architect, compile_architect, add_requested_covers
+from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider, compose_prompts
+from .services.page_types import is_content_page, page_label, requested_cover_kinds
 from .services.character_proposal import (
     active_characters, build_character_proposal, character_input_fingerprint, existing_character, panel_characters,
     proposal_is_stale, proposal_view, protected_character_ids, validate_selection,
@@ -455,10 +456,12 @@ def panel_generation_snapshot(
     current_job = active_sorted[0] if active_sorted else None
     current_panel_id = str(current_job["target_id"]) if current_job and current_job.get("target_id") else None
     current_page = None
+    current_page_label = None
     current_panel = None
     if current_panel_id and current_panel_id in panel_by_id:
         page, panel = panel_by_id[current_panel_id]
         current_page = page.get("page_number")
+        current_page_label = page_label(page)
         current_panel = panel.get("order")
     updated_values = [
         str(job.get("updated_at") or job.get("created_at") or "")
@@ -481,6 +484,7 @@ def panel_generation_snapshot(
         "active_job_ids": [str(job["id"]) for job in active_jobs],
         "current_panel_id": current_panel_id,
         "current_page": current_page,
+        "current_page_label": current_page_label,
         "current_panel": current_panel,
         "heartbeat_at": current_job.get("updated_at") if current_job else None,
         "updated_at": max(updated_values) if updated_values else (latest_job.get("updated_at") if latest_job else None),
@@ -2249,6 +2253,38 @@ async def api_adopt_name_page_count(project_id: str, payload: ApprovalRequest, u
             "validation": validation, "name_script": name_script_summary(updated)}
 
 
+@app.post("/api/projects/{project_id}/storyboard/covers")
+async def api_add_storyboard_covers(project_id: str, payload: ApprovalRequest, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    if content_digest(name_snapshot(project)) != payload.design_hash:
+        raise HTTPException(409, "ネームが変更されました。最新の内容を読み直してください。")
+    content = [page for page in project["storyboard"] if is_content_page(page)]
+    if not content:
+        raise HTTPException(422, "先に本文のネームを作成してください。")
+    if not requested_cover_kinds(project["settings"]):
+        raise HTTPException(422, "漫画化設定で表紙・裏表紙の有無を選んで保存してください。")
+    pages = add_requested_covers(list(project["storyboard"]), {**(project.get("analysis") or {}), "title": project["title"]}, project["settings"])
+    existing_ids = {page["id"] for page in project["storyboard"]}
+    new_pages = [page for page in pages if page["id"] not in existing_ids]
+    normalized = compose_prompts(normalize_storyboard(new_pages, project["settings"]), active_characters(project), project["settings"])
+    replacements = {page["id"]: page for page in normalized}
+    pages = [replacements.get(page["id"], page) for page in pages]
+    valid, message = validate_storyboard(pages)
+    if not valid:
+        raise HTTPException(422, message)
+    try:
+        prepare_name_document(project)
+        updated = db.add_storyboard_covers(project, pages)
+        if not updated:
+            raise ValueError("作品を読み直してください。")
+        document, validation = prepare_name_document(updated)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"project": project_view(updated),
+            "document": {key: document.get(key) for key in ("id", "version_number", "content_hash", "markdown", "provided_at", "approved_at")},
+            "validation": validation, "name_script": name_script_summary(updated)}
+
+
 def manga_document_download(project: dict, document: dict) -> Response:
     from urllib.parse import quote
     filename = f"{project['title']}-{document['kind']}-v{document['version_number']}.md"
@@ -2542,6 +2578,7 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
                 "id": panel.get("id"),
                 "page_id": page.get("id"),
                 "page_number": page.get("page_number"),
+                "page_kind": page.get("page_kind", "content"),
                 "status": panel.get("generation_status", "not_started"),
                 "error": panel.get("generation_error"),
                 "revision": panel.get("revision", 0),

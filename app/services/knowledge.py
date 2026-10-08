@@ -16,6 +16,7 @@ from .. import db
 from ..schemas import ALLOWED_KNOWLEDGE_SCOPES
 from .composition import composition_quality_score
 from .layout import storyboard_layout_issues
+from .page_types import is_content_page
 from .reading_order import reading_order_context, reading_order_issues
 
 
@@ -435,14 +436,14 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
     from .architect import event_issues, rendering_profile
     content_number = 0
     for page in pages:
-        is_cover = page.get("page_kind") == "cover"
+        is_cover = not is_content_page(page)
         content_number += 0 if is_cover else 1
         if page.get("page_number") != (0 if is_cover else content_number):
-            issues.append({"key":"page-number", "label":"ページ番号", "detail":"表紙は番号なし、本文は1から連番にしてください。"})
+            issues.append({"key":"page-number", "label":"ページ番号", "detail":"表紙・裏表紙は番号なし、本文は1から連番にしてください。"})
         for detail in event_issues(page):
             issues.append({"key":"event-boundary", "label":"出来事の順序", "detail":detail})
     add_check("event-boundary","出来事の境界","error" if any(i['key']=='event-boundary' for i in issues) else "pass","保存済みの許可・禁止イベントを確認しました。言い換えや画像内の先取りは目視でも確認してください。")
-    add_check("page-number","ページ番号","error" if any(i['key']=='page-number' for i in issues) else "pass","本文の連番と表紙の扱いを確認しました。")
+    add_check("page-number","ページ番号","error" if any(i['key']=='page-number' for i in issues) else "pass","本文の連番と表紙・裏表紙の扱いを確認しました。")
     if any(p.get("image_url") for p in panels):
         warnings.append({"key":"visual-review", "label":"画像の目視確認", "detail":"顔・人体・手・描画方式は画像を見て確認してください。この検査では外観を検証していません。"})
         for key,label,detail in [("face","顔・同一性","顔の二重化、頭の形、人物の識別特徴"),("body","人体・接触","余分・欠けた手足、不自然な関節・接触"),("hands","手・道具","確認できる手指の本数・融合・道具の持ち方"),("style-compliance","描画方式","素材・線・頭身・必須条件と禁止条件")]:

@@ -174,7 +174,7 @@ def test_maximum_body_and_cover_survive_save_and_confirmation(workspace):
     assert prepared["validation"]["errors"] == []
     assert prepared["validation"]["page_counts"] == {
         "target_content_pages": 120, "content_pages": 120, "cover_pages": 1,
-        "total_pages": 121, "maximum_content_pages": 120,
+        "total_pages": 121, "maximum_content_pages": 120, "back_cover_pages": 0,
     }
     _, markdown = prepare_and_confirm(client, project)
     assert "## 本文 120ページ" in markdown

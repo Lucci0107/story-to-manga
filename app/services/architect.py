@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import copy
+import uuid
 from pathlib import Path
 from typing import Any
 from .manga_contract import contract_metadata, image_contract_prompt
+from .page_types import is_content_page, requested_cover_kinds
 
 STYLE_PROFILES = json.loads(
     (Path(__file__).resolve().parents[1] / "catalogs/rendering_styles.json").read_text()
@@ -335,6 +338,50 @@ def event_issues(page: dict) -> list[str]:
     return list(dict.fromkeys(issues))
 
 
+def add_requested_covers(pages: list, analysis: dict, settings: dict) -> list:
+    """選んだ表紙類だけを補い、既存の本文・表紙・画像には触れない。"""
+    content = [page for page in pages if is_content_page(page)]
+    if not content:
+        return pages
+    present = {page.get("page_kind") for page in pages}
+    used_ids = {page.get("id") for page in pages}
+    used_ids.update(panel.get("id") for page in pages for panel in page.get("panels") or [])
+    for kind in requested_cover_kinds(settings):
+        if kind in present:
+            continue
+        source = content[0] if kind == "cover" else content[-1]
+        template = next(iter(source.get("panels") or []), {})
+        label = "表紙" if kind == "cover" else "裏表紙"
+        prefix = "cover" if kind == "cover" else "back-cover"
+        page_id, panel_id = f"independent-{prefix}", f"{prefix}-panel"
+        if page_id in used_ids or panel_id in used_ids:
+            suffix = uuid.uuid4().hex[:8]
+            page_id, panel_id = f"{page_id}-{suffix}", f"{panel_id}-{suffix}"
+        panel = {key: copy.deepcopy(template[key]) for key in ("characters", "background", "shot_type", "expression") if key in template}
+        panel.update(
+            id=panel_id, order=1,
+            description=("表紙。" + str(analysis.get("title") or "")) if kind == "cover" else "裏表紙。本文にある風景やモチーフで静かな余韻を表す。表紙と同じ描画スタイルを使い、新しい出来事・人物・文章は追加しない。",
+            action="人物紹介" if kind == "cover" else "本文の風景とモチーフを配置する",
+            dialogue=[], dialogue_details=[], narration=[], sfx=[], event_ids=[], event_boundary={},
+            generation_prompt="", image_url=None, generation_status="not_started", revision=0,
+            scene_type="illustration", panel_shape="rectangle", importance="high",
+        )
+        page = {
+            "id": page_id, "page_number": 0, "page_kind": kind,
+            "show_title": kind == "cover", "title": str(analysis.get("title") or label) if kind == "cover" else label,
+            "layout": "hero", "page_role": kind, "architect_source": contract_metadata(),
+            "name_review_required": True, "layout_policy": settings.get("layout_policy") or "content_driven",
+            "script_tone_parameters": tone_parameters(settings),
+            "knowledge_refs": copy.deepcopy(source.get("knowledge_refs") or []), "panels": [panel],
+        }
+        if kind == "cover":
+            pages.insert(0, page)
+        else:
+            pages.append(page)
+        used_ids.update((page_id, panel_id))
+    return pages
+
+
 def finalize_storyboard(pages: list, analysis: dict, settings: dict) -> list:
     plan_event_boundaries(pages, analysis)
     for page in pages:
@@ -344,35 +391,4 @@ def finalize_storyboard(pages: list, analysis: dict, settings: dict) -> list:
         page["layout_policy"] = settings.get("layout_policy") or "content_driven"
         page["show_title"] = settings.get("title_mode", "first_page") == "first_page"
         page["script_tone_parameters"] = tone_parameters(settings)
-    if settings.get("title_mode") == "cover" and pages:
-        import copy
-
-        cover_panel = copy.deepcopy(pages[0]["panels"][0])
-        cover_panel.update(
-            id="cover-panel",
-            description="表紙。" + str(analysis.get("title") or ""),
-            action="人物紹介",
-            dialogue=[],
-            narration=[],
-            sfx=[],
-            event_ids=[],
-            event_boundary={},
-            generation_prompt="",
-            image_url=None,
-            generation_status="not_started",
-        )
-        cover = {
-            "id": "independent-cover",
-            "page_number": 0,
-            "page_kind": "cover",
-            "show_title": True,
-            "title": str(analysis.get("title") or "表紙"),
-            "layout": "hero",
-            "page_role": "cover",
-            "architect_source": contract_metadata(),
-            "name_review_required": True,
-            "layout_policy": settings.get("layout_policy") or "content_driven",
-            "panels": [cover_panel],
-        }
-        pages.insert(0, cover)
-    return pages
+    return add_requested_covers(pages, analysis, settings)

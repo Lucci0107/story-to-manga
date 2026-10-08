@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from .. import db
-from ..schemas import MAX_CONTENT_PAGES
+from .page_types import MAX_CONTENT_PAGES, is_content_page, page_label, requested_cover_kinds
 from .architect import rendering_profile, event_issues
 from .manga_contract import contract_metadata
 
@@ -94,10 +94,11 @@ def name_snapshot(project: dict) -> dict:
 def name_page_counts(snapshot: dict) -> dict:
     pages = snapshot["pages"]
     covers = sum(page.get("page_kind") == "cover" for page in pages)
-    content = len(pages) - covers
+    back_covers = sum(page.get("page_kind") == "back_cover" for page in pages)
+    content = len(pages) - covers - back_covers
     return {
         "target_content_pages": int(snapshot["settings"].get("target_page_count") or content),
-        "content_pages": content, "cover_pages": covers, "total_pages": len(pages),
+        "content_pages": content, "cover_pages": covers, "back_cover_pages": back_covers, "total_pages": len(pages),
         "maximum_content_pages": MAX_CONTENT_PAGES,
     }
 
@@ -105,7 +106,7 @@ def name_page_counts(snapshot: dict) -> dict:
 def name_validation(project: dict, snapshot: dict) -> dict:
     errors, warnings = [], []
     pages = snapshot["pages"]
-    content = [page for page in pages if page.get("page_kind") != "cover"]
+    content = [page for page in pages if is_content_page(page)]
     counts = name_page_counts(snapshot)
     if not content:
         errors.append("本文のネームを作成してください。")
@@ -113,20 +114,29 @@ def name_validation(project: dict, snapshot: dict) -> dict:
         errors.append("本文ページ番号を1から順番に揃えてください。")
     required = db.name_review_required(project["id"]) or any(p.get("name_review_required") for p in project.get("storyboard") or [])
     if required and counts["content_pages"] != counts["target_content_pages"]:
-        errors.append(f"本文ページ数が目標ページ数と一致しません（目標{counts['target_content_pages']}ページ・現在{counts['content_pages']}ページ）。表紙{counts['cover_pages']}ページは本文に含みません。")
+        errors.append(f"本文ページ数が目標ページ数と一致しません（目標{counts['target_content_pages']}ページ・現在{counts['content_pages']}ページ）。表紙{counts['cover_pages']}ページ・裏表紙{counts['back_cover_pages']}ページは本文に含みません。")
     if len(content) > MAX_CONTENT_PAGES:
         errors.append(f"本文は{MAX_CONTENT_PAGES}ページ以内にしてください。")
     if counts["cover_pages"] > 1 or any(page.get("page_kind") == "cover" for page in pages[1:]):
         errors.append("表紙は先頭の1ページだけにしてください。")
+    if counts["back_cover_pages"] > 1 or any(page.get("page_kind") == "back_cover" for page in pages[:-1]):
+        errors.append("裏表紙は最後の1ページだけにしてください。")
+    if required:
+        requested = requested_cover_kinds(snapshot["settings"])
+        for kind, label, count in (("cover", "表紙", counts["cover_pages"]), ("back_cover", "裏表紙", counts["back_cover_pages"])):
+            if kind in requested and not count:
+                errors.append(f"設定で選んだ{label}をネームに追加してください。")
+            elif kind not in requested and count and (kind == "back_cover" or "title_mode" in snapshot["settings"]):
+                errors.append(f"{label}なしの設定ですが、保存済みに{label}があります。ページを削除するか、有無の設定を見直してください。")
     ids = []
     for page in pages:
         ids.append(page.get("id"))
         errors.extend(event_issues(page))
         if not page.get("panels"):
-            errors.append(f"ページ{page.get('page_number')}にコマがありません。")
+            errors.append(f"{page_label(page)}にコマがありません。")
         for panel in page.get("panels") or []:
             ids.append(panel.get("id"))
-            label = f"ページ{page.get('page_number')}・コマ{panel.get('order')}"
+            label = f"{page_label(page)}・コマ{panel.get('order')}"
             if not panel.get("description") and not panel.get("action"):
                 errors.append(label + "の内容を入力してください。")
             if not panel.get("background") and panel.get("scene_type") in {"establishing", "transition"}:
@@ -145,9 +155,11 @@ def name_validation(project: dict, snapshot: dict) -> dict:
 
 def render_name_markdown(snapshot: dict, number: int) -> str:
     settings = snapshot["settings"]
-    content = [p for p in snapshot["pages"] if p.get("page_kind") != "cover"]
+    content = [p for p in snapshot["pages"] if is_content_page(p)]
+    counts = name_page_counts(snapshot)
     style = rendering_profile(settings)
     lines = [f"# {snapshot['title']} 漫画ネーム台本", "", f"版：{number} / 本文：{len(content)}ページ", "",
+             f"本文の目標：{counts['target_content_pages']}ページ / 表紙：{counts['cover_pages']}ページ / 裏表紙：{counts['back_cover_pages']}ページ / 合計：{counts['total_pages']}ページ", "表紙・裏表紙は本文の目標ページ数に含めません。", "",
              "確定状態はアプリの版履歴に保存します。このファイルの提供だけでは画像生成を開始しません。", "",
              "## 制作条件と原作", "", f"原作：{snapshot['source_filename']}（提供本文の全体）",
              f"原作識別：{snapshot['source_hash']}", f"言語・読順：{_label(settings.get('language'))} / {_label(settings.get('reading_direction'))}",
@@ -160,7 +172,7 @@ def render_name_markdown(snapshot: dict, number: int) -> str:
         lines += [f"- {character.get('name')}：{_display(character.get('role'))}。{_display(character.get('relationship_notes'))}"]
     lines += ["", "## 全体構成", ""]
     for page in snapshot["pages"]:
-        label = "表紙" if page.get("page_kind") == "cover" else f"本文 {page.get('page_number')}ページ"
+        label = page_label(page)
         lines += [f"- {label} / {len(page['panels'])}コマ / {_display(page.get('page_role') or page.get('title'))} / {_display(page.get('allowed_events'), '出来事の追加なし')}"]
     sources = {json.dumps(page["architect_source"], ensure_ascii=False, sort_keys=True) for page in snapshot["pages"] if page.get("architect_source")}
     if sources or snapshot["knowledge_versions"]:
@@ -171,7 +183,7 @@ def render_name_markdown(snapshot: dict, number: int) -> str:
         for ref in snapshot["knowledge_versions"]:
             lines += [f"- 選択したKnowledge：{_display(ref.get('title'))} / 版 {_display(ref.get('version_number'))} / 版ID {_display(ref.get('version_id'))}"]
     for page in snapshot["pages"]:
-        label = "表紙" if page.get("page_kind") == "cover" else f"本文 {page.get('page_number')}ページ"
+        label = page_label(page)
         lines += ["", f"## {label}", "", f"目的：{_display(page.get('page_role') or page.get('title'))}",
                   f"場所・時間：{_display(page.get('location_time'))}", f"コマ数：{len(page['panels'])} / 選定理由：{_display(page.get('panel_count_reason'), '要確認')}",
                   f"配置・テンポ：{_label(page.get('layout'))} / {_display(page.get('layout_reason'), '内容と読順を確認')}",
@@ -216,6 +228,7 @@ def name_script_summary(project: dict) -> dict:
         "approved_at": current.get("approved_at") if current else None,
         "versions": versions,
         "page_counts": name_page_counts(snapshot), "validation": name_validation(project, snapshot),
+        "missing_covers": [kind for kind in requested_cover_kinds(snapshot["settings"]) if not any(page.get("page_kind") == kind for page in snapshot["pages"])],
     }
 
 

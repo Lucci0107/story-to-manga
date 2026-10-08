@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .services.composition import COMPOSITION_VERSION, SEMANTIC_COMPOSITION_VERSION, CURRENT_COMPOSITION_VERSION
 from .services.layout import ensure_storyboard_layout, normalize_importance
+from .services.page_types import MAX_CONTENT_PAGES, COVER_PAGE_KINDS
 from .services.reading_order import (
     ALLOWED_LANGUAGES,
     LEGACY_DIRECTION_ALIASES,
@@ -20,7 +21,6 @@ ALLOWED_STEPS = {"story", "knowledge", "analysis", "settings", "characters", "st
 MAX_CHARACTERS = 64
 # 今回の制作対象と、過去の設定を含む保管件数は別々に制限する。
 MAX_STORED_CHARACTERS = 512
-MAX_CONTENT_PAGES = 120
 CHARACTER_NAME_MAX_LENGTH = 80
 CHARACTER_TEXT_MAX_LENGTH = 2_000
 ALLOWED_DIRECTIONS = set(LEGACY_DIRECTION_ALIASES)
@@ -97,6 +97,7 @@ class SettingsPayload(BaseModel):
     character_proportion: Optional[str] = None
     mood_lighting: Optional[str] = None
     title_mode: str = "none"
+    back_cover_mode: Literal["none", "generate"] = "none"
     layout_policy: Optional[Literal["content_driven", "expressive"]] = None
     source_kind: Literal["unspecified", "fiction", "documentary"] = "unspecified"
     style_adjustments: str = Field(default="", max_length=1000)
@@ -846,9 +847,17 @@ def normalize_storyboard(
 
     if not isinstance(value, list):
         return []
-    has_cover = bool(value and isinstance(value[0], dict) and value[0].get("page_kind") == "cover")
-    if len(value) > MAX_CONTENT_PAGES + int(has_cover):
-        raise ValueError(f"本文は{MAX_CONTENT_PAGES}ページまでです。表紙は先頭に1ページ、別枠で追加できます。ページを削らずに保存を中止しました。")
+    cover_count = 0
+    for index, page in enumerate(value):
+        if not isinstance(page, dict) or page.get("page_kind") not in COVER_PAGE_KINDS:
+            continue
+        if page["page_kind"] == "cover" and index != 0:
+            raise ValueError("表紙は先頭の1ページだけにしてください。")
+        if page["page_kind"] == "back_cover" and index != len(value) - 1:
+            raise ValueError("裏表紙は最後の1ページだけにしてください。")
+        cover_count += 1
+    if len(value) > MAX_CONTENT_PAGES + cover_count:
+        raise ValueError(f"本文は{MAX_CONTENT_PAGES}ページまでです。表紙は先頭、裏表紙は最後に各1ページ、別枠で追加できます。ページを削らずに保存を中止しました。")
     list_fields = {"characters", "dialogue", "narration", "sfx"}
     normalized_pages: List[Dict[str, Any]] = []
     content_number = 0
@@ -944,15 +953,16 @@ def normalize_storyboard(
             panel["sfx_order"] = list(range(1, len(panel["sfx"]) + 1))
             panels.append(panel)
         normalized_composition = normalize_composition(item.get("composition"))
-        is_cover = item.get("page_kind") == "cover" and page_index == 0
+        is_cover = item.get("page_kind") in COVER_PAGE_KINDS
         content_number += 0 if is_cover else 1
+        default_title = {"cover": "表紙", "back_cover": "裏表紙"}.get(item.get("page_kind"), f"ページ {content_number}")
         normalized_page = {
                 "id": str(item.get("id") or f"page-{page_index + 1}-{uuid.uuid4().hex[:6]}"),
                 "page_number": 0 if is_cover else content_number,
-                "page_kind": "cover" if is_cover else "content",
+                "page_kind": item["page_kind"] if is_cover else "content",
                 "show_title": item.get("show_title", True),
                 "script_tone_parameters": item.get("script_tone_parameters") or {},
-                "title": str(item.get("title", f"ページ {page_index + 1}"))[:200],
+                "title": str(item.get("title", default_title))[:200],
                 "layout": layout,
                 "page_role": str(item.get("page_role") or "")[:120],
                 "panel_count_reason": str(item.get("panel_count_reason") or "")[:500],

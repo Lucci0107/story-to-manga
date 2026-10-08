@@ -15,6 +15,14 @@
     return escapeHtml(value).replace(/`/g, "&#096;");
   }
 
+  function isCoverPage(page) {
+    return page?.page_kind === 'cover' || page?.page_kind === 'back_cover';
+  }
+
+  function pageLabel(page) {
+    return page?.page_kind === 'cover' ? '表紙' : page?.page_kind === 'back_cover' ? '裏表紙' : 'ページ ' + (page?.page_number ?? '');
+  }
+
   function parseJson(value, fallback) {
     try { return JSON.parse(value); } catch (_error) { return fallback; }
   }
@@ -1088,12 +1096,18 @@
         selectField("visual_genre","世界観",settings.visual_genre || "",options(catalog.genres)) +
         selectField("character_proportion","人物の頭身",settings.character_proportion || "",options(catalog.proportions)) +
         selectField("mood_lighting","雰囲気・照明",settings.mood_lighting || "",options(catalog.moods)) +
-        selectField("title_mode","タイトル・表紙",settings.title_mode || "none",[{value:"none",label:"本文のみ"},{value:"first_page",label:"本文1ページ目にタイトル"},{value:"cover",label:"独立した表紙"}]) +
         selectField("layout_policy","コマ割りの方針",settings.layout_policy || "expressive",[{value:"content_driven",label:"内容に合わせる（長方形を基本）"},{value:"expressive",label:"従来の変形コマ割り"}]) +
         selectField("source_kind","原作の区分",settings.source_kind || "unspecified",[{value:"unspecified",label:"未指定"},{value:"fiction",label:"創作"},{value:"documentary",label:"実話・記録"}]) +
         '<label class="editor-label full">画風の調整・保持したい描写<textarea data-settings-field="style_adjustments" rows="2">' + escapeHtml(settings.style_adjustments || "") + '</textarea></label>' +
         '</div><p role="status">' + escapeHtml(settings.script_tone_reason || "") + ' ' + escapeHtml(settings.style_reason || "") + '</p>' +
         (selected ? '<details><summary>描画方式の条件</summary><p>' + escapeHtml(selected.name) + ' / ' + escapeHtml(selected.body_ratio || "人物設定の頭身を保持") + '</p><p>人物の顔・体格・衣装を保持し、線・塗り・陰影を描画方式に合わせます。' + (selected.color_mode === "bw" ? 'この画風は白黒で使用します。' : '') + '</p><p>必須：' + escapeHtml(selected.required.join(" / ")) + '</p><p>禁止：' + escapeHtml(selected.forbidden.join(" / ")) + '</p></details>' : '') + '</section>';
+    }
+
+    function coverSettingsFields(settings) {
+      return '<section class="surface-panel panel-padding cover-settings"><h3>表紙・裏表紙の有無</h3><p>表紙・裏表紙は、本文の目標ページ数に含めません。本文120ページに両方を付ける場合は、合計122ページになります。</p><div class="settings-grid">' +
+        selectField('title_mode', '表紙・タイトル', settings.title_mode || 'none', [{value:'none',label:'表紙なし'},{value:'first_page',label:'表紙なし・本文1ページ目にタイトル'},{value:'cover',label:'あり（独立した表紙）'}]) +
+        selectField('back_cover_mode', '裏表紙', settings.back_cover_mode || 'none', [{value:'none',label:'なし'},{value:'generate',label:'あり（独立した裏表紙）'}]) +
+        '</div><p class="field-help">保存した選択に合わせて、ネームに独立した表紙・裏表紙を追加します。画像生成は、全編ネームと各ページの設計を確認した後に行います。</p></section>';
     }
 
     function captureSettingsDraft() {
@@ -1127,7 +1141,7 @@
       const preview = pendingRecommendation ? '<div class="recommendation-preview" role="status"><div><strong>再提案のプレビュー：' + escapeHtml(pendingRecommendation.recommended_page_count) + 'ページ</strong><p>' + escapeHtml(pendingRecommendation.page_count_reason || pendingRecommendation.recommendation_reason || "原稿全体から新しい推奨値を作成しました。") + '</p></div><div class="save-row"><button type="button" class="secondary-button compact-button" data-cancel-recommendation>現在の設定を維持</button><button type="button" class="primary-button compact-button" data-apply-recommendation>推奨値を適用</button></div></div>' : '';
       const recommendationRetry = recommendationAttempted ? '<button type="button" class="secondary-button compact-button" data-retry-recommendation>AI推奨を再試行</button>' : '';
       const recommendationPanel = storedRecommendation ? '<section class="recommendation-panel" aria-live="polite"><div class="recommendation-header"><div><span class="settings-badge">' + recommendationLabel + '</span><strong>' + (storedRecommendation.stale && !pendingRecommendation ? '以前の提案：' : '全編の提案：') + escapeHtml(displayRecommendation.recommended_page_count) + 'ページ</strong></div><button type="button" class="primary-button recommendation-refresh-button" data-refresh-recommendation' + (recommendationLoading ? ' disabled' : '') + '><span class="recommendation-refresh-icon" aria-hidden="true">↻</span>原稿全体から再提案</button></div><p>' + escapeHtml(displayRecommendation.page_count_reason || displayRecommendation.recommendation_reason || "原稿全体に基づく漫画化設定です。") + '</p>' + sourceSummary + (budgetText ? '<div class="recommendation-budget" aria-label="シーン別ページ配分">' + budgetText + '</div>' : '') + remainingBudget + fallbackNotice + staleNotice + limitNotice + preview + '</section>' : '<section class="recommendation-panel recommendation-empty" aria-live="polite"><div><span class="settings-badge">AI推奨</span><strong>原稿全体から初期値を作成します</strong></div><p>原稿の分量・章構成と解析結果から、全編を描く目標ページ数、テンポ、画面スタイルを推定します。</p>' + recommendationRetry + '</section>';
-      content.innerHTML = heading("漫画化の方針を決める", "提案するページ構成とコマの雰囲気をここで指定します。") + recommendationPanel + architectFields(settings) + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">本文の目標ページ数<small>表紙は別ページです。' + (recommendation ? recommendationLabel + '。保存前に自由に変更できます。' : '全編を描く目標です。1〜120ページで設定できます。') + '</small><input type="number" min="1" max="120" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "コマの演出", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div>' + (recommendation ? '<div class="field-help recommendation-applied-note">表示中の値は提案を反映しています。保存した設定は次回以降自動上書きされません。</div>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
+      content.innerHTML = heading("漫画化の方針を決める", "提案するページ構成とコマの雰囲気をここで指定します。") + recommendationPanel + coverSettingsFields(settings) + architectFields(settings) + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">本文の目標ページ数<small>表紙・裏表紙は別ページです。' + (recommendation ? recommendationLabel + '。保存前に自由に変更できます。' : '全編を描く目標です。1〜120ページで設定できます。') + '</small><input type="number" min="1" max="120" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "コマの演出", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div>' + (recommendation ? '<div class="field-help recommendation-applied-note">表示中の値は提案を反映しています。保存した設定は次回以降自動上書きされません。</div>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
       content.querySelectorAll("[data-settings-field]").forEach(function (input) {
         const rememberChange = function () { architectDraft[input.dataset.settingsField] = input.type === "number" ? Number(input.value) : (input.value || null); };
         input.addEventListener("input", rememberChange);
@@ -1690,7 +1704,9 @@
       const validation = (document ? nameDocument.validation : summary.validation) || { errors: [], warnings: [] };
       const counts = summary.page_counts;
       const mismatch = counts && counts.content_pages !== counts.target_content_pages;
-      const pageCounts = counts ? '<div class="name-page-counts" aria-label="ネームのページ数"><strong>本文の目標 ' + counts.target_content_pages + 'ページ</strong><span>現在の本文 ' + counts.content_pages + 'ページ</span><span>表紙 ' + counts.cover_pages + 'ページ / 合計 ' + counts.total_pages + 'ページ</span></div><p class="field-help">表紙は本文の目標ページ数に含みません。</p>' : '';
+      const pageCounts = counts ? '<div class="name-page-counts" aria-label="ネームのページ数"><strong>本文の目標 ' + counts.target_content_pages + 'ページ</strong><span>現在の本文 ' + counts.content_pages + 'ページ</span><span>表紙 ' + counts.cover_pages + 'ページ / 裏表紙 ' + (counts.back_cover_pages || 0) + 'ページ / 合計 ' + counts.total_pages + 'ページ</span></div><p class="field-help">表紙・裏表紙は本文の目標ページ数に含みません。</p>' : '';
+      const coverChoices = '<p>選択した構成：表紙 ' + (state.settings?.title_mode === 'cover' ? 'あり' : 'なし') + ' / 裏表紙 ' + (state.settings?.back_cover_mode === 'generate' ? 'あり' : 'なし') + '</p>';
+      const missingCovers = counts?.content_pages && summary.missing_covers?.length ? '<div class="name-page-count-recovery"><strong>選んだ表紙・裏表紙をネームに追加してください</strong><p>既存の本文・画像を保持して、足りない表紙・裏表紙だけを追加します。画像は全編ネームを確認してから生成できます。</p><div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-add-cover-pages>選んだ表紙・裏表紙を追加</button></div></div>' : '';
       const recovery = mismatch ? '<div class="name-page-count-recovery"><strong>本文の構成を確認して、ページ数を合わせてください</strong><p>不足している内容がある場合は、本文ページを追加して補完してください。現在の本文で全編が揃っている場合は、そのページ数を目標に反映できます。目標の変更ではAI生成を行わず、新しい確認用の版を保存します。</p><div class="name-review-actions">' + (counts.content_pages >= 1 && counts.content_pages <= counts.maximum_content_pages ? '<button type="button" class="secondary-button compact-button" data-adopt-name-page-count>現在の本文' + counts.content_pages + 'ページを目標に反映</button>' : '') + '<button type="button" class="outline-button compact-button" data-show-add-page>本文ページを追加する場所へ</button></div></div>' : '';
       const label = { confirmed: "この版を確定済み", draft: "確認待ち", outdated: "編集されたため再確認が必要", not_created: "全編ファイルを準備" }[summary.state] || "全編ファイルを準備";
       const base = '/api/projects/' + encodeURIComponent(state.id);
@@ -1698,9 +1714,9 @@
       const download = currentId ? '<a class="secondary-button compact-button" href="' + base + '/manga-documents/' + encodeURIComponent(currentId) + '/download">全編Markdownをダウンロード</a>' : '';
       const confirmation = currentId && summary.state !== "confirmed" ? '<button type="button" class="primary-button compact-button" data-confirm-name' + (validation.errors.length ? ' disabled' : '') + '>この版の全編ネームを確定</button>' : '';
       const history = (summary.versions || []).length ? '<details><summary>版履歴（' + summary.versions.length + '件）</summary><ul>' + summary.versions.map(function(version) { return '<li><a href="' + base + '/manga-documents/' + encodeURIComponent(version.id) + '/download">版 ' + version.version_number + '</a> / ' + (version.approved_at ? '確定済み' : '確認待ち') + (version.id === currentId ? ' / 現在の内容' : '') + '</li>'; }).join('') + '</ul></details>' : '';
-      return '<section class="surface-panel panel-padding name-review-panel"><div class="name-review-header"><h3>全編ネームの事前確認</h3><span class="settings-badge">' + escapeHtml(label) + '</span></div><p>背景・人物の位置・セリフの話者と出所・反応・枠の理由を全ページで確認します。' + (summary.required ? '画像を生成する前に、この版を確定してください。' : '既存作品はそのまま出力できます。') + '</p>' + pageCounts + '<div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-prepare-name>全編ネームを出力・確認</button>' + download + confirmation + '</div>' +
+      return '<section class="surface-panel panel-padding name-review-panel"><div class="name-review-header"><h3>全編ネームの事前確認</h3><span class="settings-badge">' + escapeHtml(label) + '</span></div><p>背景・人物の位置・セリフの話者と出所・反応・枠の理由を全ページで確認します。' + (summary.required ? '画像を生成する前に、この版を確定してください。' : '既存作品はそのまま出力できます。') + '</p>' + coverChoices + pageCounts + '<div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-prepare-name>全編ネームを出力・確認</button>' + download + confirmation + '</div>' +
         (validation.errors.length ? '<p class="name-validation-error" role="alert">' + escapeHtml(validation.errors.join(' / ')) + '</p>' : '') +
-        recovery +
+        missingCovers + recovery +
         (validation.warnings.length ? '<details><summary>確認が必要な項目（' + validation.warnings.length + '件）</summary><ul>' + validation.warnings.map(function(value) { return '<li>' + escapeHtml(value) + '</li>'; }).join('') + '</ul></details>' : '') +
         (document ? '<details><summary>全編プレビュー / 版 ' + document.version_number + '</summary><pre class="name-script-preview">' + escapeHtml(document.markdown) + '</pre></details>' : '') + history + '</section>';
     }
@@ -1719,6 +1735,20 @@
     }
 
     function bindNameReview() {
+      content.querySelector('[data-add-cover-pages]')?.addEventListener('click', async function(event) {
+        if (!requireSavedStoryboard()) return;
+        const button = event.currentTarget;
+        button.disabled = true;
+        setSaveState('保存中', true);
+        try {
+          const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/storyboard/covers', {method:'POST',body:JSON.stringify({design_hash:state.name_script.content_hash})});
+          state = data.project;
+          nameDocument = data;
+          setSaveState('保存済み', false);
+          renderStoryboard();
+          showToast('選んだ表紙・裏表紙を追加しました。新しい版の全編ネームを確認してください');
+        } catch(error) { setSaveState('保存エラー', false); showToast(error.message, 'error'); button.disabled = false; }
+      });
       content.querySelector('[data-adopt-name-page-count]')?.addEventListener('click', async function(event) {
         if (!requireSavedStoryboard()) return;
         const button = event.currentTarget;
@@ -1804,7 +1834,7 @@
         const layoutOptions = [{value:"classic", label:"自動"}, {value:"drama", label:"標準ドラマ"}, {value:"conversation", label:"会話"}, {value:"action", label:"アクション"}, {value:"psychological", label:"心理"}, {value:"four_panel", label:"4コマ（均等）"}, {value:"hero", label:"1コマ"}, {value:"wide", label:"横長重視"}].map(function (option) { return '<option value="' + option.value + '"' + (option.value === (page.layout || "classic") ? " selected" : "") + '>' + option.label + '</option>'; }).join("");
         const familyLabels = {"dominant-top":"導入を大きく", "vertical-anchor":"縦長コマを軸に", "diagonal-middle":"中段に変化", "climax-bottom":"最後を大きく", "conversation-asymmetric":"会話に大小のリズム", "psychological":"間と余白", "four-panel":"均等4コマ"};
         const resolvedTemplate = familyLabels[page.composition?.family] || page.layout_geometry?.template || "未計算";
-        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + (page.page_kind === 'cover' ? '表紙' : String(page.page_number).padStart(2, '0')) + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-repair-page-layout data-composition-version="4" data-page-id="' + escapeAttr(page.id) + '">共有ガターを更新</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header>' + fallbackNotice + pageBoundaryFields(page) + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
+        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + (isCoverPage(page) ? pageLabel(page) : String(page.page_number).padStart(2, '0')) + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-repair-page-layout data-composition-version="4" data-page-id="' + escapeAttr(page.id) + '">共有ガターを更新</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header>' + fallbackNotice + pageBoundaryFields(page) + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
       }).join("");
       const body = pages.length ? jobNotice + '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : jobNotice + '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
@@ -1833,7 +1863,8 @@
       content.querySelector("[data-next-step]")?.addEventListener("click", function () { goToStep("generate"); });
       content.querySelector("[data-add-page]")?.addEventListener("click", function () {
         const pages = [...(state.storyboard || [])];
-        pages.push({ id: uuid("page"), page_number: pages.length + 1, title: "追加ページ", layout: "classic", panels: [newPanel(1)] });
+        const backIndex = pages.findIndex(function(page) { return page.page_kind === 'back_cover'; });
+        pages.splice(backIndex < 0 ? pages.length : backIndex, 0, { id: uuid("page"), page_kind: 'content', page_number: 1, title: "追加ページ", layout: "classic", panels: [newPanel(1)] });
         saveStoryboard(pages, "ページを追加しました");
       });
       content.querySelectorAll("[data-page-layout]").forEach(function (select) { select.addEventListener("change", function () {
@@ -1851,8 +1882,14 @@
         } catch (error) { showToast(error.message, "error"); button.disabled = false; }
       }); });
       content.querySelectorAll("[data-page-move]").forEach(function (button) { button.addEventListener("click", function () {
-        const pages = [...state.storyboard]; const index = pages.findIndex(function (page) { return page.id === button.dataset.pageId; }); const nextIndex = button.dataset.pageMove === "up" ? index - 1 : index + 1; if (index < 0 || nextIndex < 0 || nextIndex >= pages.length) return; [pages[index], pages[nextIndex]] = [pages[nextIndex], pages[index]]; pages.forEach(function (page, i) { page.page_number = i + 1; }); saveStoryboard(pages, "ページの順番を更新しました");
+        const pages = structuredClone(state.storyboard); const index = pages.findIndex(function (page) { return page.id === button.dataset.pageId; }); const nextIndex = button.dataset.pageMove === "up" ? index - 1 : index + 1; if (index < 0 || nextIndex < 0 || nextIndex >= pages.length || isCoverPage(pages[index]) || isCoverPage(pages[nextIndex])) return; [pages[index], pages[nextIndex]] = [pages[nextIndex], pages[index]]; saveStoryboard(pages, "ページの順番を更新しました");
       }); });
+      content.querySelectorAll('[data-page-move]').forEach(function(button) {
+        const pages = state.storyboard || [];
+        const index = pages.findIndex(function(page) { return page.id === button.dataset.pageId; });
+        const neighbor = button.dataset.pageMove === 'up' ? index - 1 : index + 1;
+        button.disabled = index < 0 || !pages[neighbor] || isCoverPage(pages[index]) || isCoverPage(pages[neighbor]);
+      });
       content.querySelectorAll("[data-page-delete]").forEach(function (button) { button.addEventListener("click", function () {
         if (!window.confirm("このページを削除しますか？この操作は保存されます。")) return; const pages = state.storyboard.filter(function (page) { return page.id !== button.dataset.pageId; }); pages.forEach(function (page, i) { page.page_number = i + 1; }); saveStoryboard(pages, "ページを削除しました");
       }); });
@@ -1872,7 +1909,7 @@
 
     function saveStoryboard(storyboard, message) {
       let contentPageNumber = 0;
-      storyboard.forEach(function (page, index) { page.page_number = page.page_kind === "cover" ? 0 : ++contentPageNumber; page.panels = (page.panels || []).map(function (panel, panelIndex) { return { ...panel, order: panelIndex + 1, bubble_order: (panel.dialogue || []).map(function (_item, itemIndex) { return itemIndex + 1; }), narration_order: (panel.narration || []).map(function (_item, itemIndex) { return itemIndex + 1; }), sfx_order: (panel.sfx || []).map(function (_item, itemIndex) { return itemIndex + 1; }) }; }); });
+      storyboard.forEach(function (page, index) { page.page_number = isCoverPage(page) ? 0 : ++contentPageNumber; page.panels = (page.panels || []).map(function (panel, panelIndex) { return { ...panel, order: panelIndex + 1, bubble_order: (panel.dialogue || []).map(function (_item, itemIndex) { return itemIndex + 1; }), narration_order: (panel.narration || []).map(function (_item, itemIndex) { return itemIndex + 1; }), sfx_order: (panel.sfx || []).map(function (_item, itemIndex) { return itemIndex + 1; }) }; }); });
       saveProject({ storyboard: storyboard, current_step: "storyboard" }, message, true);
     }
 
@@ -2053,11 +2090,12 @@
       const snapshot = data?.panel_generation || {};
       const current = progress.current;
       const currentPage = snapshot.current_page || current?.page_number;
+      const currentPageLabel = snapshot.current_page_label || (current ? pageLabel(current) : '');
       const currentPanel = snapshot.current_panel || current?.order;
       let message = operationMessage || "漫画画像を生成しています…";
       let submessage = "生成済みのコマは保存されています。状態はサーバーへ保存されます。";
       if (progress.generating) {
-        if (currentPage && currentPanel) message = "ページ" + currentPage + "・コマ" + currentPanel + "を生成しています…";
+        if ((currentPageLabel || currentPage) && currentPanel) message = (currentPageLabel || 'ページ' + currentPage) + "・コマ" + currentPanel + "を生成しています…";
         else if (progress.generating > 1) message = progress.generating + "コマを生成しています…";
         submessage = "画像生成には数分かかる場合があります。生成済みのコマは保存されています。";
       } else if (progress.waiting) {
@@ -2297,14 +2335,14 @@
         const status = panel.generation_status || "not_started";
         const disabled = panelBusy ? " disabled" : "";
         const action = status === "failed" ? '<button type="button" class="text-button" data-retry-panel="' + escapeAttr(panel.id) + '"' + disabled + '>再試行</button>' : status === "completed" ? '<button type="button" class="text-button" data-regenerate-panel="' + escapeAttr(panel.id) + '"' + disabled + '>再生成</button>' : "";
-        const thumb = panel.image_url ? '<img src="' + escapeAttr(panel.image_url) + '" alt="">' : '<span>' + escapeHtml(String((item.page.page_number || 1) + " / " + (panel.order || (item.page.panels || []).indexOf(panel) + 1))) + '</span>';
+        const thumb = panel.image_url ? '<img src="' + escapeAttr(panel.image_url) + '" alt="">' : '<span>' + escapeHtml(String(pageLabel(item.page) + " / " + (panel.order || (item.page.panels || []).indexOf(panel) + 1))) + '</span>';
         const referenceLabel = (panel.knowledge_refs || []).map(function (ref) { return (ref.title || "Knowledge") + " v" + (ref.version_number || "?"); }).join(", ");
         const generationModel = panel.generation_metadata?.actual_model ? " / 実行モデル: " + escapeHtml(panel.generation_metadata.actual_model) + (panel.generation_metadata.fallback ? "（Astraからフォールバック）" : "") : "";
         const geometry = item.page.composition?.panels?.find(function (entry) { return String(entry.panel_id) === String(panel.id); }) || panel.geometry || {};
         const geometryLabel = geometry.shape ? " / " + escapeHtml(geometry.shape) + " / " + (Number(geometry.width || 0) * 900 / Math.max(Number(geometry.height || 1) * 1200, 1)).toFixed(2) + ":1" : "";
         const direction = panel.panel_direction;
         const directionLabel = direction ? " / 構図: " + (direction.status === "ready" ? "生成前に設計済み" : "要修正（文字領域不足）") + " / 演出: " + escapeHtml(direction.visual_style?.display_name || "") : "";
-        const metadata = 'ページ ' + escapeHtml(item.page.page_number) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + geometryLabel + ' / Revision ' + escapeHtml(panel.revision || 0) + generationModel + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "") + (panel.generation_error ? " / " + escapeHtml(panel.generation_error) : "");
+        const metadata = escapeHtml(pageLabel(item.page)) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + geometryLabel + ' / Revision ' + escapeHtml(panel.revision || 0) + generationModel + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "") + (panel.generation_error ? " / " + escapeHtml(panel.generation_error) : "");
         return '<div class="generation-panel-row"><div class="generation-thumb">' + thumb + '</div><div><strong>' + escapeHtml(panel.description || "コマの説明") + '</strong><small>' + metadata + directionLabel + '</small></div><span class="panel-status panel-status-' + escapeAttr(status) + '">' + escapeHtml(panelStatusLabels[status] || status) + '</span>' + action + '</div>';
       }).join("");
     }
@@ -2316,7 +2354,7 @@
       return '<section class="surface-panel generation-layout-preview"><div class="generation-toolbar"><div><strong>画像生成前のページ設計</strong><p>主役コマの面積、人物・顔・小物と文字の予約領域を確認してください。未生成部分の色付き領域は設計図で、画像ではありません。</p></div></div>' + pages.map(function (page) {
         const open = expandedGenerationPageIds.has(String(page.id));
         // 閉じたページの画像URLをDOMに置かず、全編の描画リクエスト集中を防ぐ。
-        return '<details data-generation-page="' + escapeAttr(page.id) + '"' + (open ? ' open' : '') + '><summary>ページ ' + escapeHtml(page.page_number) + ' の設計</summary><div data-generation-page-preview>' + (open ? pageStage(page) : '') + '</div></details>';
+        return '<details data-generation-page="' + escapeAttr(page.id) + '"' + (open ? ' open' : '') + '><summary>' + escapeHtml(pageLabel(page)) + ' の設計</summary><div data-generation-page-preview>' + (open ? pageStage(page) : '') + '</div></details>';
       }).join('') + '</section>';
     }
 
@@ -2373,7 +2411,7 @@
         const host=content.querySelector('[data-approval-cards]'); if (!host) return;
         host.innerHTML=designs.map(function(design,index) {
           const item=selected[index];
-          return '<section class="surface-panel panel-padding approval-card"><h3>'+ (design.page_design?.page_kind === 'cover' ? '表紙' : 'ページ '+escapeHtml(design.page_number)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+pageStage(design.page_design || item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(design.characters.join('、'))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p><p>この先まで描かない：'+escapeHtml((design.event_boundary.forbidden_until_later || []).join(' / '))+'</p><p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
+          return '<section class="surface-panel panel-padding approval-card"><h3>'+ escapeHtml(pageLabel(design.page_design || item.page)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+pageStage(design.page_design || item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(design.characters.join('、'))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p><p>この先まで描かない：'+escapeHtml((design.event_boundary.forbidden_until_later || []).join(' / '))+'</p><p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
         }).join('');
         host.querySelectorAll('[data-approve-target]').forEach(function(button) { button.onclick=async function() {
           button.disabled=true;
@@ -2572,7 +2610,7 @@
         const transcript = (page.panels || []).map(function (panel, index) { return "コマ" + (index + 1) + " " + [...(panel.dialogue || []), ...(panel.narration || [])].join(" "); }).join("。 ");
         const hasOverflow = (page.panels || []).some(function (panel) { return (panel.text_layout?.items || []).some(function (item) { return item.overflow; }); });
         const warning = hasOverflow ? '<p role="alert">文字領域が不足しています。コマを広げるかページを分割して再計算してください。この状態では書き出せません。</p>' : '';
-        return warning + '<div class="preview-frame-wrap"><img class="composition-final-image" src="' + escapeAttr(src) + '" alt="' + escapeAttr("ページ" + page.page_number + "。 " + transcript) + '"></div>';
+        return warning + '<div class="preview-frame-wrap"><img class="composition-final-image" src="' + escapeAttr(src) + '" alt="' + escapeAttr(pageLabel(page) + "。 " + transcript) + '"></div>';
       }
       const panels = page.panels || [];
       const geometryMap = pageGeometryMap(page);
@@ -2617,7 +2655,7 @@
         const imageClass = composition ? "panel-image-fill" : panel.crop_mode === "fill" ? "panel-image-fill" : "panel-image-fit";
         const logicalOrder = panel.order || index + 1;
         const objectPosition = composition ? ' style="object-position:' + escapeAttr(geometry.crop_anchor_x || "center") + ' ' + escapeAttr(geometry.crop_anchor_y || "center") + ';"' : "";
-        const image = panel.image_url ? '<img class="' + imageClass + '"' + objectPosition + ' src="' + escapeAttr(panel.image_url) + '" alt="ページ' + escapeAttr(page.page_number) + ' コマ' + escapeAttr(logicalOrder) + '">' : '<div class="manga-panel-placeholder">ARTWORK<br>未生成</div>';
+        const image = panel.image_url ? '<img class="' + imageClass + '"' + objectPosition + ' src="' + escapeAttr(panel.image_url) + '" alt="' + escapeAttr(pageLabel(page)) + ' コマ' + escapeAttr(logicalOrder) + '">' : '<div class="manga-panel-placeholder">ARTWORK<br>未生成</div>';
         const textMarkup = composition ? "" : panelTextLayout(panel).map(function (item) {
           if (composition && movedItems.has(String(panel.id) + "::" + String(item.id || ""))) return "";
           const itemType = item.type === "narration" ? "narration" : item.type === "sfx" ? "sfx" : "bubble";
@@ -2653,7 +2691,7 @@
       const list = entries.map(function (item) {
         const active = item.panel.id === selectedPanelId;
         const image = item.panel.image_url ? '<img src="' + escapeAttr(item.panel.image_url) + '" alt="">' : '<span class="edit-thumb-placeholder"></span>';
-        return '<button type="button" class="edit-panel-button' + (active ? " active" : "") + '" data-edit-panel="' + escapeAttr(item.panel.id) + '">' + image + '<span><strong>P' + escapeHtml(item.page.page_number) + ' / コマ' + escapeHtml(item.panel.order || (item.page.panels || []).indexOf(item.panel) + 1) + ' / ' + escapeHtml(item.panel.description || "コマ") + '</strong><small>' + escapeHtml(panelStatusLabels[item.panel.generation_status || "not_started"]) + '</small></span><span aria-hidden="true">→</span></button>';
+        return '<button type="button" class="edit-panel-button' + (active ? " active" : "") + '" data-edit-panel="' + escapeAttr(item.panel.id) + '">' + image + '<span><strong>' + escapeHtml(pageLabel(item.page)) + ' / コマ' + escapeHtml(item.panel.order || (item.page.panels || []).indexOf(item.panel) + 1) + ' / ' + escapeHtml(item.panel.description || "コマ") + '</strong><small>' + escapeHtml(panelStatusLabels[item.panel.generation_status || "not_started"]) + '</small></span><span aria-hidden="true">→</span></button>';
       }).join("");
       const form = panel ? '<form class="edit-form" id="panel-edit-form"><h3>コマの仕上げ</h3><label class="editor-label">生成プロンプト<textarea class="editor-textarea" data-edit-field="generation_prompt" rows="7">' + escapeHtml(panel.generation_prompt || "") + '</textarea><small>画像に文字は描かず、アプリ側でセリフを載せます。</small></label><label class="editor-label">セリフ<textarea class="editor-textarea" data-edit-field="dialogue" rows="4">' + escapeHtml(textAreaValue(panel.dialogue)) + '</textarea></label><label class="editor-label">ナレーション<textarea class="editor-textarea" data-edit-field="narration" rows="3">' + escapeHtml(textAreaValue(panel.narration)) + '</textarea></label><label class="editor-label">表示方法<select data-edit-field="crop_mode"><option value="fit"' + (panel.crop_mode === "fit" ? " selected" : "") + '>全面表示（cover crop）</option><option value="fill"' + (panel.crop_mode === "fill" ? " selected" : "") + '>枠に合わせる（cover crop）</option></select></label><div class="save-row"><button type="submit" class="primary-button compact-button">変更を保存</button><button type="button" class="secondary-button compact-button" data-regenerate-selected>このコマを再生成</button></div></form>' : '<div class="empty-panel"><h3>編集するコマを選んでください</h3></div>';
       content.innerHTML = heading("ページを仕上げる", "画像、セリフ、ナレーションをコマごとに確認します。") + (entries.length ? '<div class="editor-workspace"><section class="surface-panel edit-panel-list">' + list + '</section><section class="surface-panel">' + pageStage(selected?.page) + form + '</section></div>' + nextButton("qa", "Knowledge-aware QAへ") : '<section class="surface-panel empty-panel"><h3>生成済みのコマがありません</h3><p>コマ生成画面から必要な画像を作成してください。</p><button type="button" class="primary-button compact-button" data-goto-generate>コマ生成へ</button></section>');

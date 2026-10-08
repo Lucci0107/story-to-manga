@@ -5,6 +5,7 @@ import hashlib
 import json
 from .architect import rendering_profile, tone_parameters, event_issues
 from .reading_order import canonicalize_stored_settings
+from .page_types import is_content_page
 
 VOLATILE = {
     "generation_status",
@@ -137,16 +138,16 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
             not str(url).startswith("/media/" + project["id"] + "/") or ".." in str(url)
         ):
             errors.append("人物参考画像はこの作品に保存した画像を指定してください。")
-    if page.get("page_kind") != "cover" and (
+    if is_content_page(page) and (
         not isinstance(page.get("page_number"), int) or page["page_number"] < 1
     ):
         errors.append("本文のページ番号が不正です。")
     content_number = 0
     for candidate in project.get("storyboard") or []:
-        if candidate.get("page_kind") != "cover":
+        if is_content_page(candidate):
             content_number += 1
         if candidate.get("id") == page.get("id"):
-            expected = 0 if candidate.get("page_kind") == "cover" else content_number
+            expected = content_number if is_content_page(candidate) else 0
             if page.get("page_number") != expected:
                 errors.append("本文は1から順番に番号を付けてください。")
             break

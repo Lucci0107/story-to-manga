@@ -20,6 +20,7 @@ from .in_world_text import in_world_text_prompt
 from .framing import head_framing_prompt
 from ..schemas import (
     CHARACTER_NAME_MAX_LENGTH,
+    MAX_CONTENT_PAGES,
     MAX_CHARACTERS,
     normalize_analysis,
     normalize_characters,
@@ -1520,7 +1521,8 @@ class OpenAIProvider(DemoAIProvider):
             "character_positionは人物と文字の共存を考えて指定します。セリフは読みやすい量にし、長い説明を小コマへ詰め込まないでください。"
             + storyboard_contract_prompt()
         )
-        target_pages = max(1, min(120, int(settings.get("target_page_count", 8))))
+        system += "\npagesには本文だけを含めてください。独立した表紙・裏表紙は本文数に含めず、選択設定に応じてアプリが別ページで追加します。"
+        target_pages = max(1, min(MAX_CONTENT_PAGES, int(settings.get("target_page_count", 8))))
         batch_size = getattr(get_settings(), "storyboard_batch_pages", 8)
         ranges = [
             (start, min(target_pages, start + batch_size - 1))

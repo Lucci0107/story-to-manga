@@ -32,6 +32,7 @@ from .services.reading_order import (
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "target_page_count": 8,
+    "back_cover_mode": "none",
     "language": "ja",
     "reading_direction": "right_to_left",
     "color_mode": "bw",
@@ -1331,6 +1332,24 @@ def adopt_name_page_count(project: dict, target_page_count: int) -> Optional[Dic
             conn.execute("""UPDATE projects SET settings_json=?, manga_settings_recommendation_json=?,
                 quality_check_json=NULL, updated_at=? WHERE id=? AND user_id=?""",
                 (_json(settings), _json(recommendation) if recommendation is not None else None, utc_now(), project_id, user_id))
+            conn.execute("UPDATE generation_approvals SET job_id='invalidated' WHERE project_id=? AND approved_by=? AND job_id IS NULL", (project_id, user_id))
+    return get_project(project_id, user_id)
+
+
+def add_storyboard_covers(project: dict, storyboard: List[dict]) -> Optional[Dict[str, Any]]:
+    """表紙類の追加だけを保存し、本文・画像と生成処理の競合を保護する。"""
+    project_id, user_id = project["id"], project["user_id"]
+    with connection() as conn:
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project_id, user_id))
+        row = conn.execute("SELECT updated_at FROM projects WHERE id=? AND user_id=?", (project_id, user_id)).fetchone()
+        if not row or row["updated_at"] != project["updated_at"]:
+            raise ValueError("作品が更新されました。最新のネームを読み直してください。")
+        active = conn.execute("SELECT id FROM generation_jobs WHERE project_id=? AND status IN ('queued','processing') LIMIT 1", (project_id,)).fetchone()
+        if active:
+            raise ValueError("生成処理中は表紙・裏表紙を追加できません。完了してから操作してください。")
+        if storyboard != project["storyboard"]:
+            conn.execute("UPDATE projects SET storyboard_json=?, quality_check_json=NULL, updated_at=? WHERE id=? AND user_id=?", (_json(storyboard), utc_now(), project_id, user_id))
+            conn.execute("INSERT INTO manga_workflows (project_id) VALUES (?) ON CONFLICT (project_id) DO NOTHING", (project_id,))
             conn.execute("UPDATE generation_approvals SET job_id='invalidated' WHERE project_id=? AND approved_by=? AND job_id IS NULL", (project_id, user_id))
     return get_project(project_id, user_id)
 

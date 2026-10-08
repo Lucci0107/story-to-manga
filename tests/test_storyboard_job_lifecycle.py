@@ -113,10 +113,11 @@ def test_storyboard_job_completes_and_persists_pages(
     assert saved["status"] == "storyboard_ready"
 
 
-def test_storyboard_job_preserves_maximum_body_with_cover(tmp_path, monkeypatch):
+@pytest.mark.parametrize("back_mode", ["none", "generate"])
+def test_storyboard_job_preserves_maximum_body_with_cover(tmp_path, monkeypatch, back_mode):
     _client, project = _client_and_project(tmp_path)
     project = db.update_project(project["id"], project["user_id"],
-                                settings={**project["settings"], "target_page_count": 120, "title_mode": "cover"})
+                                settings={**project["settings"], "target_page_count": 120, "title_mode": "cover", "back_cover_mode": back_mode})
 
     class CoverProvider(ExternalStoryboardProvider):
         def storyboard(self, text, analysis, settings, *args):
@@ -125,10 +126,13 @@ def test_storyboard_job_preserves_maximum_body_with_cover(tmp_path, monkeypatch)
     job = _run_job(project, CoverProvider(), monkeypatch)
     assert job["status"] == "completed", job.get("error")
     saved = db.get_project(project["id"], project["user_id"])
-    assert len(saved["storyboard"]) == 121
+    assert len(saved["storyboard"]) == 121 + int(back_mode == "generate")
     assert saved["storyboard"][0]["page_kind"] == "cover"
-    assert saved["storyboard"][-1]["page_number"] == 120
-    assert saved["storyboard"][-1]["panels"][0]["description"] == "場面 120"
+    last_body = saved["storyboard"][-2] if back_mode == "generate" else saved["storyboard"][-1]
+    assert last_body["page_number"] == 120
+    assert last_body["panels"][0]["description"] == "場面 120"
+    if back_mode == "generate":
+        assert saved["storyboard"][-1]["page_kind"] == "back_cover"
 
 
 @pytest.mark.parametrize(
