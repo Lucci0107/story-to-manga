@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from .. import db
+from ..schemas import MAX_CONTENT_PAGES
 from .architect import rendering_profile, event_issues
 from .manga_contract import contract_metadata
 
@@ -90,17 +91,33 @@ def name_snapshot(project: dict) -> dict:
     }
 
 
+def name_page_counts(snapshot: dict) -> dict:
+    pages = snapshot["pages"]
+    covers = sum(page.get("page_kind") == "cover" for page in pages)
+    content = len(pages) - covers
+    return {
+        "target_content_pages": int(snapshot["settings"].get("target_page_count") or content),
+        "content_pages": content, "cover_pages": covers, "total_pages": len(pages),
+        "maximum_content_pages": MAX_CONTENT_PAGES,
+    }
+
+
 def name_validation(project: dict, snapshot: dict) -> dict:
     errors, warnings = [], []
     pages = snapshot["pages"]
     content = [page for page in pages if page.get("page_kind") != "cover"]
+    counts = name_page_counts(snapshot)
     if not content:
         errors.append("本文のネームを作成してください。")
     if [p.get("page_number") for p in content] != list(range(1, len(content) + 1)):
         errors.append("本文ページ番号を1から順番に揃えてください。")
     required = db.name_review_required(project["id"]) or any(p.get("name_review_required") for p in project.get("storyboard") or [])
-    if required and len(content) != int(snapshot["settings"].get("target_page_count") or len(content)):
-        errors.append("本文ページ数が目標ページ数と一致しません。ネームまたは設定を修正してください。")
+    if required and counts["content_pages"] != counts["target_content_pages"]:
+        errors.append(f"本文ページ数が目標ページ数と一致しません（目標{counts['target_content_pages']}ページ・現在{counts['content_pages']}ページ）。表紙{counts['cover_pages']}ページは本文に含みません。")
+    if len(content) > MAX_CONTENT_PAGES:
+        errors.append(f"本文は{MAX_CONTENT_PAGES}ページ以内にしてください。")
+    if counts["cover_pages"] > 1 or any(page.get("page_kind") == "cover" for page in pages[1:]):
+        errors.append("表紙は先頭の1ページだけにしてください。")
     ids = []
     for page in pages:
         ids.append(page.get("id"))
@@ -123,7 +140,7 @@ def name_validation(project: dict, snapshot: dict) -> dict:
                     errors.append(label + "の「原作の発言」が原文と一致しません。出所または文字列を修正してください。")
     if len(ids) != len(set(ids)):
         errors.append("ページ・コマのIDが重複しています。")
-    return {"errors": list(dict.fromkeys(errors)), "warnings": list(dict.fromkeys(warnings))}
+    return {"errors": list(dict.fromkeys(errors)), "warnings": list(dict.fromkeys(warnings)), "page_counts": counts}
 
 
 def render_name_markdown(snapshot: dict, number: int) -> str:
@@ -198,6 +215,7 @@ def name_script_summary(project: dict) -> dict:
         "provided_at": current.get("provided_at") if current else None,
         "approved_at": current.get("approved_at") if current else None,
         "versions": versions,
+        "page_counts": name_page_counts(snapshot), "validation": name_validation(project, snapshot),
     }
 
 

@@ -20,6 +20,7 @@ ALLOWED_STEPS = {"story", "knowledge", "analysis", "settings", "characters", "st
 MAX_CHARACTERS = 64
 # 今回の制作対象と、過去の設定を含む保管件数は別々に制限する。
 MAX_STORED_CHARACTERS = 512
+MAX_CONTENT_PAGES = 120
 CHARACTER_NAME_MAX_LENGTH = 80
 CHARACTER_TEXT_MAX_LENGTH = 2_000
 ALLOWED_DIRECTIONS = set(LEGACY_DIRECTION_ALIASES)
@@ -116,7 +117,7 @@ class SettingsPayload(BaseModel):
             raise ValueError("カテゴリと描画スタイルが一致しません")
         return self
 
-    target_page_count: int = Field(default=8, ge=1, le=120)
+    target_page_count: int = Field(default=8, ge=1, le=MAX_CONTENT_PAGES)
     language: Optional[str] = None
     reading_direction: Optional[str] = None
     color_mode: str = "bw"
@@ -845,10 +846,13 @@ def normalize_storyboard(
 
     if not isinstance(value, list):
         return []
+    has_cover = bool(value and isinstance(value[0], dict) and value[0].get("page_kind") == "cover")
+    if len(value) > MAX_CONTENT_PAGES + int(has_cover):
+        raise ValueError(f"本文は{MAX_CONTENT_PAGES}ページまでです。表紙は先頭に1ページ、別枠で追加できます。ページを削らずに保存を中止しました。")
     list_fields = {"characters", "dialogue", "narration", "sfx"}
     normalized_pages: List[Dict[str, Any]] = []
     content_number = 0
-    for page_index, item in enumerate(value[:120]):
+    for page_index, item in enumerate(value):
         if not isinstance(item, dict):
             continue
         layout = str(item.get("layout", "classic"))

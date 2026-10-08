@@ -1309,6 +1309,32 @@ def update_project(
     return get_project(project_id, user_id)
 
 
+def adopt_name_page_count(project: dict, target_page_count: int) -> Optional[Dict[str, Any]]:
+    """確認したネームの本文数だけを目標に反映し、本文・画像・旧版を保持する。"""
+
+    from .schemas import validate_settings
+    settings = {**project["settings"], "target_page_count": target_page_count}
+    validate_settings(settings)
+    project_id, user_id = project["id"], project["user_id"]
+    with connection() as conn:
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project_id, user_id))
+        row = conn.execute("SELECT * FROM projects WHERE id=? AND user_id=?", (project_id, user_id)).fetchone()
+        if not row or row["updated_at"] != project["updated_at"]:
+            raise ValueError("作品が更新されました。最新のネームを読み直してください。")
+        active = conn.execute("SELECT id FROM generation_jobs WHERE project_id=? AND status IN ('queued','processing') LIMIT 1", (project_id,)).fetchone()
+        if active:
+            raise ValueError("生成処理中は目標ページ数を変更できません。処理が完了してから操作してください。")
+        if project["settings"].get("target_page_count") != target_page_count:
+            recommendation = _loads(row["manga_settings_recommendation_json"], None)
+            if isinstance(recommendation, dict):
+                recommendation["user_override"] = True
+            conn.execute("""UPDATE projects SET settings_json=?, manga_settings_recommendation_json=?,
+                quality_check_json=NULL, updated_at=? WHERE id=? AND user_id=?""",
+                (_json(settings), _json(recommendation) if recommendation is not None else None, utc_now(), project_id, user_id))
+            conn.execute("UPDATE generation_approvals SET job_id='invalidated' WHERE project_id=? AND approved_by=? AND job_id IS NULL", (project_id, user_id))
+    return get_project(project_id, user_id)
+
+
 def name_review_required(project_id: str) -> bool:
     with connection() as conn:
         row = conn.execute("SELECT name_review_required FROM manga_workflows WHERE project_id=?", (project_id,)).fetchone()

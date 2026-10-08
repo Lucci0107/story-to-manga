@@ -747,6 +747,10 @@ body.processing-dialog-open { overflow: hidden; }
 .name-review-panel details { margin-top: 16px; }
 .name-script-preview { max-height: 520px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.8; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
 .name-validation-error { color: var(--danger); overflow-wrap: anywhere; }
+.name-page-counts { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
+.name-page-count-recovery { padding: 16px; margin-top: 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; }
+.name-page-count-recovery p { margin: 10px 0; overflow-wrap: anywhere; }
+.name-page-count-recovery .name-review-actions { margin-bottom: 0; }
 .character-sheet-design { border-top: 1px solid var(--line); padding-top: 18px; overflow-wrap: anywhere; }
 .sheet-profile { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .sheet-profile dt { font-size: 12px; opacity: .7; }

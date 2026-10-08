@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app import db
 from app.main import app, process_storyboard_job
 from app.services.ai_pipeline import AIProviderError, DemoAIProvider
+from app.services.architect import finalize_storyboard
 
 
 def _client_and_project(tmp_path: Path) -> tuple[TestClient, dict]:
@@ -110,6 +111,24 @@ def test_storyboard_job_completes_and_persists_pages(
     assert saved and len(saved["storyboard"]) == 2
     assert saved["storyboard"][0]["panels"]
     assert saved["status"] == "storyboard_ready"
+
+
+def test_storyboard_job_preserves_maximum_body_with_cover(tmp_path, monkeypatch):
+    _client, project = _client_and_project(tmp_path)
+    project = db.update_project(project["id"], project["user_id"],
+                                settings={**project["settings"], "target_page_count": 120, "title_mode": "cover"})
+
+    class CoverProvider(ExternalStoryboardProvider):
+        def storyboard(self, text, analysis, settings, *args):
+            return finalize_storyboard([_page(number) for number in range(1, 121)], analysis, settings)
+
+    job = _run_job(project, CoverProvider(), monkeypatch)
+    assert job["status"] == "completed", job.get("error")
+    saved = db.get_project(project["id"], project["user_id"])
+    assert len(saved["storyboard"]) == 121
+    assert saved["storyboard"][0]["page_kind"] == "cover"
+    assert saved["storyboard"][-1]["page_number"] == 120
+    assert saved["storyboard"][-1]["panels"][0]["description"] == "場面 120"
 
 
 @pytest.mark.parametrize(

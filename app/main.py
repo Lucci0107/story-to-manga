@@ -71,7 +71,7 @@ from .services.knowledge import (
 )
 from .services.layout import reflow_page, repair_storyboard_page
 from .services.manga_documents import (
-    name_script_summary, prepare_name_document, name_validation, name_snapshot,
+    name_script_summary, prepare_name_document, name_validation, name_snapshot, name_page_counts,
     character_sheet_design, content_digest, render_sheet_markdown,
 )
 from .services.manga_contract import contract_metadata
@@ -1885,11 +1885,14 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
     if payload.original_text is not None and not payload.original_text.strip():
         raise HTTPException(status_code=422, detail="本文を空にすることはできません")
     characters = normalize_characters(payload.characters, limit=MAX_STORED_CHARACTERS) if payload.characters is not None else None
-    storyboard = (
-        normalize_storyboard(payload.storyboard, settings or project.get("settings") or {})
-        if payload.storyboard is not None
-        else None
-    )
+    try:
+        storyboard = (
+            normalize_storyboard(payload.storyboard, settings or project.get("settings") or {})
+            if payload.storyboard is not None
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if storyboard is not None:
         valid, message = validate_storyboard(storyboard)
         if not valid:
@@ -2130,9 +2133,11 @@ async def api_generate_storyboard(
             characters,
             knowledge_context,
         )
+        storyboard = normalize_storyboard(storyboard, project["settings"])
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    storyboard = normalize_storyboard(storyboard, project["settings"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     record_provider_generation(project_id, user["id"], provider)
     for page in storyboard:
         page["knowledge_refs"] = knowledge_context.get("references", [])
@@ -2221,6 +2226,27 @@ async def api_prepare_name_script(project_id: str, user=Depends(current_user)):
         raise HTTPException(409, str(exc)) from exc
     return {"document": {key: document.get(key) for key in ("id", "version_number", "content_hash", "markdown", "provided_at", "approved_at")},
             "validation": validation, "name_script": name_script_summary(project)}
+
+
+@app.post("/api/projects/{project_id}/name-script/page-count")
+async def api_adopt_name_page_count(project_id: str, payload: ApprovalRequest, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    snapshot = name_snapshot(project)
+    if content_digest(snapshot) != payload.design_hash:
+        raise HTTPException(409, "ネームが変更されました。最新の内容を読み直してください。")
+    counts = name_page_counts(snapshot)
+    if not 1 <= counts["content_pages"] <= counts["maximum_content_pages"]:
+        raise HTTPException(422, f"本文を1〜{counts['maximum_content_pages']}ページで作成してから目標に反映してください。")
+    try:
+        updated = db.adopt_name_page_count(project, counts["content_pages"])
+        if not updated:
+            raise ValueError("作品を読み直してください。")
+        document, validation = prepare_name_document(updated)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"project": project_view(updated),
+            "document": {key: document.get(key) for key in ("id", "version_number", "content_hash", "markdown", "provided_at", "approved_at")},
+            "validation": validation, "name_script": name_script_summary(updated)}
 
 
 def manga_document_download(project: dict, document: dict) -> Response:

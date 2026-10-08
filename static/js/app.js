@@ -1127,7 +1127,7 @@
       const preview = pendingRecommendation ? '<div class="recommendation-preview" role="status"><div><strong>再提案のプレビュー：' + escapeHtml(pendingRecommendation.recommended_page_count) + 'ページ</strong><p>' + escapeHtml(pendingRecommendation.page_count_reason || pendingRecommendation.recommendation_reason || "原稿全体から新しい推奨値を作成しました。") + '</p></div><div class="save-row"><button type="button" class="secondary-button compact-button" data-cancel-recommendation>現在の設定を維持</button><button type="button" class="primary-button compact-button" data-apply-recommendation>推奨値を適用</button></div></div>' : '';
       const recommendationRetry = recommendationAttempted ? '<button type="button" class="secondary-button compact-button" data-retry-recommendation>AI推奨を再試行</button>' : '';
       const recommendationPanel = storedRecommendation ? '<section class="recommendation-panel" aria-live="polite"><div class="recommendation-header"><div><span class="settings-badge">' + recommendationLabel + '</span><strong>' + (storedRecommendation.stale && !pendingRecommendation ? '以前の提案：' : '全編の提案：') + escapeHtml(displayRecommendation.recommended_page_count) + 'ページ</strong></div><button type="button" class="primary-button recommendation-refresh-button" data-refresh-recommendation' + (recommendationLoading ? ' disabled' : '') + '><span class="recommendation-refresh-icon" aria-hidden="true">↻</span>原稿全体から再提案</button></div><p>' + escapeHtml(displayRecommendation.page_count_reason || displayRecommendation.recommendation_reason || "原稿全体に基づく漫画化設定です。") + '</p>' + sourceSummary + (budgetText ? '<div class="recommendation-budget" aria-label="シーン別ページ配分">' + budgetText + '</div>' : '') + remainingBudget + fallbackNotice + staleNotice + limitNotice + preview + '</section>' : '<section class="recommendation-panel recommendation-empty" aria-live="polite"><div><span class="settings-badge">AI推奨</span><strong>原稿全体から初期値を作成します</strong></div><p>原稿の分量・章構成と解析結果から、全編を描く目標ページ数、テンポ、画面スタイルを推定します。</p>' + recommendationRetry + '</section>';
-      content.innerHTML = heading("漫画化の方針を決める", "提案するページ構成とコマの雰囲気をここで指定します。") + recommendationPanel + architectFields(settings) + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">目標ページ数<small>' + (recommendation ? recommendationLabel + '。保存前に自由に変更できます。' : '全編を描く目標です。1〜120ページで設定できます。') + '</small><input type="number" min="1" max="120" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "コマの演出", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div>' + (recommendation ? '<div class="field-help recommendation-applied-note">表示中の値は提案を反映しています。保存した設定は次回以降自動上書きされません。</div>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
+      content.innerHTML = heading("漫画化の方針を決める", "提案するページ構成とコマの雰囲気をここで指定します。") + recommendationPanel + architectFields(settings) + '<section class="surface-panel panel-padding"><div class="settings-grid"><label class="editor-label">本文の目標ページ数<small>表紙は別ページです。' + (recommendation ? recommendationLabel + '。保存前に自由に変更できます。' : '全編を描く目標です。1〜120ページで設定できます。') + '</small><input type="number" min="1" max="120" data-settings-field="target_page_count" value="' + escapeAttr(settings.target_page_count || 8) + '"></label>' + selectField("language", "漫画の言語", currentLanguage, languageOptions) + '<div class="editor-label settings-direction-readonly"><span>読み方向</span><strong data-reading-direction>' + escapeHtml(direction) + '</strong><small>言語により自動設定されます</small></div>' + selectField("color_mode", "色", settings.color_mode || "bw", [{ value: "bw", label: "白黒" }, { value: "color", label: "カラー" }]) + selectField("visual_style", "コマの演出", settings.visual_style || "cinematic", styleOptions) + selectField("pacing", "テンポ", settings.pacing || "balanced", [{ value: "fast", label: "速め" }, { value: "balanced", label: "標準" }, { value: "slow", label: "余韻を長く" }]) + selectField("dialogue_density", "セリフ量", settings.dialogue_density || "medium", [{ value: "low", label: "少なめ" }, { value: "medium", label: "標準" }, { value: "high", label: "多め" }]) + '<label class="editor-label full">想定読者<input data-settings-field="target_audience" value="' + escapeAttr(settings.target_audience || "一般読者") + '"></label></div><div class="form-notice"><span class="notice-mark">i</span><p>作家名や作品名を指定して模倣するのではなく、画面の性質としてスタイルを選びます。</p></div><div class="form-notice language-change-warning" data-language-warning hidden><span class="notice-mark">!</span><p>言語を変更すると、読順・コマ順・吹き出し配置が変更されます。既存画像やセリフ本文は自動翻訳されません。</p></div>' + (recommendation ? '<div class="field-help recommendation-applied-note">表示中の値は提案を反映しています。保存した設定は次回以降自動上書きされません。</div>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-settings>設定を保存</button></div></section>' + nextButton("characters", "キャラクター設定へ");
       content.querySelectorAll("[data-settings-field]").forEach(function (input) {
         const rememberChange = function () { architectDraft[input.dataset.settingsField] = input.type === "number" ? Number(input.value) : (input.value || null); };
         input.addEventListener("input", rememberChange);
@@ -1687,21 +1687,59 @@
     function nameReviewMarkup() {
       const summary = state.name_script || {};
       const document = nameDocument?.document?.content_hash === summary.content_hash ? nameDocument.document : null;
-      const validation = document ? nameDocument.validation : { errors: [], warnings: [] };
+      const validation = (document ? nameDocument.validation : summary.validation) || { errors: [], warnings: [] };
+      const counts = summary.page_counts;
+      const mismatch = counts && counts.content_pages !== counts.target_content_pages;
+      const pageCounts = counts ? '<div class="name-page-counts" aria-label="ネームのページ数"><strong>本文の目標 ' + counts.target_content_pages + 'ページ</strong><span>現在の本文 ' + counts.content_pages + 'ページ</span><span>表紙 ' + counts.cover_pages + 'ページ / 合計 ' + counts.total_pages + 'ページ</span></div><p class="field-help">表紙は本文の目標ページ数に含みません。</p>' : '';
+      const recovery = mismatch ? '<div class="name-page-count-recovery"><strong>本文の構成を確認して、ページ数を合わせてください</strong><p>不足している内容がある場合は、本文ページを追加して補完してください。現在の本文で全編が揃っている場合は、そのページ数を目標に反映できます。目標の変更ではAI生成を行わず、新しい確認用の版を保存します。</p><div class="name-review-actions">' + (counts.content_pages >= 1 && counts.content_pages <= counts.maximum_content_pages ? '<button type="button" class="secondary-button compact-button" data-adopt-name-page-count>現在の本文' + counts.content_pages + 'ページを目標に反映</button>' : '') + '<button type="button" class="outline-button compact-button" data-show-add-page>本文ページを追加する場所へ</button></div></div>' : '';
       const label = { confirmed: "この版を確定済み", draft: "確認待ち", outdated: "編集されたため再確認が必要", not_created: "全編ファイルを準備" }[summary.state] || "全編ファイルを準備";
       const base = '/api/projects/' + encodeURIComponent(state.id);
       const currentId = document?.id || summary.version_id;
       const download = currentId ? '<a class="secondary-button compact-button" href="' + base + '/manga-documents/' + encodeURIComponent(currentId) + '/download">全編Markdownをダウンロード</a>' : '';
       const confirmation = currentId && summary.state !== "confirmed" ? '<button type="button" class="primary-button compact-button" data-confirm-name' + (validation.errors.length ? ' disabled' : '') + '>この版の全編ネームを確定</button>' : '';
       const history = (summary.versions || []).length ? '<details><summary>版履歴（' + summary.versions.length + '件）</summary><ul>' + summary.versions.map(function(version) { return '<li><a href="' + base + '/manga-documents/' + encodeURIComponent(version.id) + '/download">版 ' + version.version_number + '</a> / ' + (version.approved_at ? '確定済み' : '確認待ち') + (version.id === currentId ? ' / 現在の内容' : '') + '</li>'; }).join('') + '</ul></details>' : '';
-      return '<section class="surface-panel panel-padding name-review-panel"><div class="name-review-header"><h3>全編ネームの事前確認</h3><span class="settings-badge">' + escapeHtml(label) + '</span></div><p>背景・人物の位置・セリフの話者と出所・反応・枠の理由を全ページで確認します。' + (summary.required ? '画像を生成する前に、この版を確定してください。' : '既存作品はそのまま出力できます。') + '</p><div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-prepare-name>全編ネームを出力・確認</button>' + download + confirmation + '</div>' +
+      return '<section class="surface-panel panel-padding name-review-panel"><div class="name-review-header"><h3>全編ネームの事前確認</h3><span class="settings-badge">' + escapeHtml(label) + '</span></div><p>背景・人物の位置・セリフの話者と出所・反応・枠の理由を全ページで確認します。' + (summary.required ? '画像を生成する前に、この版を確定してください。' : '既存作品はそのまま出力できます。') + '</p>' + pageCounts + '<div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-prepare-name>全編ネームを出力・確認</button>' + download + confirmation + '</div>' +
         (validation.errors.length ? '<p class="name-validation-error" role="alert">' + escapeHtml(validation.errors.join(' / ')) + '</p>' : '') +
+        recovery +
         (validation.warnings.length ? '<details><summary>確認が必要な項目（' + validation.warnings.length + '件）</summary><ul>' + validation.warnings.map(function(value) { return '<li>' + escapeHtml(value) + '</li>'; }).join('') + '</ul></details>' : '') +
         (document ? '<details><summary>全編プレビュー / 版 ' + document.version_number + '</summary><pre class="name-script-preview">' + escapeHtml(document.markdown) + '</pre></details>' : '') + history + '</section>';
     }
 
+    function hasUnsavedStoryboardChanges() {
+      return [...content.querySelectorAll('[data-panel-field], [data-dialogue-meta], [data-page-boundary]')].some(function(input) {
+        const saved = input.tagName === 'SELECT' ? ([...input.options].find(function(option) { return option.defaultSelected; }) || input.options[0])?.value : input.defaultValue;
+        return input.value !== saved;
+      });
+    }
+
+    function requireSavedStoryboard() {
+      if (!hasUnsavedStoryboardChanges()) return true;
+      showToast('編集中のコマ・ページを保存してから、全編ネームの操作をしてください', 'error');
+      return false;
+    }
+
     function bindNameReview() {
+      content.querySelector('[data-adopt-name-page-count]')?.addEventListener('click', async function(event) {
+        if (!requireSavedStoryboard()) return;
+        const button = event.currentTarget;
+        button.disabled = true;
+        setSaveState('保存中', true);
+        try {
+          const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/name-script/page-count', { method: 'POST', body: JSON.stringify({ design_hash: state.name_script.content_hash }) });
+          state = data.project;
+          nameDocument = data;
+          setSaveState('保存済み', false);
+          renderStoryboard();
+          showToast('本文のページ数を目標に反映しました。新しい版をダウンロードして確認してください');
+        } catch(error) { setSaveState('保存エラー', false); showToast(error.message, 'error'); button.disabled = false; }
+      });
+      content.querySelector('[data-show-add-page]')?.addEventListener('click', function() {
+        const button = content.querySelector('[data-add-page]');
+        button?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        button?.focus({ preventScroll: true });
+      });
       content.querySelector('[data-prepare-name]')?.addEventListener('click', async function(event) {
+        if (!requireSavedStoryboard()) return;
         const button = event.currentTarget;
         button.disabled = true;
         try {
@@ -1712,6 +1750,7 @@
         } catch(error) { showToast(error.message, 'error'); button.disabled = false; }
       });
       content.querySelector('[data-confirm-name]')?.addEventListener('click', async function(event) {
+        if (!requireSavedStoryboard()) return;
         const button = event.currentTarget;
         button.disabled = true;
         try {
