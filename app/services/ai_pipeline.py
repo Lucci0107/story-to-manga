@@ -27,6 +27,9 @@ from ..schemas import (
 )
 from .character_cast import (
     CAST_SCHEMA,
+    CAST_MAX_QUOTES,
+    CAST_QUOTE_MAX_LENGTH,
+    CAST_ROLE_MAX_LENGTH,
     CHARACTER_PROFILE_BATCH_SIZE,
     CHARACTER_SOURCE_CHUNK_SIZE,
     CharacterValidationError,
@@ -1205,7 +1208,17 @@ class OpenAIProvider(DemoAIProvider):
             "同一人物の別名はaliasesへ記録し、私・僕・先生など共有される一般呼称を別名にしないでください。"
             "known_castと同一人物なら、記録済みのname・aliasesを再利用してください。"
             "一般論・仮定・比喩だけの人物、モブ集団、参考文献の著者は除いてください。"
+            "名詞や人名が本文に現れることと、物語の登場人物であることを区別してください。"
+            "story_actorは、物語内の具体的な出来事・会話・面会・支援・対立に関わり、場面で描く人物です。"
+            "思想・医学・歴史の説明で引用される著者や学者、作品の紹介の中だけの人物はreference_onlyです。"
+            "思想への影響や人名への言及だけではstory_actorにしないでください。"
+            "一般的な医師・患者・職業、思考実験・たとえ話の人物はgeneric_or_hypotheticalです。"
+            "具体的な個人を特定できない組織・集団はbackground_groupです。"
+            "重要な家族・協力者・対立者を人数の目安で省略せず、同一人物の役割や時期の違いを別人にしないでください。"
+            "各候補のparticipationを判断してください。除外対象を返す場合も区分を明示し、登場人物として混ぜないでください。"
             "source_quotesには、人物の存在・役割・関係と明記された外見の根拠を原文から短く正確に引用してください。"
+            f"roleは{CAST_ROLE_MAX_LENGTH}文字以内、引用は1件{CAST_QUOTE_MAX_LENGTH}文字以内で最大{CAST_MAX_QUOTES}件とし、"
+            "人物の具体的な接点を示す短い箇所を優先してください。"
             "引用を要約・改変せず、未知の属性を創作しないでください。該当する人物がいない区間は空配列で構いません。"
             "指定されたJSON SchemaとProjectの出力言語ルールに従ってください。"
         )

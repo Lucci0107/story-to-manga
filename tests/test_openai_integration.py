@@ -195,7 +195,7 @@ def test_character_request_uses_task_specific_timeout(monkeypatch: pytest.Monkey
 def test_long_character_source_covers_fourteen_people_and_repairs_missing_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """中間の人物も全文抽出へ届き、8人中4人だけの設定は再要求する。"""
+    """中間の人物も全文抽出へ届き、4人中2人だけの設定は再要求する。"""
 
     names = [f"登場人物{i:02d}" for i in range(1, 15)]
     source = "\n\n".join(f"## 第{i}章\n" + "これまでの出来事を振り返った。" * 140
@@ -210,7 +210,7 @@ def test_long_character_source_covers_fourteen_people_and_repairs_missing_profil
         requests.append(payload)
         context, _ = json.JSONDecoder().raw_decode(payload["input"])
         if payload["text"]["format"]["name"] == "character_cast":
-            cast = [{"name": name, "aliases": [], "role": "決断を支える人物",
+            cast = [{"name": name, "participation": "story_actor", "aliases": [], "role": "決断を支える人物",
                      "source_quotes": [f"{name}は主人公の決断を支えた。"]}
                     for name in names if name in context["story_content"]]
             return FakeHTTPResponse(response_with_json({"cast": cast}))
@@ -252,6 +252,65 @@ def test_long_character_source_covers_fourteen_people_and_repairs_missing_profil
         assert "今回の作成対象ではありません" in payload["instructions"]
 
 
+def test_long_source_with_seventy_reference_authors_preserves_all_fourteen_story_actors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本文中の引用著者が64人を超えても、物語の人物設定は全員作れる。"""
+
+    names = [f"登場人物{i:02d}" for i in range(1, 15)]
+    actors = [{"name": name, "participation": "story_actor", "aliases": [], "role": "相談相手",
+               "source_quotes": [f"{name}は主人公の相談に応じた。"]} for name in names]
+    references = [{"name": f"引用著者{i:02d}", "participation": "reference_only", "aliases": [],
+                   "role": "読んだ著書の著者", "source_quotes": [f"引用著者{i:02d}の著書を読んだ。"]}
+                  for i in range(70)]
+    other = [
+        {"name": "一般的な医師", "participation": "generic_or_hypothetical", "aliases": [],
+         "role": "一般論の職業", "source_quotes": ["一般的な医師の責務を考えた。"]},
+        {"name": "学会の参加者", "participation": "background_group", "aliases": [],
+         "role": "背景の集団", "source_quotes": ["学会の参加者が会場を埋めた。"]},
+    ]
+    source = "\n\n".join(
+        f"## 第{i + 1}章\n" + "語り手は出来事を振り返った。" * 160 + "\n"
+        + "\n".join(item["source_quotes"][0] for item in [actor] + references[i * 5:(i + 1) * 5] + other)
+        for i, actor in enumerate(actors)
+    )
+    requests: list[dict] = []
+    observed_references: set[str] = set()
+    profile_names: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requests.append(payload)
+        context = json.JSONDecoder().raw_decode(payload["input"])[0]
+        if payload["text"]["format"]["name"] == "character_cast":
+            cast = [item for item in actors + references + other
+                    if item["source_quotes"][0] in context["story_content"]]
+            observed_references.update(item["name"] for item in cast if item["participation"] == "reference_only")
+            return FakeHTTPResponse(response_with_json({"cast": cast}))
+        profile_names.extend(item["name"] for item in context["target_cast"])
+        return FakeHTTPResponse(response_with_json({"characters": [
+            {**valid_character(), "name": item["name"]} for item in context["target_cast"]
+        ]}))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIProvider({"character_model": "gpt-6.1-sol", "reasoning_effort": "xhigh"})
+    result = provider.characters(source, valid_analysis(), {"prompt_text": "家族・支援者を省略しない。"})
+
+    assert len(observed_references) == 70
+    assert [item["name"] for item in result] == profile_names == names
+    assert all(quote in source for item in result for quote in item["source_quotes"])
+    assert all(item["model"] == "gpt-6.1-sol" and item["reasoning"] == {"effort": "xhigh"}
+               and "<knowledge_reference>" in item["input"] for item in requests)
+    cast_requests = [item for item in requests if item["text"]["format"]["name"] == "character_cast"]
+    assert len(cast_requests) > 1
+    for request in cast_requests:
+        item_schema = request["text"]["format"]["schema"]["properties"]["cast"]["items"]
+        assert "participation" in item_schema["required"]
+        assert "reference_only" in item_schema["properties"]["participation"]["enum"]
+        assert "人名への言及だけではstory_actorにしない" in request["instructions"]
+
+
 @pytest.mark.parametrize("limited_stage,limited_category", [
     ("character_cast", "output_limit"), ("character_bible", "output_limit"),
     ("character_cast", "timeout"), ("character_bible", "timeout"),
@@ -285,7 +344,7 @@ def test_character_output_limit_splits_only_the_failed_part_and_keeps_every_pers
                 "output_text": '{"characters":[',
             })
         if stage == "character_cast":
-            cast = [{"name": name, "aliases": [], "role": "決断を支える人物",
+            cast = [{"name": name, "participation": "story_actor", "aliases": [], "role": "決断を支える人物",
                      "source_quotes": [f"{name}は主人公の決断を支えた。"]}
                     for name in names if name in context["story_content"]]
             return FakeHTTPResponse(response_with_json({"cast": cast}))
@@ -326,7 +385,7 @@ def test_character_quote_repair_uses_the_specific_validation_reason_without_logg
         requests.append(json.loads(request.data.decode("utf-8")))
         quote = "葵が主人公を救った。" if len(requests) == 1 else "葵は、主人公の決断を支えた。"
         return FakeHTTPResponse(response_with_json({"cast": [
-            {"name": "葵", "aliases": [], "role": "支援者", "source_quotes": [quote]},
+            {"name": "葵", "participation": "story_actor", "aliases": [], "role": "支援者", "source_quotes": [quote]},
         ]}))
 
     monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
@@ -356,7 +415,7 @@ def test_unknown_real_person_appearance_succeeds_without_repeating_profile_gener
         if payload["text"]["format"]["name"] == "character_cast":
             context = json.JSONDecoder().raw_decode(payload["input"])[0]
             return FakeHTTPResponse(response_with_json({"cast": [
-                {"name": "協力者", "role": "相談相手", "aliases": [], "source_quotes": [quote]},
+                {"name": "協力者", "participation": "story_actor", "role": "相談相手", "aliases": [], "source_quotes": [quote]},
             ] if quote in context["story_content"] else []}))
         return FakeHTTPResponse(response_with_json({"characters": [{
             **valid_character(), "name": "協力者", "appearance": "", "age_range": "", "clothing": "",
@@ -375,13 +434,14 @@ def test_unknown_real_person_appearance_succeeds_without_repeating_profile_gener
 
 @pytest.mark.parametrize("field,bad_value,category", [
     ("role", "", "character_role"), ("aliases", [""], "character_aliases"),
+    ("participation", None, "character_participation"),
 ])
 def test_cast_invalid_fields_are_repaired_or_reported_without_private_values(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     field: str, bad_value: object, category: str,
 ) -> None:
     quote = "非公開の人物は相談に応じた。"
-    person = {"name": "非公開の人物", "role": "相談相手", "aliases": [], "source_quotes": [quote]}
+    person = {"name": "非公開の人物", "participation": "story_actor", "role": "相談相手", "aliases": [], "source_quotes": [quote]}
     requests: list[dict] = []
     recover = True
 

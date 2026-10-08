@@ -15,8 +15,12 @@ from ..schemas import (
 from .story_profile import build_story_source_profile
 
 
-CHARACTER_SOURCE_CHUNK_SIZE = 24_000
+CHARACTER_SOURCE_CHUNK_SIZE = 8_000
 CHARACTER_PROFILE_BATCH_SIZE = 4
+CAST_ROLE_MAX_LENGTH = 400
+CAST_QUOTE_MAX_LENGTH = 300
+CAST_MAX_QUOTES = 3
+CAST_PARTICIPATION = {"story_actor", "reference_only", "generic_or_hypothetical", "background_group"}
 UNKNOWN_APPEARANCE = "未設定（外見は資料確認後に設定してください）"
 CAST_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -28,15 +32,16 @@ CAST_SCHEMA: Dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "minLength": 1, "maxLength": CHARACTER_NAME_MAX_LENGTH},
+                    "participation": {"type": "string", "enum": sorted(CAST_PARTICIPATION)},
                     "aliases": {"type": "array", "maxItems": 4, "items": {
                         "type": "string", "minLength": 1, "maxLength": CHARACTER_NAME_MAX_LENGTH,
                     }},
-                    "role": {"type": "string", "minLength": 1, "maxLength": CHARACTER_TEXT_MAX_LENGTH},
-                    "source_quotes": {"type": "array", "minItems": 1, "maxItems": 8,
+                    "role": {"type": "string", "minLength": 1, "maxLength": CAST_ROLE_MAX_LENGTH},
+                    "source_quotes": {"type": "array", "minItems": 1, "maxItems": CAST_MAX_QUOTES,
                                       "items": {"type": "string", "minLength": 1,
-                                                "maxLength": CHARACTER_TEXT_MAX_LENGTH}},
+                                                "maxLength": CAST_QUOTE_MAX_LENGTH}},
                 },
-                "required": ["name", "aliases", "role", "source_quotes"],
+                "required": ["name", "participation", "aliases", "role", "source_quotes"],
                 "additionalProperties": False,
             },
         },
@@ -139,28 +144,35 @@ def normalize_cast(value: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
         if not isinstance(item, dict):
             raise CharacterValidationError(
                 "人物候補の形式が不正です", category="character_format",
-                repair_hint="castの各要素はname・aliases・role・source_quotesを持つオブジェクトにしてください。",
+                repair_hint="castの各要素はname・participation・aliases・role・source_quotesを持つオブジェクトにしてください。",
             )
         name = _character_name(item.get("name"))
+        participation = item.get("participation")
+        if not isinstance(participation, str) or participation not in CAST_PARTICIPATION:
+            raise CharacterValidationError(
+                "人物が物語へ関わる区分を確認できません", category="character_participation",
+                repair_hint="participationはstory_actor・reference_only・generic_or_hypothetical・"
+                            "background_groupから選んでください。引用元・一般論の人物をstory_actorにしないでください。",
+            )
         role = item.get("role")
         quotes = item.get("source_quotes")
         aliases = item.get("aliases")
-        if not isinstance(role, str) or not role.strip() or len(role) > CHARACTER_TEXT_MAX_LENGTH:
+        if not isinstance(role, str) or not role.strip() or len(role) > CAST_ROLE_MAX_LENGTH:
             raise CharacterValidationError(
                 "人物の役割が空欄、または保存できる長さを超えています", category="character_role",
-                repair_hint=f"roleは空欄にせず、{CHARACTER_TEXT_MAX_LENGTH}文字以内の文字列で"
+                repair_hint=f"roleは空欄にせず、{CAST_ROLE_MAX_LENGTH}文字以内の文字列で"
                             "原稿上の役割を簡潔に記載してください。不明な場合は未設定と記載してください。",
             )
-        if not isinstance(quotes, list) or not 1 <= len(quotes) <= 8:
+        if not isinstance(quotes, list) or not 1 <= len(quotes) <= CAST_MAX_QUOTES:
             raise CharacterValidationError(
                 "人物の抽出根拠がありません", category="character_evidence",
-                repair_hint="source_quotesに、その人物の存在を示す原文の連続した短い引用を1〜8件入れてください。",
+                repair_hint=f"source_quotesに、その人物の存在を示す原文の連続した短い引用を1〜{CAST_MAX_QUOTES}件入れてください。",
             )
         if any(not isinstance(quote, str) or not quote.strip()
-               or len(quote) > CHARACTER_TEXT_MAX_LENGTH for quote in quotes):
+               or len(quote) > CAST_QUOTE_MAX_LENGTH for quote in quotes):
             raise CharacterValidationError(
                 "人物の抽出根拠の形式または長さが不正です", category="character_evidence",
-                repair_hint=f"source_quotesの各要素は空欄にせず、{CHARACTER_TEXT_MAX_LENGTH}文字以内の"
+                repair_hint=f"source_quotesの各要素は空欄にせず、{CAST_QUOTE_MAX_LENGTH}文字以内の"
                             "原文からコピーした連続する短い引用にしてください。",
             )
         verified_quotes = [_source_quote(quote, source, normalized_source, positions) for quote in quotes]
@@ -172,7 +184,9 @@ def normalize_cast(value: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
                 repair_hint=f"aliasesは4件以下、各{CHARACTER_NAME_MAX_LENGTH}文字以内の別名の配列にしてください。"
                             "別名が不明な場合は空配列にし、空文字列の要素や一般呼称を入れないでください。",
             )
-        result.append({"name": name, "role": role.strip(),
+        if participation != "story_actor":
+            continue
+        result.append({"name": name, "participation": participation, "role": role.strip(),
                        "aliases": list(dict.fromkeys(alias.strip() for alias in aliases)),
                        "source_quotes": list(dict.fromkeys(verified_quotes))})
     return result

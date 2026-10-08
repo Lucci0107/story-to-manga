@@ -16,7 +16,7 @@ from app.services.character_cast import (
 
 
 def person(name: str, aliases: list[str] | None = None) -> dict:
-    return {"name": name, "aliases": aliases or [], "role": "決断を支える人物",
+    return {"name": name, "participation": "story_actor", "aliases": aliases or [], "role": "決断を支える人物",
             "source_quotes": [f"{name}が主人公を支えた。"]}
 
 
@@ -38,6 +38,18 @@ def test_cast_requires_real_source_quotes() -> None:
     with pytest.raises(ValueError, match="原稿に存在しません"):
         normalize_cast({"cast": [item]}, "別の場面だけを記した。")
     assert normalize_cast({"cast": []}, "風景だけを描く。") == []
+
+
+def test_references_and_generic_people_do_not_inflate_the_story_cast() -> None:
+    actors = [person("葵"), person("千尋")]
+    references = [{**person(f"引用著者{i}"), "participation": "reference_only"} for i in range(40)]
+    other = [{**person("一般的な医師"), "participation": "generic_or_hypothetical"},
+             {**person("学会の参加者"), "participation": "background_group"}]
+    source = "\n".join(item["source_quotes"][0] for item in actors + references + other)
+    roster: list[dict] = []
+    for candidates in (references[:20] + actors, references[20:] + other):
+        merge_cast(roster, normalize_cast({"cast": candidates}, source))
+    assert [item["name"] for item in roster] == ["葵", "千尋"]
 
 
 def test_source_quotes_preserve_original_after_typographic_normalization() -> None:
@@ -123,6 +135,8 @@ def test_profile_name_whitespace_does_not_truncate_the_canonical_name() -> None:
     ("name", "", "character_name"),
     ("name", "長" * 81, "character_name"),
     ("role", "", "character_role"),
+    ("participation", None, "character_participation"),
+    ("participation", "unknown", "character_participation"),
     ("aliases", [""], "character_aliases"),
     ("source_quotes", [], "character_evidence"),
 ])
