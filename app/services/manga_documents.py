@@ -10,11 +10,13 @@ from .. import db
 from .page_types import MAX_CONTENT_PAGES, is_content_page, page_label, requested_cover_kinds
 from .architect import rendering_profile, event_issues
 from .manga_contract import contract_metadata
+from .story_analysis import analysis_content_fingerprint, analysis_source_status
 
 PAGE_FIELDS = (
     "id", "page_number", "page_kind", "title", "page_role", "layout", "layout_policy",
     "location_time", "panel_count_reason", "layout_reason", "start_state", "page_end_state",
     "allowed_events", "forbidden_until_later", "first_reveal", "carry_over", "architect_source",
+    "source_analysis_fingerprint",
 )
 PANEL_FIELDS = (
     "id", "order", "description", "shot_type", "characters", "action", "expression", "background",
@@ -83,12 +85,15 @@ def name_snapshot(project: dict) -> dict:
         entry["panels"] = panels
         pages.append(entry)
     settings = {key: value for key, value in (project.get("settings") or {}).items() if key not in {"style_reason", "script_tone_reason"}}
-    return {
+    snapshot = {
         "title": project["title"], "source_filename": project.get("source_filename") or "本文入力",
         "source_hash": hashlib.sha256(str(project.get("original_text") or "").encode("utf-8")).hexdigest(),
         "settings": settings, "characters": [_select(c, CHARACTER_FIELDS) for c in project.get("characters") or []],
         "pages": pages, "knowledge_versions": sorted(refs.values(), key=lambda r: str(r.get("document_id"))),
     }
+    if (project.get("analysis") or {}).get("source_coverage"):
+        snapshot["analysis_fingerprint"] = analysis_content_fingerprint(project["analysis"])
+    return snapshot
 
 
 def name_page_counts(snapshot: dict) -> dict:
@@ -122,6 +127,11 @@ def name_validation(project: dict, snapshot: dict) -> dict:
     if counts["back_cover_pages"] > 1 or any(page.get("page_kind") == "back_cover" for page in pages[:-1]):
         errors.append("裏表紙は最後の1ページだけにしてください。")
     if required:
+        source_status = analysis_source_status(project.get("original_text") or "", project.get("analysis") or {}, pages)
+        if source_status["requires_reanalysis"]:
+            errors.append("解析の参照範囲が原稿全体に対応していません。「解析」で原稿全体を解析し直してからネームを作り直してください。")
+        elif source_status["storyboard_needs_rebuild"]:
+            errors.append("原稿全体の解析が更新されています。その解析でネームを作り直してから確定してください。")
         requested = requested_cover_kinds(snapshot["settings"])
         for kind, label, count in (("cover", "表紙", counts["cover_pages"]), ("back_cover", "裏表紙", counts["back_cover_pages"])):
             if kind in requested and not count:

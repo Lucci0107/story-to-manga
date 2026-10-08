@@ -1048,8 +1048,12 @@ def test_storyboard_batches_do_not_repeat_long_story_body(
 
     assert len(result) == 10
     assert len(requests) == 2
-    assert all("本文の中間固有語。" not in request["input"] for request in requests)
-    assert all(len(request["input"]) < len(long_story) for request in requests)
+    assert sum("本文の中間固有語。" in request["input"] for request in requests) == 1
+    contexts = [json.JSONDecoder().raw_decode(request["input"])[0] for request in requests]
+    references = ["".join(unit["text"] for unit in context["story_reference"]) for context in contexts]
+    assert "冒頭の固有場面。" in references[0]
+    assert "結末の固有場面。" in references[-1]
+    assert all(len(reference) < len(long_story) for reference in references)
 
 
 def test_openai_image_base64_is_validated_and_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

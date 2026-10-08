@@ -288,10 +288,8 @@ def plan_event_boundaries(pages: list, analysis: dict) -> list:
     ]
     total = max(1, len(pages))
     for i, page in enumerate(pages):
-        start, end = (
-            (i * len(events) + total - 1) // total,
-            ((i + 1) * len(events) + total - 1) // total,
-        )
+        start = i * len(events) // total
+        end = max(start + 1, ((i + 1) * len(events) + total - 1) // total) if events else 0
         allowed = events[start:end]
         boundary = {
             "allowed_events": allowed,
@@ -300,7 +298,7 @@ def plan_event_boundaries(pages: list, analysis: dict) -> list:
             "page_end_state": allowed[-1]
             if allowed
             else (events[start - 1] if start else "物語開始"),
-            "first_reveal": allowed[0] if allowed else "",
+            "first_reveal": allowed[0] if allowed and (i == 0 or events[start] not in pages[i - 1].get("allowed_events", [])) else "",
             "dialogue_scope": allowed,
             "carry_over": events[end : end + 1],
         }

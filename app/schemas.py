@@ -495,7 +495,23 @@ def normalize_analysis(value: Any) -> Dict[str, Any]:
         source = raw.get(key, [])
         if isinstance(source, str):
             source = [line.strip() for line in source.splitlines() if line.strip()]
-        normalized[key] = [str(item)[:500] for item in source if str(item).strip()][:32] if isinstance(source, list) else []
+        limit = 4_096 if key in {"major_events", "story_beats"} else 64
+        normalized[key] = [str(item)[:500] for item in source if str(item).strip()][:limit] if isinstance(source, list) else []
+    if isinstance(raw.get("source_sections"), list):
+        normalized["source_sections"] = [
+            {"number": item["number"], "summary": str(item.get("summary") or "")[:2_000],
+             "events": [str(event)[:500] for event in item.get("events", []) if str(event).strip()][:16]}
+            for item in raw["source_sections"][:1_024] if isinstance(item, dict)
+            and isinstance(item.get("number"), int) and not isinstance(item["number"], bool)
+            and isinstance(item.get("events"), list)
+        ]
+    coverage = raw.get("source_coverage")
+    if isinstance(coverage, dict):
+        normalized["source_coverage"] = {
+            key: coverage[key] for key in ("version", "chapter_count", "section_count", "unit_count")
+            if isinstance(coverage.get(key), int) and not isinstance(coverage[key], bool)
+        }
+        normalized["source_coverage"]["source_fingerprint"] = str(coverage.get("source_fingerprint") or "")[:24]
     return normalized
 
 
@@ -997,6 +1013,8 @@ def normalize_storyboard(
             normalized_page["layout_policy"] = item["layout_policy"]
         if item.get("name_review_required") is True:
             normalized_page["name_review_required"] = True
+        if item.get("source_analysis_fingerprint"):
+            normalized_page["source_analysis_fingerprint"] = str(item["source_analysis_fingerprint"])[:24]
         source = item.get("architect_source")
         if isinstance(source, dict):
             normalized_page["architect_source"] = {key: str(source.get(key) or "")[:80] for key in ("name", "instructions_version", "knowledge_version")}

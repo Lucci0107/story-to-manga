@@ -1654,6 +1654,69 @@ def get_active_generation_job(project_id: str, job_type: str) -> Optional[Dict[s
     return dict(row) if row else None
 
 
+def save_analysis_parts(job_id: str, parts: List[Dict[str, Any]]) -> None:
+    """完了した範囲の解析を保存し、失敗後の再試行で本文を再送しない。"""
+
+    with connection() as conn:
+        job = conn.execute("SELECT input_json FROM generation_jobs WHERE id = ? AND status = 'processing'", (job_id,)).fetchone()
+        if job:
+            payload = {**_loads(job["input_json"], {}), "parts": parts}
+            conn.execute("UPDATE generation_jobs SET input_json = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
+                         (_json(payload), utc_now(), job_id))
+
+
+def complete_analysis_job(job_id: str, project_id: str, user_id: str, analysis: Dict[str, Any]) -> bool:
+    """古い応答で原稿・手動編集を上書きせず、解析とJobを同時に確定する。"""
+
+    from .services.story_analysis import analysis_content_fingerprint
+    from .services.story_profile import story_fingerprint
+    from .services.character_proposal import proposal_after_reanalysis
+
+    with connection() as conn:
+        job = conn.execute("SELECT status, input_json FROM generation_jobs WHERE id = ? AND project_id = ? AND job_type = 'analysis'",
+                           (job_id, project_id)).fetchone()
+        row = conn.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)).fetchone()
+        if not job or job["status"] != "processing" or not row:
+            return False
+        expected = _loads(job["input_json"], {})
+        project = _project_from_row(row)
+        if (expected.get("source_fingerprint") != story_fingerprint(project["original_text"])
+                or expected.get("analysis_fingerprint") != analysis_content_fingerprint(project.get("analysis") or {})
+                or expected.get("title") != project["title"]):
+            return False
+        now = utc_now()
+        proposal = proposal_after_reanalysis(project, analysis)
+        conn.execute("UPDATE projects SET analysis_json = ?, character_proposal_json = ?, status = 'analysis_ready', current_step = 'analysis', quality_check_json = NULL, updated_at = ? WHERE id = ? AND user_id = ?",
+                     (_json(analysis), _json(proposal) if proposal else None, now, project_id, user_id))
+        conn.execute("UPDATE generation_jobs SET status = 'completed', error = NULL, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
+                     (now, now, job_id))
+    return True
+
+
+def rebind_confirmed_character_proposal(project: Dict[str, Any], analysis: Dict[str, Any]) -> None:
+    from .services.character_proposal import proposal_after_reanalysis
+
+    proposal = proposal_after_reanalysis(project, analysis)
+    if proposal:
+        with connection() as conn:
+            conn.execute("UPDATE projects SET character_proposal_json = ? WHERE id = ? AND user_id = ?",
+                         (_json(proposal), project["id"], project["user_id"]))
+
+
+def recover_stale_analysis_jobs(project_id: str, user_id: str, stale_after_seconds: int) -> None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(1, stale_after_seconds))).isoformat()
+    with connection() as conn:
+        owner = conn.execute("SELECT id FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)).fetchone()
+        if not owner:
+            return
+        now = utc_now()
+        cursor = conn.execute("UPDATE generation_jobs SET status = 'failed', error = ?, error_category = 'timeout', completed_at = ?, updated_at = ? WHERE project_id = ? AND job_type = 'analysis' AND status IN ('queued', 'processing') AND COALESCE(updated_at, created_at) < ?",
+                              ("解析処理がタイムアウトしました。完了済みの区間を再利用して再試行できます。", now, now, project_id, cutoff))
+        if cursor.rowcount:
+            conn.execute("UPDATE projects SET status = 'partially_failed', current_step = 'analysis', updated_at = ? WHERE id = ? AND user_id = ?",
+                         (now, project_id, user_id))
+
+
 def get_generation_job(job_id: str) -> Optional[Dict[str, Any]]:
     with connection() as conn:
         row = conn.execute(

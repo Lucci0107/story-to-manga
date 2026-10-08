@@ -27,6 +27,15 @@ def proposal_is_stale(proposal: Any, project: dict) -> bool:
     return not isinstance(proposal, dict) or proposal.get("input_fingerprint") != character_input_fingerprint(project)
 
 
+def proposal_after_reanalysis(project: dict, analysis: dict) -> dict | None:
+    """同じ原稿を再解析したときは、確認済みの人物と詳細設定を再利用する。"""
+
+    proposal = project.get("character_proposal")
+    if proposal_is_stale(proposal, project) or not proposal.get("confirmed_at"):
+        return proposal
+    return {**proposal, "input_fingerprint": character_input_fingerprint({**project, "analysis": analysis})}
+
+
 def _identity(value: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value)).casefold()
 

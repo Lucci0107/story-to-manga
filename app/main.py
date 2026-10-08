@@ -53,6 +53,7 @@ from .services.generation_design import design_data, design_hash, audit_design, 
 from .services.architect import recommend_architect, compile_architect, add_requested_covers
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider, compose_prompts
 from .services.page_types import is_content_page, page_label, requested_cover_kinds
+from .services.story_analysis import analysis_content_fingerprint, analysis_source_status
 from .services.character_proposal import (
     active_characters, build_character_proposal, character_input_fingerprint, existing_character, panel_characters,
     proposal_is_stale, proposal_view, protected_character_ids, validate_selection,
@@ -91,7 +92,7 @@ from .services.settings_recommendation import (
     normalize_settings_recommendation,
     recommendation_is_stale,
 )
-from .services.story_profile import build_story_source_profile
+from .services.story_profile import build_story_source_profile, story_fingerprint
 from .services.storage import (
     StorageCapacityError,
     StorageConfigurationError,
@@ -297,6 +298,7 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
         "failed_panel_count": failed,
         "knowledge": db.list_project_knowledge(project["id"], project["user_id"]) or [],
         "name_script": name_script_summary(project),
+        "analysis_source": analysis_source_status(project.get("original_text") or "", project.get("analysis") or {}, pages),
     }
 
 
@@ -935,6 +937,8 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
         project = db.get_project(project_id, user_id)
         if not project or not project.get("analysis"):
             raise AIProviderError("先に物語解析を生成してください", retryable=False)
+        if analysis_source_status(project["original_text"], project["analysis"])["requires_reanalysis"]:
+            raise AIProviderError("原稿全体を解析し直してからネームを作成してください", retryable=False)
         model_settings = project_ai_model_settings(project, user_id)
         provider = get_ai_provider(model_settings)
         requested_pages = int((project.get("settings") or {}).get("target_page_count", 0))
@@ -1941,13 +1945,74 @@ async def api_delete_project(project_id: str, user=Depends(current_user)):
     return {"deleted": True, "project_id": project_id}
 
 
+def process_analysis_job(project_id: str, user_id: str, job_id: str) -> None:
+    if not db.start_generation_job(job_id):
+        return
+    try:
+        project = require_project(project_id, user_id)
+        job = db.get_generation_job(job_id) or {}
+        inputs = json.loads(job.get("input_json") or "{}")
+        provider = get_ai_provider(inputs.get("model_settings"))
+        provider.analysis_cached_parts = inputs.get("parts") or []
+        provider.analysis_progress_callback = lambda: db.touch_generation_job(job_id)
+        provider.analysis_parts_callback = lambda parts: db.save_analysis_parts(job_id, parts)
+        context = retrieve_knowledge_context(project_id, user_id, "story_analysis", project["original_text"])
+        if (inputs.get("source_fingerprint") != story_fingerprint(project["original_text"])
+                or inputs.get("knowledge_refs") != context.get("references", [])
+                or inputs.get("settings") != project["settings"]):
+            raise AIProviderError("原稿または制作設定が更新されました。現在の内容で解析し直してください", retryable=False)
+        analysis = normalize_analysis(provider.analyze(project["original_text"], project["title"], context, project["settings"]))
+        analysis["knowledge_refs"] = context.get("references", [])
+        if not db.complete_analysis_job(job_id, project_id, user_id, analysis):
+            raise AIProviderError("解析中に原稿・解析内容が更新されました。現在の内容で再試行してください", retryable=False)
+        record_provider_generation(project_id, user_id, provider)
+    except Exception as exc:
+        # 未検証の出力や本文をログ・エラーへ含めない。
+        message = str(exc) if isinstance(exc, AIProviderError) else "原稿全体の解析に失敗しました。再試行してください"
+        job = db.get_generation_job(job_id) or {}
+        if job.get("status") in {"queued", "processing"}:
+            db.update_generation_job(job_id, "failed", message, getattr(exc, "error_category", None))
+            db.update_project(project_id, user_id, status="partially_failed", current_step="analysis")
+        logger.warning("analysis job failed project_id=%s job_id=%s category=%s", project_id, job_id, type(exc).__name__)
+
+
+@app.get("/api/projects/{project_id}/analysis/status")
+async def api_analysis_status(project_id: str, user=Depends(current_user)):
+    require_project(project_id, user["id"])
+    db.recover_stale_analysis_jobs(project_id, user["id"], get_settings().storyboard_job_stale_seconds)
+    job = db.latest_generation_job(project_id, "analysis")
+    public_job = {key: job.get(key) for key in ("id", "status", "error", "created_at", "updated_at")} if job else None
+    inputs = json.loads(job.get("input_json") or "{}") if job else {}
+    return {"job": public_job, "completed_sections": sum(len(part.get("source_sections") or []) for part in inputs.get("parts") or [])}
+
+
 @app.post("/api/projects/{project_id}/analysis")
-async def api_generate_analysis(project_id: str, user=Depends(current_user)):
+async def api_generate_analysis(project_id: str, background_tasks: BackgroundTasks, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
+    if any(db.get_active_generation_job(project_id, stage) for stage in ("character", "storyboard")):
+        raise HTTPException(409, "進行中の人物設定・ネーム生成が完了してから解析してください")
     knowledge_context = retrieve_knowledge_context(
         project_id, user["id"], "story_analysis", project["original_text"]
     )
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
+    if getattr(provider, "uses_external_api", False):
+        inputs = {"source_fingerprint": story_fingerprint(project["original_text"]),
+                  "analysis_fingerprint": analysis_content_fingerprint(project.get("analysis") or {}),
+                  "title": project["title"], "settings": project["settings"],
+                  "model_settings": project_ai_model_settings(project, user["id"]),
+                  "knowledge_refs": knowledge_context.get("references", [])}
+        previous = db.latest_generation_job(project_id, "analysis")
+        previous_inputs = json.loads(previous.get("input_json") or "{}") if previous else {}
+        if previous and previous.get("status") == "failed" and all(previous_inputs.get(key) == value for key, value in inputs.items()):
+            inputs["parts"] = previous_inputs.get("parts") or []
+        job, created = db.create_async_generation_job(project_id, "analysis", f"analysis:{project_id}", input_payload=inputs)
+        if not job:
+            raise HTTPException(503, "原稿全体の解析を開始できませんでした")
+        updated = db.update_project(project_id, user["id"], status="processing", current_step="analysis") if created else project
+        if created:
+            background_tasks.add_task(process_analysis_job, project_id, user["id"], str(job["id"]))
+        return JSONResponse({"accepted": True, "job": {key: job.get(key) for key in ("id", "status", "error")},
+                             "project": project_view(updated or project), "mode": provider.provider_name}, status_code=202)
     try:
         analysis = provider.analyze(
             project["original_text"], project["title"], knowledge_context, project["settings"]
@@ -1966,6 +2031,8 @@ async def api_generate_analysis(project_id: str, user=Depends(current_user)):
         current_step="analysis",
         clear_quality_check=True,
     )
+    db.rebind_confirmed_character_proposal(project, analysis)
+    updated = require_project(project_id, user["id"])
     return {
         "project": project_view(updated or project),
         "mode": provider.provider_name,
@@ -2083,6 +2150,10 @@ async def api_generate_storyboard(
     project = require_project(project_id, user["id"])
     if not project.get("analysis"):
         raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
+    if analysis_source_status(project["original_text"], project["analysis"])["requires_reanalysis"]:
+        raise HTTPException(409, "「解析」で原稿全体を解析し直してからネームを作成してください")
+    if db.get_active_generation_job(project_id, "analysis"):
+        raise HTTPException(409, "原稿全体の解析が完了してからネームを作成してください")
     if not active_characters(project):
         raise HTTPException(status_code=400, detail="先に主要人物を選択して人物設定を作成してください")
     if db.get_active_generation_job(project_id, "character"):

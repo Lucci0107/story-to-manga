@@ -93,10 +93,13 @@ class Settings:
     openai_timeout_seconds: float
     openai_storyboard_timeout_seconds: float
     openai_character_timeout_seconds: float
+    openai_analysis_timeout_seconds: float
     openai_max_retries: int
     openai_storyboard_max_retries: int
     openai_max_output_tokens: int
     openai_character_max_output_tokens: int
+    openai_analysis_max_output_tokens: int
+    openai_storyboard_max_output_tokens: int
     storyboard_job_stale_seconds: int
     storyboard_batch_pages: int
 
@@ -169,6 +172,9 @@ def get_settings() -> Settings:
         ),
         openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", DEFAULT_IMAGE_MODEL),
         openai_timeout_seconds=max(5.0, min(300.0, _float_env("OPENAI_TIMEOUT_SECONDS", 90.0))),
+        openai_analysis_timeout_seconds=max(30.0, min(600.0, _float_env("OPENAI_ANALYSIS_TIMEOUT_SECONDS", 300.0))),
+        openai_analysis_max_output_tokens=max(512, min(32_000, _int_env("OPENAI_ANALYSIS_MAX_OUTPUT_TOKENS", 25_000))),
+        openai_storyboard_max_output_tokens=max(512, min(32_000, _int_env("OPENAI_STORYBOARD_MAX_OUTPUT_TOKENS", 25_000))),
         # StoryboardはStructured Outputが大きいため、短いテキスト処理と分離する。
         openai_storyboard_timeout_seconds=max(
             30.0,

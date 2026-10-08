@@ -892,6 +892,7 @@
       activeStep = step;
       await saveProject({ current_step: step }, null, false).catch(function () {});
       render();
+      if (step === "analysis") restoreAnalysisJobState();
       if (step === "characters") restoreCharacterJobState();
       if (step === "storyboard") restoreStoryboardJobState();
       if (step === "generate") restorePanelGenerationState();
@@ -939,8 +940,67 @@
       });
     }
 
+    let analysisPolling = false;
+    let analysisJobState = null;
+
+    async function pollAnalysisJob(jobId) {
+      analysisPolling = true;
+      const started = Date.now();
+      let errors = 0;
+      try {
+        while (Date.now() - started < 60 * 60 * 1000) {
+          await new Promise(function(resolve) { window.setTimeout(resolve, Date.now() - started < 60000 ? 2000 : 5000); });
+          let data;
+          try { data = await api('/api/projects/' + encodeURIComponent(state.id) + '/analysis/status'); errors = 0; }
+          catch(error) { if (++errors >= 4) throw error; continue; }
+          const job = data.job;
+          if (!job || job.id !== jobId) throw new Error('解析の処理状態を確認できませんでした');
+          analysisJobState = job;
+          if (['completed', 'failed'].includes(job.status)) {
+            await fetchProject(false);
+            if (job.status === 'failed') throw new Error(job.error || '原稿全体の解析に失敗しました');
+            return;
+          }
+          if (!['queued', 'processing'].includes(job.status)) throw new Error('解析処理が終了しました。状態を再確認してください');
+          updateProcessingDialog({message:'原稿全体を解析しています…', progress:data.completed_sections ? data.completed_sections + '区間の解析を保存しました' : '冒頭から結末まで、章ごとの出来事を整理しています', submessage:'完了した区間は保存します。画面を閉じても処理は継続します。'});
+        }
+        throw new Error('解析の状態を再確認してください。サーバー上の処理は継続します');
+      } finally { analysisPolling = false; }
+    }
+
+    async function restoreAnalysisJobState() {
+      if (analysisPolling) return;
+      try {
+        const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/analysis/status');
+        analysisJobState = data.job;
+        if (!data.job || !['queued', 'processing'].includes(data.job.status)) return;
+        showProcessingDialog({message:'原稿全体を解析しています…',progress:'サーバー上の解析を確認しています',submessage:'保存済みの人物設定とネームを保持しています。'});
+        await pollAnalysisJob(data.job.id);
+        showToast('原稿全体の解析ができました。出来事と結末を確認してください');
+      } catch(error) { showToast(error.message, 'error'); }
+      finally { hideProcessingDialog(); if (activeStep === 'analysis') render(); }
+    }
+
+    function analysisSourceNotice() {
+      const source = state.analysis_source || {};
+      if (source.requires_reanalysis) return '<div class="name-page-count-recovery" role="alert"><strong>ページ数を合わせる前に、原稿全体の解析が必要です</strong><p>' + (source.legacy_excerpt ? '以前の解析は原稿の抜粋だけを参照しています。' : '保存済みの解析が現在の原稿全体に対応していません。') + '原稿は' + source.section_count + (source.chapter_count ? '章' : '区間') + 'ありますが、解析の出来事は' + source.event_count + '件です。冒頭から結末まで解析し直して、ネームを作り直してください。</p><p>保存済みの人物設定と、確認済みの主要人物の選択は再利用します。</p>' + (activeStep === 'analysis' ? '<button type="button" class="primary-button compact-button" data-start-full-analysis>原稿全体を解析し直す</button>' : '<button type="button" class="primary-button compact-button" data-go-full-analysis>原稿全体の解析へ進む →</button>') + '</div>';
+      if (source.storyboard_needs_rebuild) return '<div class="name-page-count-recovery" role="status"><strong>原稿全体の解析ができました。次はネームを作り直してください</strong><p>保存済みの主要人物設定を使い、更新された出来事と結末から本文' + state.settings.target_page_count + 'ページを設計します。表紙・裏表紙は別ページです。現在のネームは作り直すまで保持します。</p>' + (activeStep === 'storyboard' ? '<button type="button" class="primary-button compact-button" data-rebuild-full-name>保存済みの人物設定でネームを作り直す</button>' : '<button type="button" class="primary-button compact-button" data-go-full-name>ネームを作り直す画面へ →</button>') + '</div>';
+      if (source.complete && activeStep === 'analysis') return '<div class="callout" role="status"><p>原稿全体の' + source.section_count + (source.chapter_count ? '章' : '区間') + 'を解析済み。出来事と結末を確認してください。</p></div>';
+      return '';
+    }
+
+    function bindAnalysisSourceNotice() {
+      content.querySelector('[data-start-full-analysis]')?.addEventListener('click', generateAnalysis);
+      content.querySelector('[data-go-full-analysis]')?.addEventListener('click', function() { goToStep('analysis'); });
+      content.querySelector('[data-go-full-name]')?.addEventListener('click', function() { goToStep('storyboard'); });
+      content.querySelector('[data-rebuild-full-name]')?.addEventListener('click', generateStoryboard);
+    }
+
     async function generateAnalysis() {
-      const button = content.querySelector("[data-generate-analysis]");
+      if (analysisPolling) return;
+      analysisJobState = null;
+      const button = content.querySelector("[data-start-full-analysis], [data-generate-analysis], [data-regenerate-analysis]");
+      const originalLabel = button?.textContent;
       if (button) { button.disabled = true; button.textContent = "物語を解析中…"; }
       setSaveState("解析中", true);
       showProcessingDialog({
@@ -951,12 +1011,13 @@
       try {
         const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/analysis", { method: "POST", body: "{}" });
         state = data.project;
+        if (data.accepted && data.job?.id) await pollAnalysisJob(data.job.id);
         showToast("物語の解析ができました。内容を確認してください");
         activeStep = "analysis";
         render();
       } catch (error) {
         showToast(error.message, "error");
-        if (button) { button.disabled = false; button.textContent = "解析を始める →"; }
+        if (button) { button.disabled = false; button.textContent = originalLabel; }
       } finally {
         hideProcessingDialog();
         setSaveState("保存済み", false);
@@ -971,6 +1032,11 @@
       const scalar = function (key, label, value) { return '<label class="editor-label">' + escapeHtml(label) + '<input data-analysis-field="' + key + '" class="editor-input" value="' + escapeAttr(value || "") + '"></label>'; };
       content.innerHTML = heading("解析を編集する", "AIの読み取りを確認し、原作と違うところはここで直します。") + (state.analysis ? '<section class="surface-panel panel-padding"><div class="analysis-grid">' + scalar("title", "解析上のタイトル", analysis.title) + scalar("genre", "ジャンル", analysis.genre) + scalar("tone", "トーン", analysis.tone) + field("synopsis", "あらすじ", analysis.synopsis, true) + field("world_setting", "世界観・舞台", analysis.world_setting, true) + field("main_characters", "主要人物", analysis.main_characters, false, true) + field("supporting_characters", "脇役", analysis.supporting_characters, false, true) + field("locations", "場所", analysis.locations, false, true) + field("major_events", "主な出来事", analysis.major_events, false, true) + field("story_beats", "ストーリービート", analysis.story_beats, false, true) + field("conflicts", "対立・葛藤", analysis.conflicts, false, true) + field("important_objects", "重要な物", analysis.important_objects, false, true) + field("climax", "クライマックス", analysis.climax, true) + field("ending", "結末", analysis.ending, true) + '</div><div class="save-row"><button type="button" class="secondary-button compact-button" data-regenerate-analysis>解析をやり直す</button><button type="button" class="primary-button compact-button" data-save-analysis>解析を保存</button></div></section>' + nextButton("settings", "漫画化設定へ") : '<section class="surface-panel empty-panel"><h3>まず物語を解析しましょう</h3><p>原作の要素を編集可能な項目へ整理します。</p><button type="button" class="primary-button compact-button" data-generate-analysis>解析を始める</button></section>');
       content.querySelector("[data-generate-analysis]")?.addEventListener("click", generateAnalysis);
+      content.querySelector('.workspace-heading')?.insertAdjacentHTML('afterend', analysisSourceNotice());
+      if (analysisJobState?.status === 'failed') content.querySelector('.workspace-heading')?.insertAdjacentHTML('afterend', '<div class="form-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(analysisJobState.error || '原稿全体の解析に失敗しました。再試行してください') + '</p></div>');
+      const regenerate = content.querySelector('[data-regenerate-analysis]');
+      if (regenerate) { regenerate.textContent = '原稿全体を解析し直す'; regenerate.className = 'primary-button compact-button'; regenerate.disabled = analysisPolling; }
+      bindAnalysisSourceNotice();
       content.querySelector("[data-regenerate-analysis]")?.addEventListener("click", generateAnalysis);
       content.querySelector("[data-save-analysis]")?.addEventListener("click", function () {
         const next = { ...analysis };
@@ -1704,10 +1770,11 @@
       const validation = (document ? nameDocument.validation : summary.validation) || { errors: [], warnings: [] };
       const counts = summary.page_counts;
       const mismatch = counts && counts.content_pages !== counts.target_content_pages;
+      const sourceNeedsRepair = state.analysis_source?.requires_reanalysis || state.analysis_source?.storyboard_needs_rebuild;
       const pageCounts = counts ? '<div class="name-page-counts" aria-label="ネームのページ数"><strong>本文の目標 ' + counts.target_content_pages + 'ページ</strong><span>現在の本文 ' + counts.content_pages + 'ページ</span><span>表紙 ' + counts.cover_pages + 'ページ / 裏表紙 ' + (counts.back_cover_pages || 0) + 'ページ / 合計 ' + counts.total_pages + 'ページ</span></div><p class="field-help">表紙・裏表紙は本文の目標ページ数に含みません。</p>' : '';
       const coverChoices = '<p>選択した構成：表紙 ' + (state.settings?.title_mode === 'cover' ? 'あり' : 'なし') + ' / 裏表紙 ' + (state.settings?.back_cover_mode === 'generate' ? 'あり' : 'なし') + '</p>';
       const missingCovers = counts?.content_pages && summary.missing_covers?.length ? '<div class="name-page-count-recovery"><strong>選んだ表紙・裏表紙をネームに追加してください</strong><p>既存の本文・画像を保持して、足りない表紙・裏表紙だけを追加します。画像は全編ネームを確認してから生成できます。</p><div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-add-cover-pages>選んだ表紙・裏表紙を追加</button></div></div>' : '';
-      const recovery = mismatch ? '<div class="name-page-count-recovery"><strong>本文の構成を確認して、ページ数を合わせてください</strong><p>不足している内容がある場合は、本文ページを追加して補完してください。現在の本文で全編が揃っている場合は、そのページ数を目標に反映できます。目標の変更ではAI生成を行わず、新しい確認用の版を保存します。</p><div class="name-review-actions">' + (counts.content_pages >= 1 && counts.content_pages <= counts.maximum_content_pages ? '<button type="button" class="secondary-button compact-button" data-adopt-name-page-count>現在の本文' + counts.content_pages + 'ページを目標に反映</button>' : '') + '<button type="button" class="outline-button compact-button" data-show-add-page>本文ページを追加する場所へ</button></div></div>' : '';
+      const recovery = mismatch && !sourceNeedsRepair ? '<div class="name-page-count-recovery"><strong>本文の構成を確認して、ページ数を合わせてください</strong><p>不足している内容がある場合は、本文ページを追加して補完してください。現在の本文で全編が揃っている場合は、そのページ数を目標に反映できます。目標の変更ではAI生成を行わず、新しい確認用の版を保存します。</p><div class="name-review-actions">' + (counts.content_pages >= 1 && counts.content_pages <= counts.maximum_content_pages ? '<button type="button" class="secondary-button compact-button" data-adopt-name-page-count>現在の本文' + counts.content_pages + 'ページを目標に反映</button>' : '') + '<button type="button" class="outline-button compact-button" data-show-add-page>本文ページを追加する場所へ</button></div></div>' : '';
       const label = { confirmed: "この版を確定済み", draft: "確認待ち", outdated: "編集されたため再確認が必要", not_created: "全編ファイルを準備" }[summary.state] || "全編ファイルを準備";
       const base = '/api/projects/' + encodeURIComponent(state.id);
       const currentId = document?.id || summary.version_id;
@@ -1839,6 +1906,8 @@
       const body = pages.length ? jobNotice + '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : jobNotice + '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
       content.innerHTML = heading("ネームを編集する", "ページをまたぐ展開と、コマごとの視線の流れを確認します。") + orderNote + (pages.length ? nameReviewMarkup() : '') + body;
+      content.querySelector('.workspace-heading')?.insertAdjacentHTML('afterend', analysisSourceNotice());
+      bindAnalysisSourceNotice();
       bindNameReview();
       bindStoryboardEvents();
     }
@@ -2006,6 +2075,7 @@
 
     async function generateStoryboard() {
       if (!state.analysis) { showToast("先に物語解析を生成してください", "error"); return; }
+      if (state.analysis_source?.requires_reanalysis) { showToast('先に原稿全体を解析し直してください', 'error'); goToStep('analysis'); return; }
       if (storyboardPolling) return;
       const button = content.querySelector("[data-generate-storyboard]");
       if (button) { button.disabled = true; button.textContent = "ネームを作成中…"; }
@@ -2860,6 +2930,7 @@
 
     render();
     // 共通の状態APIを複数の工程から同時取得せず、表示中の工程だけ復元する。
+    if (activeStep === "analysis") restoreAnalysisJobState();
     if (activeStep === "characters") restoreCharacterJobState();
     if (activeStep === "storyboard") restoreStoryboardJobState();
     if (activeStep === "generate") restorePanelGenerationState();
