@@ -205,6 +205,11 @@ def test_confirmed_subset_is_used_for_storyboard_and_all_sixty_four_profiles_are
     assert client.post(base + "/storyboard").status_code == 202
     assert provider.storyboard_targets == [["葵", "朝日"]]
     assert client.get(base).json()["project"]["characters"] == stored
+    assert client.put(base + "/character-proposal/selection", json=selection(proposal, "葵")).status_code == 200
+    draft = client.get(base).json()["project"]
+    assert draft["active_characters"] == [] and draft["characters"] == stored
+    assert client.post(base + "/storyboard").status_code == 400
+    assert provider.storyboard_targets == [["葵", "朝日"]] and provider.profile_targets == []
 
 
 def test_only_panel_actors_are_supplied_and_incomplete_confirmation_cannot_be_used():

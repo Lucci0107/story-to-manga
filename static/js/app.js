@@ -1455,6 +1455,7 @@
       try {
         const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/character-proposal/selection', {method: 'PUT', body: JSON.stringify({proposal_id: proposal.id, selected_candidate_ids: [...selectedCharacterCandidateIds]})});
         state = data.project;
+        render();
         showToast('選択を保存しました。人物の詳細設定はまだ生成していません');
       } catch (error) { showToast(error.message, 'error'); }
       finally { if (button) button.disabled = false; }
