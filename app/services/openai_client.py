@@ -143,10 +143,11 @@ def request_bytes(
     timeout: float = 90.0,
     max_retries: int = 1,
     client_request_id: Optional[str] = None,
+    retry_timeouts: bool = True,
 ) -> bytes:
     """JSON POSTまたはGETを実行し、レスポンスbytesを返す。
 
-    429/5xx/通信タイムアウトだけを最大2回まで再試行する。レスポンス本文は
+    429/5xx/通信エラーを上限付きで再試行し、呼び出し元でtimeoutの再送を無効化できる。レスポンス本文は
     エラーメッセージへ含めないため、物語やプロバイダの詳細が漏れない。
     """
 
@@ -181,7 +182,8 @@ def request_bytes(
             error_code, error_type, error_param = _safe_error_fields(exc)
             category = _http_error_category(exc.code, error_code, error_type, error_param)
             # quota枯渇は再試行しても回復しないため、課金APIを余分に呼ばない。
-            retryable = _retryable_status(exc.code) and category != "quota"
+            retryable = (_retryable_status(exc.code) and category != "quota"
+                         and (category != "timeout" or retry_timeouts))
             if retryable and attempt < attempts - 1:
                 time.sleep(min(2.0, 0.4 * (2**attempt)))
                 continue
@@ -195,20 +197,21 @@ def request_bytes(
                 category=category,
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if attempt < attempts - 1:
-                time.sleep(min(2.0, 0.4 * (2**attempt)))
-                continue
             reason = getattr(exc, "reason", None)
             timeout_error = isinstance(exc, (TimeoutError, socket.timeout)) or isinstance(
                 reason, (TimeoutError, socket.timeout)
             ) or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
+            retryable = not timeout_error or retry_timeouts
+            if retryable and attempt < attempts - 1:
+                time.sleep(min(2.0, 0.4 * (2**attempt)))
+                continue
             raise OpenAIRequestError(
                 (
                     "OpenAI APIの応答がタイムアウトしました。しばらくして再試行してください"
                     if timeout_error
                     else "OpenAI APIへ接続できませんでした。ネットワークを確認して再試行してください"
                 ),
-                retryable=True,
+                retryable=retryable,
                 category="timeout" if timeout_error else "connection",
             ) from exc
 
@@ -223,6 +226,7 @@ def request_json(
     timeout: float = 90.0,
     max_retries: int = 1,
     client_request_id: Optional[str] = None,
+    retry_timeouts: bool = True,
 ) -> Dict[str, Any]:
     """JSON APIを呼び出し、オブジェクト形式のレスポンスを返す。"""
 
@@ -234,6 +238,7 @@ def request_json(
             timeout=timeout,
             max_retries=max_retries,
             client_request_id=client_request_id,
+            retry_timeouts=retry_timeouts,
         )
         body = json.loads(raw.decode("utf-8"))
     except OpenAIRequestError:

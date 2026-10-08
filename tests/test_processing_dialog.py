@@ -84,7 +84,10 @@ def test_character_job_ui_restores_terminal_and_reload_states() -> None:
     assert 'characterPolling = false;' in APP_SCRIPT
     assert '"人物設定を再試行"' in APP_SCRIPT
     assert '"処理状態を再確認"' in APP_SCRIPT
-    assert "maximumPollingMs = 16 * 60 * 1000" in APP_SCRIPT
+    character_polling = APP_SCRIPT.split("async function pollCharacterJob(", 1)[1].split(
+        "async function restoreCharacterJobState(", 1
+    )[0]
+    assert "maximumPollingMs = 60 * 60 * 1000" in character_polling
     assert "consecutiveNetworkErrors >= 4" in APP_SCRIPT
     assert "restoreCharacterJobState();" in APP_SCRIPT
     assert "cancelCharacterPolling()" in APP_SCRIPT

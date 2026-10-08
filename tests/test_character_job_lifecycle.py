@@ -156,6 +156,21 @@ def test_successful_character_retry_clears_partial_error(
     assert db.latest_generation_job(project["id"], "character")["id"] == completed["id"]
 
 
+def test_failed_character_regeneration_preserves_saved_manual_profiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, project = _client_and_project(tmp_path)
+    profiles = [{"id": "saved-person", "name": "手動で設定した人物", "appearance": "手動の外見設定",
+                 "source_quotes": ["原稿の根拠"], "aliases": []}]
+    project = db.update_project(project["id"], project["user_id"], characters=profiles,
+                                status="characters_ready", current_step="characters")
+    assert project
+    job = _run_job(project, FailingCharacterProvider(), monkeypatch)
+    assert job["status"] == "failed"
+    saved = db.get_project(project["id"], project["user_id"])
+    assert saved and saved["characters"] == profiles
+
+
 def test_external_character_endpoint_returns_persisted_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

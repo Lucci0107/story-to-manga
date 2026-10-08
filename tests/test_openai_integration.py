@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 import pytest
 from PIL import Image
 
-from app.services.ai_pipeline import OpenAIProvider
+from app.services.ai_pipeline import AIProviderError, OpenAIProvider
 from app.services.artwork import ArtworkGenerationError, save_openai_image
 from app.services.openai_client import OpenAIRequestError, request_json
 from app.services.storage import LocalFileStorage
@@ -48,6 +48,7 @@ def runtime_settings() -> SimpleNamespace:
         openai_max_retries=0,
         openai_storyboard_max_retries=1,
         openai_max_output_tokens=2_000,
+        openai_character_max_output_tokens=25_000,
         storyboard_batch_pages=8,
     )
 
@@ -215,7 +216,7 @@ def test_long_character_source_covers_fourteen_people_and_repairs_missing_profil
             return FakeHTTPResponse(response_with_json({"cast": cast}))
         targets = [item["name"] for item in context["target_cast"]]
         profile_requests.append(targets)
-        selected = targets[:4] if len(profile_requests) == 1 else targets
+        selected = targets[:2] if len(profile_requests) == 1 else targets
         characters = [{**valid_character(), "name": name} for name in selected]
         return FakeHTTPResponse(response_with_json({"characters": characters}))
 
@@ -235,12 +236,136 @@ def test_long_character_source_covers_fourteen_people_and_repairs_missing_profil
     assert all(any(name in request["input"] for request in cast_requests) for name in names)
     assert sum(len(json.JSONDecoder().raw_decode(item["input"])[0]["story_content"])
                for item in cast_requests) >= len(source)
-    assert profile_requests == [names[:8], names[:8], names[8:]]
+    assert profile_requests == [names[:4], names[:4], names[4:8], names[8:12], names[12:]]
     assert all(item["model"] == "gpt-6.1-sol" and item["reasoning"] == {"effort": "xhigh"}
                for item in requests)
     assert all("<knowledge_reference>" in item["input"] for item in requests)
-    assert len(heartbeats) == len(cast_requests) + 2
+    assert len(heartbeats) == len(requests)
     assert provider.last_generation_metadata["character_count"] == 14
+    for payload in requests:
+        if payload["text"]["format"]["name"] != "character_bible":
+            continue
+        targets = json.JSONDecoder().raw_decode(payload["input"])[0]["target_cast"]
+        array_schema = payload["text"]["format"]["schema"]["properties"]["characters"]
+        assert array_schema["minItems"] == array_schema["maxItems"] == len(targets)
+        assert array_schema["items"]["properties"]["name"]["enum"] == [item["name"] for item in targets]
+        assert "今回の作成対象ではありません" in payload["instructions"]
+
+
+@pytest.mark.parametrize("limited_stage,limited_category", [
+    ("character_cast", "output_limit"), ("character_bible", "output_limit"),
+    ("character_cast", "timeout"), ("character_bible", "timeout"),
+])
+def test_character_output_limit_splits_only_the_failed_part_and_keeps_every_person(
+    monkeypatch: pytest.MonkeyPatch, limited_stage: str, limited_category: str,
+) -> None:
+    names = [f"途中の人物{i:02d}" for i in range(1, 15)]
+    source = "\n\n".join(f"## 第{i}章\n" + "状況を振り返った。" * 120
+                         + f"\n{name}は主人公の決断を支えた。\n"
+                         + "次の場所へ進む準備をした。" * 140
+                         for i, name in enumerate(names, 1))
+    requests: list[dict] = []
+    limited_input = ""
+    profile_requests: list[list[str]] = []
+
+    def fake_urlopen(request, timeout):
+        nonlocal limited_input
+        payload = json.loads(request.data.decode("utf-8"))
+        requests.append(payload)
+        context, _ = json.JSONDecoder().raw_decode(payload["input"])
+        stage = payload["text"]["format"]["name"]
+        if stage == "character_bible":
+            profile_requests.append([item["name"] for item in context["target_cast"]])
+        if stage == limited_stage and not limited_input:
+            limited_input = payload["input"]
+            if limited_category == "timeout":
+                raise TimeoutError("simulated timeout")
+            return FakeHTTPResponse({
+                "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
+                "output_text": '{"characters":[',
+            })
+        if stage == "character_cast":
+            cast = [{"name": name, "aliases": [], "role": "決断を支える人物",
+                     "source_quotes": [f"{name}は主人公の決断を支えた。"]}
+                    for name in names if name in context["story_content"]]
+            return FakeHTTPResponse(response_with_json({"cast": cast}))
+        return FakeHTTPResponse(response_with_json({"characters": [
+            {**valid_character(), "name": item["name"]} for item in context["target_cast"]
+        ]}))
+
+    runtime = runtime_settings()
+    runtime.openai_max_retries = 1
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", lambda: runtime)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIProvider({"preset": "balanced", "character_model": "gpt-6.1-sol",
+                              "reasoning_effort": "xhigh"})
+    result = provider.characters(source, valid_analysis(), {"prompt_text": "支援者の設定も保持する。"})
+
+    assert [item["name"] for item in result] == names
+    assert sum(payload["input"] == limited_input for payload in requests) == 1
+    assert all(item["max_output_tokens"] == 25_000 for item in requests)
+    assert all(item["model"] == "gpt-6.1-sol" and item["reasoning"] == {"effort": "xhigh"}
+               and "<knowledge_reference>" in item["input"] for item in requests)
+    if limited_stage == "character_bible":
+        assert profile_requests == [names[:4], names[:2], names[2:4], names[4:8], names[8:12], names[12:]]
+    else:
+        assert profile_requests == [names[:4], names[4:8], names[8:12], names[12:]]
+        failed_context = json.JSONDecoder().raw_decode(limited_input)[0]["story_content"]
+        sections = [json.JSONDecoder().raw_decode(item["input"])[0]["story_content"] for item in requests[1:3]]
+        assert len(sections[0]) < len(failed_context) and len(sections[1]) < len(failed_context)
+        assert sections[0] + sections[1][600:] == failed_context
+
+
+def test_character_quote_repair_uses_the_specific_validation_reason_without_logging_source(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    requests: list[dict] = []
+    source = "葵は、\n主人公の決断を支えた。"
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        quote = "葵が主人公を救った。" if len(requests) == 1 else "葵は、主人公の決断を支えた。"
+        return FakeHTTPResponse(response_with_json({"cast": [
+            {"name": "葵", "aliases": [], "role": "支援者", "source_quotes": [quote]},
+        ]}))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    roster: list[dict] = []
+    OpenAIProvider()._character_cast_part(source, roster, valid_analysis(), None, None, "人物を抽出する。",
+                                        source_part=1, source_parts=1)
+    assert roster[0]["source_quotes"] == [source]
+    assert len(requests) == 2
+    assert "連続した短い一文としてそのままコピー" in requests[1]["input"]
+    assert "葵が主人公を救った。" not in requests[1]["input"]
+    assert "character_evidence" in caplog.text
+    assert "葵" not in caplog.text and "主人公の決断" not in caplog.text
+
+
+@pytest.mark.parametrize("body,category", [
+    ({"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
+      "output_text": '{"characters":[]}'}, "output_limit"),
+    ({"status": "incomplete", "incomplete_details": {"reason": "content_filter"}}, "content_filter"),
+    ({"status": "completed", "output": [{"type": "message", "content": [
+        {"type": "refusal", "refusal": "private-source-fragment"}]}]}, "content_filter"),
+])
+def test_incomplete_or_refused_character_response_is_not_parsed_or_blindly_retried(
+    monkeypatch: pytest.MonkeyPatch, body: dict, category: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse(body)
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(AIProviderError) as raised:
+        OpenAIProvider().characters("private-source-fragment", valid_analysis())
+    assert raised.value.error_category == category
+    assert raised.value.retryable is False
+    assert len(requests) == 1
+    assert "private-source-fragment" not in str(raised.value) + caplog.text
 
 
 def test_settings_recommendation_uses_structured_output_and_knowledge(

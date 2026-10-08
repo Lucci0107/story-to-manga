@@ -39,6 +39,34 @@ def test_cast_requires_real_source_quotes() -> None:
     assert normalize_cast({"cast": []}, "風景だけを描く。") == []
 
 
+def test_source_quotes_preserve_original_after_typographic_normalization() -> None:
+    source = "Ｍ教授は、\n　葵の決断を支えた。\nThe teacher helped 葵."
+    item = person("M教授")
+    item["source_quotes"] = ["M教授は、葵の決断を支えた。", "The\n  teacher helped 葵."]
+    normalized = normalize_cast({"cast": [item]}, source)
+    assert normalized[0]["source_quotes"] == ["Ｍ教授は、\n　葵の決断を支えた。", "The teacher helped 葵."]
+    assert all(quote in source for quote in normalized[0]["source_quotes"])
+    for quote in ["M教授は、葵を支えた。", "M教授は、…決断を支えた。", "Theteacher helped 葵."]:
+        item["source_quotes"] = [quote]
+        with pytest.raises(ValueError, match="原稿に存在しません"):
+            normalize_cast({"cast": [item]}, source)
+
+
+def test_profile_names_accept_typographic_changes_and_restore_canonical_name() -> None:
+    roster = [person("M教授"), person("葵")]
+    result = normalize_character_batch({"characters": [
+        {"name": "Ｍ 教授", "appearance": "未設定"}, {"name": "葵", "appearance": "未設定"},
+    ]}, roster)
+    assert [item["name"] for item in result] == ["M教授", "葵"]
+
+
+def test_source_quote_cannot_match_only_part_of_a_normalized_character() -> None:
+    item = person("葵")
+    item["source_quotes"] = ["I"]
+    with pytest.raises(ValueError, match="原稿に存在しません"):
+        normalize_cast({"cast": [item]}, "Ⅳ")
+
+
 def test_aliases_merge_one_person_but_shared_generic_aliases_do_not_merge_people() -> None:
     roster: list[dict] = []
     merge_cast(roster, [person("葵", ["アオイ"]), person("千尋", ["先生"])])

@@ -24,6 +24,8 @@ python3 -m venv .venv
 
 通常のテキスト処理とは別に、Storyboardは`OPENAI_STORYBOARD_TIMEOUT_SECONDS`（既定240秒）と`OPENAI_STORYBOARD_MAX_RETRIES`（既定1回）で大きなStructured Outputへ対応します。すべての再試行回数と最大出力トークンには上限があります。
 
+人物設定は`OPENAI_CHARACTER_MAX_OUTPUT_TOKENS`（既定25000、最大32000）と`OPENAI_CHARACTER_TIMEOUT_SECONDS`（既定300秒）で推論と出力の余地を確保します。1回の詳細設定は4人までとし、出力上限またはtimeoutになった区間・人物設定のバッチだけを分割します。タイムアウトした同じ人物要求を繰り返さず、完了済みの部分も再生成しません。引用は原文と照合して保持し、処理が失敗した場合も保存済みの人物設定は残ります。
+
 ## 対応形式
 
 - 直接入力
@@ -127,6 +129,8 @@ Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置
 - `OPENAI_STORYBOARD_TIMEOUT_SECONDS`
 - `OPENAI_STORYBOARD_MAX_RETRIES`
 - `OPENAI_MAX_OUTPUT_TOKENS`
+- `OPENAI_CHARACTER_MAX_OUTPUT_TOKENS`
+- `OPENAI_CHARACTER_TIMEOUT_SECONDS`
 - `STORYBOARD_JOB_STALE_SECONDS`（既定900秒。中断Jobを再試行可能に戻す判定時間）
 - `STORYBOARD_BATCH_PAGES`（既定8ページ。大きなネームのStructured Output分割単位）
 - `MAX_UPLOAD_BYTES`

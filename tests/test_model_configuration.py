@@ -94,6 +94,23 @@ def valid_analysis() -> dict:
     }
 
 
+@pytest.mark.parametrize("configured,expected", [(None, 25_000), ("1", 512), ("999999", 32_000)])
+def test_character_output_budget_is_separate_and_bounded(
+    monkeypatch: pytest.MonkeyPatch, configured: str | None, expected: int,
+) -> None:
+    monkeypatch.setattr("app.config._load_local_env", lambda: None)
+    monkeypatch.setenv("OPENAI_MAX_OUTPUT_TOKENS", "12000")
+    monkeypatch.delenv("OPENAI_CHARACTER_TIMEOUT_SECONDS", raising=False)
+    if configured is None:
+        monkeypatch.delenv("OPENAI_CHARACTER_MAX_OUTPUT_TOKENS", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_CHARACTER_MAX_OUTPUT_TOKENS", configured)
+    settings = get_settings()
+    assert settings.openai_character_max_output_tokens == expected
+    assert settings.openai_character_timeout_seconds == 300.0
+    assert settings.openai_max_output_tokens == 12_000
+
+
 def test_registry_accepts_supported_models_and_rejects_arbitrary_ids() -> None:
     assert "gpt-6-astra" in TEXT_MODEL_IDS
     assert is_allowed_text_model("gpt-6-astra")

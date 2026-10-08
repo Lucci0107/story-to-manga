@@ -1292,7 +1292,7 @@
       if (characterPolling) return;
       const runId = ++characterPollRun;
       const startedAt = Date.now();
-      const maximumPollingMs = 16 * 60 * 1000;
+      const maximumPollingMs = 60 * 60 * 1000;
       let consecutiveNetworkErrors = 0;
       let finished = false;
       characterPolling = true;

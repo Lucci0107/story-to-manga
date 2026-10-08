@@ -23,6 +23,7 @@ from .character_cast import (
     CAST_SCHEMA,
     CHARACTER_PROFILE_BATCH_SIZE,
     CHARACTER_SOURCE_CHUNK_SIZE,
+    CharacterValidationError,
     character_source_chunks,
     merge_cast,
     normalize_cast,
@@ -925,7 +926,11 @@ class OpenAIProvider(DemoAIProvider):
                         "schema": schema,
                     }
                 },
-                "max_output_tokens": getattr(settings, "openai_max_output_tokens", 12_000),
+                "max_output_tokens": (
+                    getattr(settings, "openai_character_max_output_tokens", 25_000)
+                    if task_key == "character"
+                    else getattr(settings, "openai_max_output_tokens", 12_000)
+                ),
                 "store": False,
             }
             if reasoning != AUTO_REASONING:
@@ -951,6 +956,8 @@ class OpenAIProvider(DemoAIProvider):
                     timeout=timeout,
                     max_retries=max_retries,
                     client_request_id=client_request_id,
+                    # 長い人物要求のtimeoutは同じ要求を繰り返さず、下の区間・人数分割で回復する。
+                    retry_timeouts=task_key != "character",
                 )
             except OpenAIRequestError as exc:
                 logger.warning(
@@ -981,6 +988,31 @@ class OpenAIProvider(DemoAIProvider):
                     actual_model=actual_model,
                     error_category=getattr(exc, "category", None),
                 ) from exc
+            status = body.get("status")
+            incomplete_details = body.get("incomplete_details")
+            incomplete_reason = incomplete_details.get("reason") if isinstance(incomplete_details, dict) else None
+            output = body.get("output")
+            refused = any(
+                isinstance(item, dict) and any(
+                    isinstance(block, dict) and block.get("type") == "refusal"
+                    for block in (item.get("content") if isinstance(item.get("content"), list) else [])
+                ) for item in (output if isinstance(output, list) else [])
+            )
+            if status in {"incomplete", "failed", "cancelled"} or refused:
+                category = "output_limit" if incomplete_reason == "max_output_tokens" else (
+                    "content_filter" if refused or incomplete_reason == "content_filter" else "incomplete"
+                )
+                logger.warning(
+                    "openai response incomplete task=%s schema=%s category=%s duration_seconds=%.2f client_request_id=%s",
+                    task_key, schema_name, category, time.monotonic() - request_started, client_request_id,
+                )
+                raise AIProviderError(
+                    "AIの出力が上限に達し、人物設定を書き終えられませんでした。再試行してください"
+                    if category == "output_limit" and task_key == "character"
+                    else "AIの出力が途中で終了しました。入力内容や出力設定を確認して再試行してください",
+                    retryable=False,
+                    error_category=category,
+                )
             content = response_output_text(body)
             if not content:
                 raise AIProviderError("AIからテキスト出力を受け取れませんでした")
@@ -988,7 +1020,7 @@ class OpenAIProvider(DemoAIProvider):
                 parsed = parse_json_text(content)
             except OpenAIRequestError as exc:
                 # モデルの形式不備だけは、同じコスト上限内で1回だけ修復要求する。
-                raise AIProviderError(str(exc), retryable=True) from exc
+                raise AIProviderError(str(exc), retryable=True, error_category="response") from exc
             self.last_generation_metadata = new_generation_metadata(
                 task=task_key,
                 requested_model=requested_model,
@@ -1023,6 +1055,8 @@ class OpenAIProvider(DemoAIProvider):
         last_error: Optional[Exception] = None
         retry_user = user
         for attempt in range(2):
+            if attempt and task_key == "character" and callable(self.character_progress_callback):
+                self.character_progress_callback()
             try:
                 raw = self._json_call(
                     system,
@@ -1037,15 +1071,27 @@ class OpenAIProvider(DemoAIProvider):
                 return normalized
             except (AIProviderError, ValueError, TypeError) as exc:
                 last_error = exc
+                logger.warning(
+                    "ai output validation failed task=%s schema=%s category=%s attempt=%s",
+                    task_key, schema_name, getattr(exc, "error_category", None) or "validation", attempt + 1,
+                )
                 if attempt == 0 and getattr(exc, "retryable", True):
+                    repair_hint = exc.repair_hint if isinstance(exc, CharacterValidationError) else ""
                     retry_user = (
                         f"{user}\n\n前回の出力を利用せず、指定されたJSON Schemaに完全一致する"
                         "値を返してください。空の配列や空文字列で重要項目を省略しないでください。"
+                        + repair_hint
                     )
                     continue
                 break
         if isinstance(last_error, AIProviderError):
             raise last_error
+        if isinstance(last_error, CharacterValidationError):
+            stage = "人物一覧の抽出" if schema_name == "character_cast" else "人物設定の作成"
+            raise AIProviderError(
+                f"{stage}を検証できませんでした。{last_error}。再試行してください",
+                retryable=False, error_category=last_error.error_category,
+            ) from last_error
         raise AIProviderError("AIの構造化出力を検証できませんでした") from last_error
 
     def analyze(
@@ -1151,47 +1197,21 @@ class OpenAIProvider(DemoAIProvider):
             "指定されたJSON SchemaとProjectの出力言語ルールに従ってください。"
         )
         for index, chunk in enumerate(chunks):
-            if callable(self.character_progress_callback):
-                self.character_progress_callback()
             # 短い抜粋へ置き換えず、区間の全文と境界の文脈を渡す。
             context = (chunks[index - 1][-600:] if index else "") + chunk
             context += chunks[index + 1][:600] if index + 1 < len(chunks) else ""
-            user = json.dumps({
-                "analysis_reference": analysis,
-                "source_part": index + 1,
-                "source_parts": len(chunks),
-                "story_content": context,
-                "known_cast": [{"name": item["name"], "aliases": item["aliases"], "role": item["role"]}
-                               for item in roster],
-            }, ensure_ascii=False) + _language_reference(settings) + _knowledge_reference(knowledge_context)
-            candidates = self._validated_call(
-                extraction_system, user, schema_name="character_cast", schema=CAST_SCHEMA,
-                task_key="character", normalizer=lambda value, source=context: normalize_cast(value, source),
-                validator=lambda value: isinstance(value, list),
+            self._character_cast_part(
+                context, roster, analysis, knowledge_context, settings, extraction_system,
+                source_part=index + 1, source_parts=len(chunks),
             )
-            merge_cast(roster, candidates)
         if not roster:
             raise AIProviderError("原稿全体から人物の抽出根拠を確認できませんでした", retryable=False)
         characters: List[Dict[str, Any]] = []
         for start in range(0, len(roster), CHARACTER_PROFILE_BATCH_SIZE):
             targets = roster[start:start + CHARACTER_PROFILE_BATCH_SIZE]
-            if callable(self.character_progress_callback):
-                self.character_progress_callback()
-            user = json.dumps({
-                "analysis_reference": analysis,
-                "full_cast": [{"name": item["name"], "role": item["role"]} for item in roster],
-                "target_cast": targets,
-            }, ensure_ascii=False)
-            user += ("\n人物一覧は原稿全体から抽出済みです。target_castの全員を1人につき1設定、"
-                     "名前を変えず、同じ順序でcharactersへ返してください。各人のsource_quotesを根拠にし、"
-                     "未知の実在人物の属性は未設定としてください。別名・集合名で統合したり、人物を追加・省略しないでください。")
-            user += _language_reference(settings) + _knowledge_reference(knowledge_context)
-            batch = self._validated_call(
-                design_system, user, schema_name="character_bible", schema=CHARACTER_SCHEMA,
-                task_key="character", normalizer=lambda value, people=targets: normalize_character_batch(value, people),
-                validator=lambda value: isinstance(value, list) and bool(value),
-            )
-            characters.extend(batch)
+            characters.extend(self._character_profile_batch(
+                targets, roster, analysis, knowledge_context, settings, design_system,
+            ))
         if self.last_generation_metadata is not None:
             self.last_generation_metadata.update({
                 "character_source_method": "full_source_cast",
@@ -1199,6 +1219,120 @@ class OpenAIProvider(DemoAIProvider):
                 "character_count": len(characters),
             })
         return characters
+
+    def _character_cast_part(
+        self,
+        source: str,
+        roster: List[Dict[str, Any]],
+        analysis: Dict[str, Any],
+        knowledge_context: Optional[Dict[str, Any]],
+        settings: Optional[Dict[str, Any]],
+        extraction_system: str,
+        *,
+        source_part: int,
+        source_parts: int,
+        split_depth: int = 0,
+    ) -> None:
+        """出力上限・timeoutの区間だけを、全文を保持して小分けにする。"""
+
+        if callable(self.character_progress_callback):
+            self.character_progress_callback()
+        user = json.dumps({
+            "analysis_reference": analysis,
+            "source_part": source_part,
+            "source_parts": source_parts,
+            "story_content": source,
+            "known_cast": [{"name": item["name"], "aliases": item["aliases"], "role": item["role"]}
+                           for item in roster],
+        }, ensure_ascii=False) + _language_reference(settings) + _knowledge_reference(knowledge_context)
+
+        def validate_candidates(value: Dict[str, Any]) -> List[Dict[str, Any]]:
+            candidates = normalize_cast(value, source)
+            # 別名の不整合も修復要求の対象にし、成功前に実際の一覧を変更しない。
+            merge_cast([dict(item) for item in roster], candidates)
+            return candidates
+
+        try:
+            candidates = self._validated_call(
+                extraction_system, user, schema_name="character_cast", schema=CAST_SCHEMA,
+                task_key="character", normalizer=validate_candidates,
+                validator=lambda value: isinstance(value, list),
+            )
+        except AIProviderError as exc:
+            if (exc.error_category not in {"output_limit", "timeout"} or split_depth >= 2
+                    or len(source) <= CHARACTER_SOURCE_CHUNK_SIZE // 4):
+                raise
+            middle = len(source) // 2
+            boundary = source.rfind("\n\n", len(source) // 3, middle)
+            if boundary >= 0:
+                middle = boundary + 1
+            logger.warning("character source part split source_part=%s input_chars=%s category=%s",
+                           source_part, len(source), exc.error_category)
+            for section in (source[:middle + 300], source[max(0, middle - 300):]):
+                self._character_cast_part(
+                    section, roster, analysis, knowledge_context, settings, extraction_system,
+                    source_part=source_part, source_parts=source_parts, split_depth=split_depth + 1,
+                )
+            return
+        merge_cast(roster, candidates)
+
+    def _character_profile_batch(
+        self,
+        targets: List[Dict[str, Any]],
+        roster: List[Dict[str, Any]],
+        analysis: Dict[str, Any],
+        knowledge_context: Optional[Dict[str, Any]],
+        settings: Optional[Dict[str, Any]],
+        design_system: str,
+    ) -> List[Dict[str, Any]]:
+        """出力上限・timeoutの対象だけを分割し、完成済みの他バッチを再生成しない。"""
+
+        if callable(self.character_progress_callback):
+            self.character_progress_callback()
+        user = json.dumps({
+            "analysis_reference": analysis,
+            "full_cast": [{"name": item["name"], "role": item["role"]} for item in roster],
+            "target_cast": targets,
+        }, ensure_ascii=False)
+        user += ("\n人物一覧は原稿全体から抽出済みです。target_castの全員を1人につき1設定、"
+                 "名前を変えず、同じ順序でcharactersへ返してください。各人のsource_quotesを根拠にし、"
+                 "未知の実在人物の属性は未設定としてください。別名・集合名で統合したり、人物を追加・省略しないでください。")
+        user += _language_reference(settings) + _knowledge_reference(knowledge_context)
+        batch_system = (
+            design_system + f"\n全員分の人物設定はアプリ側で複数回に分けて作成します。"
+            f"この要求で設定を作成する対象はtarget_castの{len(targets)}人だけです。"
+            "full_castは関係性を理解するための参考一覧であり、今回の作成対象ではありません。"
+            "charactersにはtarget_castのnameをそのまま使い、各人に1設定だけ返してください。"
+            "対象外の人物を追加せず、対象者を省略・重複させないでください。"
+        )
+        character_array = CHARACTER_SCHEMA["properties"]["characters"]
+        batch_schema = {
+            **CHARACTER_SCHEMA,
+            "properties": {"characters": {
+                **character_array, "minItems": len(targets), "maxItems": len(targets),
+                "items": {**character_array["items"], "properties": {
+                    **character_array["items"]["properties"],
+                    "name": {"type": "string", "enum": [item["name"] for item in targets]},
+                }},
+            }},
+        }
+        try:
+            return self._validated_call(
+                batch_system, user, schema_name="character_bible", schema=batch_schema,
+                task_key="character", normalizer=lambda value: normalize_character_batch(value, targets),
+                validator=lambda value: isinstance(value, list) and bool(value),
+            )
+        except AIProviderError as exc:
+            if exc.error_category not in {"output_limit", "timeout"} or len(targets) <= 1:
+                raise
+            logger.warning("character profile batch split character_count=%s category=%s",
+                           len(targets), exc.error_category)
+            middle = len(targets) // 2
+            return self._character_profile_batch(
+                targets[:middle], roster, analysis, knowledge_context, settings, design_system,
+            ) + self._character_profile_batch(
+                targets[middle:], roster, analysis, knowledge_context, settings, design_system,
+            )
 
     def storyboard(
         self,

@@ -96,6 +96,7 @@ class Settings:
     openai_max_retries: int
     openai_storyboard_max_retries: int
     openai_max_output_tokens: int
+    openai_character_max_output_tokens: int
     storyboard_job_stale_seconds: int
     storyboard_batch_pages: int
 
@@ -186,7 +187,7 @@ def get_settings() -> Settings:
                 600.0,
                 _float_env(
                     "OPENAI_CHARACTER_TIMEOUT_SECONDS",
-                    180.0,
+                    300.0,
                 ),
             ),
         ),
@@ -196,6 +197,10 @@ def get_settings() -> Settings:
             min(2, _int_env("OPENAI_STORYBOARD_MAX_RETRIES", 1)),
         ),
         openai_max_output_tokens=max(512, min(32_000, _int_env("OPENAI_MAX_OUTPUT_TOKENS", 12_000))),
+        # 高い推論強度でも、人物一覧と詳細設定を書き終えるための余地を確保する。
+        openai_character_max_output_tokens=max(
+            512, min(32_000, _int_env("OPENAI_CHARACTER_MAX_OUTPUT_TOKENS", 25_000))
+        ),
         # Responses APIの限定再試行より十分長く、永久processingは残さない。
         storyboard_job_stale_seconds=max(
             300, min(3_600, _int_env("STORYBOARD_JOB_STALE_SECONDS", 900))
