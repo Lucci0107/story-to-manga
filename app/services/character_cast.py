@@ -6,12 +6,18 @@ import re
 import unicodedata
 from typing import Any, Dict, List
 
-from ..schemas import MAX_CHARACTERS, normalize_characters
+from ..schemas import (
+    CHARACTER_NAME_MAX_LENGTH,
+    CHARACTER_TEXT_MAX_LENGTH,
+    MAX_CHARACTERS,
+    normalize_characters,
+)
 from .story_profile import build_story_source_profile
 
 
 CHARACTER_SOURCE_CHUNK_SIZE = 24_000
 CHARACTER_PROFILE_BATCH_SIZE = 4
+UNKNOWN_APPEARANCE = "未設定（外見は資料確認後に設定してください）"
 CAST_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -21,11 +27,14 @@ CAST_SCHEMA: Dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
-                    "aliases": {"type": "array", "maxItems": 4, "items": {"type": "string"}},
-                    "role": {"type": "string"},
+                    "name": {"type": "string", "minLength": 1, "maxLength": CHARACTER_NAME_MAX_LENGTH},
+                    "aliases": {"type": "array", "maxItems": 4, "items": {
+                        "type": "string", "minLength": 1, "maxLength": CHARACTER_NAME_MAX_LENGTH,
+                    }},
+                    "role": {"type": "string", "minLength": 1, "maxLength": CHARACTER_TEXT_MAX_LENGTH},
                     "source_quotes": {"type": "array", "minItems": 1, "maxItems": 8,
-                                      "items": {"type": "string"}},
+                                      "items": {"type": "string", "minLength": 1,
+                                                "maxLength": CHARACTER_TEXT_MAX_LENGTH}},
                 },
                 "required": ["name", "aliases", "role", "source_quotes"],
                 "additionalProperties": False,
@@ -120,28 +129,50 @@ def normalize_cast(value: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
 
     raw = value.get("cast")
     if not isinstance(raw, list) or len(raw) > MAX_CHARACTERS:
-        raise ValueError("人物一覧の形式または人数が不正です")
+        raise CharacterValidationError(
+            "人物一覧の形式または人数が不正です", category="character_format",
+            repair_hint=f"castは{MAX_CHARACTERS}人以下の人物オブジェクトの配列にしてください。",
+        )
     normalized_source, positions = _evidence_text(source)
     result: List[Dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
-            raise ValueError("人物候補の形式が不正です")
-        name = str(item.get("name") or "").strip()
-        role = str(item.get("role") or "").strip()
+            raise CharacterValidationError(
+                "人物候補の形式が不正です", category="character_format",
+                repair_hint="castの各要素はname・aliases・role・source_quotesを持つオブジェクトにしてください。",
+            )
+        name = _character_name(item.get("name"))
+        role = item.get("role")
         quotes = item.get("source_quotes")
         aliases = item.get("aliases")
-        if not name or len(name) > 80 or not role or len(role) > 2_000:
-            raise ValueError("人物名または役割が不正です")
+        if not isinstance(role, str) or not role.strip() or len(role) > CHARACTER_TEXT_MAX_LENGTH:
+            raise CharacterValidationError(
+                "人物の役割が空欄、または保存できる長さを超えています", category="character_role",
+                repair_hint=f"roleは空欄にせず、{CHARACTER_TEXT_MAX_LENGTH}文字以内の文字列で"
+                            "原稿上の役割を簡潔に記載してください。不明な場合は未設定と記載してください。",
+            )
         if not isinstance(quotes, list) or not 1 <= len(quotes) <= 8:
-            raise ValueError("人物の抽出根拠がありません")
-        if any(not isinstance(quote, str) or not quote.strip() for quote in quotes):
-            raise ValueError("人物の抽出根拠の形式が不正です")
+            raise CharacterValidationError(
+                "人物の抽出根拠がありません", category="character_evidence",
+                repair_hint="source_quotesに、その人物の存在を示す原文の連続した短い引用を1〜8件入れてください。",
+            )
+        if any(not isinstance(quote, str) or not quote.strip()
+               or len(quote) > CHARACTER_TEXT_MAX_LENGTH for quote in quotes):
+            raise CharacterValidationError(
+                "人物の抽出根拠の形式または長さが不正です", category="character_evidence",
+                repair_hint=f"source_quotesの各要素は空欄にせず、{CHARACTER_TEXT_MAX_LENGTH}文字以内の"
+                            "原文からコピーした連続する短い引用にしてください。",
+            )
         verified_quotes = [_source_quote(quote, source, normalized_source, positions) for quote in quotes]
         if not isinstance(aliases, list) or len(aliases) > 4 or any(
-            not isinstance(alias, str) or not alias.strip() or len(alias) > 80 for alias in aliases
+            not isinstance(alias, str) or not alias.strip() or len(alias) > CHARACTER_NAME_MAX_LENGTH for alias in aliases
         ):
-            raise ValueError("人物の別名が不正です")
-        result.append({"name": name, "role": role,
+            raise CharacterValidationError(
+                "人物の別名の形式または長さが不正です", category="character_aliases",
+                repair_hint=f"aliasesは4件以下、各{CHARACTER_NAME_MAX_LENGTH}文字以内の別名の配列にしてください。"
+                            "別名が不明な場合は空配列にし、空文字列の要素や一般呼称を入れないでください。",
+            )
+        result.append({"name": name, "role": role.strip(),
                        "aliases": list(dict.fromkeys(alias.strip() for alias in aliases)),
                        "source_quotes": list(dict.fromkeys(verified_quotes))})
     return result
@@ -149,6 +180,47 @@ def normalize_cast(value: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
 
 def _identity_key(name: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", name)).casefold()
+
+
+def _character_name(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > CHARACTER_NAME_MAX_LENGTH:
+        raise CharacterValidationError(
+            "人物名が空欄、または保存できる長さを超えています", category="character_name",
+            repair_hint=f"nameは{CHARACTER_NAME_MAX_LENGTH}文字以内の空でない文字列にしてください。"
+                        "原稿またはtarget_castの人物名を使い、長い説明はroleへ移してください。",
+        )
+    return value.strip()
+
+
+def normalize_character_profiles(value: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """外見が未確認でも人物を保持し、確認済みの属性だけを保存する。"""
+
+    raw = value.get("characters")
+    if not isinstance(raw, list) or not raw or len(raw) > MAX_CHARACTERS:
+        raise CharacterValidationError(
+            "人物設定の形式または人数が不正です", category="character_format",
+            repair_hint=f"charactersは1〜{MAX_CHARACTERS}人の人物オブジェクトの配列にしてください。",
+        )
+    profiles: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise CharacterValidationError(
+                "人物設定の形式が不正です", category="character_format",
+                repair_hint="charactersの各要素は指定されたJSON Schemaの人物オブジェクトにしてください。",
+            )
+        name = _character_name(item.get("name"))
+        appearance = item.get("appearance")
+        if appearance is not None and not isinstance(appearance, str):
+            raise CharacterValidationError(
+                "人物の外見設定が文字列ではありません", category="character_appearance",
+                repair_hint="appearanceは文字列にしてください。外見が未確認なら未設定と記載し、属性を創作しないでください。",
+            )
+        profiles.append({**item, "name": name})
+    characters = normalize_characters(profiles)
+    for character in characters:
+        if not (character.get("appearance") or "").strip():
+            character["appearance"] = UNKNOWN_APPEARANCE
+    return characters
 
 
 def merge_cast(roster: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> None:
@@ -169,7 +241,11 @@ def merge_cast(roster: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -
             )
         if not matches:
             if len(roster) >= MAX_CHARACTERS:
-                raise ValueError(f"人物が保存上限の{MAX_CHARACTERS}人を超えています。漫画化する範囲を分けてください")
+                raise CharacterValidationError(
+                    f"人物が保存上限の{MAX_CHARACTERS}人を超えています。漫画化する範囲を分けてください",
+                    category="character_limit",
+                    repair_hint="castから同一人物の重複を除き、known_castのnameを再利用してください。",
+                )
             roster.append(dict(candidate))
             continue
         existing = matches[0]
@@ -178,7 +254,7 @@ def merge_cast(roster: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -
         existing["source_quotes"] = list(dict.fromkeys(existing["source_quotes"]
                                                        + candidate["source_quotes"]))
         if candidate["role"] not in existing["role"]:
-            existing["role"] = (existing["role"] + " / " + candidate["role"])[:2_000]
+            existing["role"] = (existing["role"] + " / " + candidate["role"])[:CHARACTER_TEXT_MAX_LENGTH]
 
 
 def normalize_character_batch(value: Dict[str, Any], roster: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -205,9 +281,7 @@ def normalize_character_batch(value: Dict[str, Any], roster: List[Dict[str, Any]
             repair_hint="charactersのnameがtarget_castと一致しないか重複しています。"
                         "target_castのnameをそのままコピーし、全員に1設定ずつ作成してください。",
         )
-    if any(not str(item.get("appearance") or "").strip() for item in raw):
-        raise ValueError("人物の外見設定がありません")
-    lookup = {_identity_key(item["name"]): item for item in normalize_characters(raw)}
+    lookup = {_identity_key(item["name"]): item for item in normalize_character_profiles(value)}
     result = []
     for person in roster:
         character = lookup[_identity_key(person["name"])]

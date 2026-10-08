@@ -18,6 +18,8 @@ from .services.reading_order import (
 
 ALLOWED_STEPS = {"story", "knowledge", "analysis", "settings", "characters", "storyboard", "generate", "edit", "qa", "preview", "export"}
 MAX_CHARACTERS = 64
+CHARACTER_NAME_MAX_LENGTH = 80
+CHARACTER_TEXT_MAX_LENGTH = 2_000
 ALLOWED_DIRECTIONS = set(LEGACY_DIRECTION_ALIASES)
 ALLOWED_COLOR_MODES = {"bw", "color"}
 ALLOWED_STYLES = {"dynamic", "elegant", "cinematic", "comedy", "minimal", "webtoon"}
@@ -510,14 +512,14 @@ def normalize_characters(value: Any) -> List[Dict[str, Any]]:
     for item in value[:MAX_CHARACTERS]:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name", "人物"))[:80].strip() or "人物"
+        name = str(item.get("name", "人物"))[:CHARACTER_NAME_MAX_LENGTH].strip() or "人物"
         character = {"id": str(item.get("id") or uuid.uuid4()), "name": name}
         for field in fields:
-            character[field] = str(item.get(field, ""))[:2_000] if item.get(field) is not None else None
+            character[field] = str(item.get(field, ""))[:CHARACTER_TEXT_MAX_LENGTH] if item.get(field) is not None else None
         roles = item.get("reference_roles", ["CHARACTER_IDENTITY"] if item.get("reference_image_url") else [])
         character["reference_roles"] = [role for role in roles if role in {"CHARACTER_IDENTITY", "STYLE_REFERENCE"}][:2] if isinstance(roles,list) else []
         character["knowledge_refs"] = normalize_knowledge_refs(item.get("knowledge_refs", []))
-        for key, length in (("aliases", 80), ("source_quotes", 2_000)):
+        for key, length in (("aliases", CHARACTER_NAME_MAX_LENGTH), ("source_quotes", CHARACTER_TEXT_MAX_LENGTH)):
             entries = item.get(key, [])
             character[key] = [entry[:length] for entry in entries[:16] if isinstance(entry, str)] if isinstance(entries, list) else []
         character["sheet_ratio"] = item.get("sheet_ratio") if item.get("sheet_ratio") in {"3:4", "3:2"} else "3:4"

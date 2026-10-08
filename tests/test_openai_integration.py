@@ -342,6 +342,75 @@ def test_character_quote_repair_uses_the_specific_validation_reason_without_logg
     assert "葵" not in caplog.text and "主人公の決断" not in caplog.text
 
 
+@pytest.mark.parametrize("source_size", [100, 30_000])
+def test_unknown_real_person_appearance_succeeds_without_repeating_profile_generation(
+    monkeypatch: pytest.MonkeyPatch, source_size: int,
+) -> None:
+    quote = "協力者は相談に応じた。"
+    source = quote + "\n\n" + "日々の出来事を振り返る。" * (source_size // 12)
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requests.append(payload)
+        if payload["text"]["format"]["name"] == "character_cast":
+            context = json.JSONDecoder().raw_decode(payload["input"])[0]
+            return FakeHTTPResponse(response_with_json({"cast": [
+                {"name": "協力者", "role": "相談相手", "aliases": [], "source_quotes": [quote]},
+            ] if quote in context["story_content"] else []}))
+        return FakeHTTPResponse(response_with_json({"characters": [{
+            **valid_character(), "name": "協力者", "appearance": "", "age_range": "", "clothing": "",
+        }]}))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIProvider({"character_model": "gpt-6.1-sol", "reasoning_effort": "xhigh"})
+    result = provider.characters(source, valid_analysis(), {"prompt_text": "不明な外見は未設定として保持する。"})
+    assert result[0]["appearance"].startswith("未設定")
+    assert result[0]["age_range"] == result[0]["clothing"] == ""
+    assert len([item for item in requests if item["text"]["format"]["name"] == "character_bible"]) == 1
+    assert all(item["model"] == "gpt-6.1-sol" and item["reasoning"] == {"effort": "xhigh"}
+               and "<knowledge_reference>" in item["input"] for item in requests)
+
+
+@pytest.mark.parametrize("field,bad_value,category", [
+    ("role", "", "character_role"), ("aliases", [""], "character_aliases"),
+])
+def test_cast_invalid_fields_are_repaired_or_reported_without_private_values(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    field: str, bad_value: object, category: str,
+) -> None:
+    quote = "非公開の人物は相談に応じた。"
+    person = {"name": "非公開の人物", "role": "相談相手", "aliases": [], "source_quotes": [quote]}
+    requests: list[dict] = []
+    recover = True
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requests.append(payload)
+        item = person if recover and len(requests) == 2 else {**person, field: bad_value}
+        return FakeHTTPResponse(response_with_json({"cast": [item]}))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    roster: list[dict] = []
+    provider = OpenAIProvider()
+    provider._character_cast_part(quote, roster, {}, None, None, "人物を抽出する。",
+                                 source_part=1, source_parts=1)
+    assert len(roster) == 1 and len(requests) == 2
+    assert field in requests[1]["input"].split("前回の出力を利用せず", 1)[1]
+    recover = False
+    requests.clear()
+    with pytest.raises(AIProviderError) as raised:
+        provider._character_cast_part(quote, [], {}, None, None, "人物を抽出する。",
+                                     source_part=1, source_parts=1)
+    assert len(requests) == 2
+    assert raised.value.error_category == category and not raised.value.retryable
+    assert "人物一覧の抽出" in str(raised.value)
+    assert category in caplog.text
+    assert "非公開の人物" not in str(raised.value) + caplog.text
+
+
 @pytest.mark.parametrize("body,category", [
     ({"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
       "output_text": '{"characters":[]}'}, "output_limit"),

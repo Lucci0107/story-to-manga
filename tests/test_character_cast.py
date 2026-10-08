@@ -7,6 +7,7 @@ import pytest
 from app.schemas import MAX_CHARACTERS, normalize_characters
 from app.services.character_cast import (
     CHARACTER_SOURCE_CHUNK_SIZE,
+    CharacterValidationError,
     character_source_chunks,
     merge_cast,
     normalize_cast,
@@ -96,3 +97,40 @@ def test_every_roster_member_gets_exactly_one_profile() -> None:
     raw["characters"][-1]["name"] = raw["characters"][0]["name"]
     with pytest.raises(ValueError, match="省略または重複"):
         normalize_character_batch(raw, roster)
+
+
+@pytest.mark.parametrize("appearance", ["", " \n\t", None])
+def test_unknown_appearance_keeps_the_person_without_inventing_attributes(appearance: str | None) -> None:
+    roster = [person("氏名不明の協力者")]
+    result = normalize_character_batch({"characters": [{
+        "name": roster[0]["name"], "appearance": appearance, "age_range": "", "clothing": "",
+    }]}, roster)
+    assert len(result) == 1
+    assert result[0]["appearance"].startswith("未設定")
+    assert "確認" in result[0]["appearance"]
+    assert result[0]["age_range"] == result[0]["clothing"] == ""
+    assert result[0]["source_quotes"] == roster[0]["source_quotes"]
+
+
+def test_profile_name_whitespace_does_not_truncate_the_canonical_name() -> None:
+    name = "名" * 80
+    result = normalize_character_batch({"characters": [{"name": f"  {name}  ", "appearance": "未設定"}]},
+                                       [person(name)])
+    assert result[0]["name"] == name
+
+
+@pytest.mark.parametrize("field,value,category", [
+    ("name", "", "character_name"),
+    ("name", "長" * 81, "character_name"),
+    ("role", "", "character_role"),
+    ("aliases", [""], "character_aliases"),
+    ("source_quotes", [], "character_evidence"),
+])
+def test_cast_validation_has_safe_field_specific_repair_hints(field: str, value: object, category: str) -> None:
+    item = person("非公開の人物名")
+    item[field] = value
+    with pytest.raises(CharacterValidationError) as raised:
+        normalize_cast({"cast": [item]}, "非公開の人物名が主人公を支えた。")
+    assert raised.value.error_category == category
+    assert field in raised.value.repair_hint
+    assert "非公開の人物名" not in str(raised.value) + raised.value.repair_hint
