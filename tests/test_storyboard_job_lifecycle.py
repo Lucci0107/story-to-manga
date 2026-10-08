@@ -28,7 +28,10 @@ def _client_and_project(tmp_path: Path) -> tuple[TestClient, dict]:
         data={"title": "Job lifecycle", "story_text": "蒼は灯台へ向かい、凛に決意を伝えた。"},
     ).json()["project"]
     assert client.post(f"/api/projects/{project['id']}/analysis").status_code == 200
-    assert client.post(f"/api/projects/{project['id']}/characters").status_code == 200
+    proposal = client.post(f"/api/projects/{project['id']}/character-proposal").json()["project"]["character_proposal"]
+    assert client.post(f"/api/projects/{project['id']}/characters", json={
+        "proposal_id": proposal["id"], "selected_candidate_ids": proposal["selected_candidate_ids"],
+    }).status_code == 200
     return client, client.get(f"/api/projects/{project['id']}").json()["project"]
 
 

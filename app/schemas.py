@@ -67,6 +67,7 @@ ALLOWED_PROJECT_STATUSES = {
     "draft",
     "analysis_ready",
     "characters_ready",
+    "character_proposal_ready",
     "storyboard_ready",
     "processing",
     "partially_failed",
@@ -227,6 +228,15 @@ class ProjectPatch(BaseModel):
         if value is not None and value not in ALLOWED_PROJECT_STATUSES:
             raise ValueError("statusが不正です")
         return value
+
+
+class CharacterProposalRequest(BaseModel):
+    refresh: bool = False
+
+
+class CharacterSelectionRequest(BaseModel):
+    proposal_id: str = Field(min_length=1, max_length=80)
+    selected_candidate_ids: List[str] = Field(max_length=MAX_CHARACTERS)
 
 
 class SettingsRecommendationRequest(BaseModel):

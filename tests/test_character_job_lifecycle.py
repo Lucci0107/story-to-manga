@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app import db
 from app.main import app, process_character_job
 from app.services.ai_pipeline import AIProviderError, DemoAIProvider
+from app.services.character_proposal import character_input_fingerprint
 
 
 def _client_and_project(tmp_path: Path) -> tuple[TestClient, dict]:
@@ -28,6 +29,7 @@ def _client_and_project(tmp_path: Path) -> tuple[TestClient, dict]:
         data={"title": "Character Job", "story_text": "蒼は灯台へ向かい、凛に決意を伝えた。"},
     ).json()["project"]
     assert client.post(f"/api/projects/{project['id']}/analysis").status_code == 200
+    assert client.post(f"/api/projects/{project['id']}/character-proposal").status_code == 200
     return client, client.get(f"/api/projects/{project['id']}").json()["project"]
 
 
@@ -37,18 +39,24 @@ class ExternalCharacterProvider(DemoAIProvider):
 
 
 class FailingCharacterProvider(ExternalCharacterProvider):
-    def characters(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def generate_character_profiles(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         raise AIProviderError("テスト用のCharacter生成失敗", retryable=False)
 
 
 class InvalidCharacterProvider(ExternalCharacterProvider):
-    def characters(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def generate_character_profiles(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         return [{"name": "蒼", "appearance": ""}]
 
 
 def _run_job(project: dict, provider: DemoAIProvider, monkeypatch: pytest.MonkeyPatch) -> dict:
+    proposal = project["character_proposal"]
+    project = db.save_character_selection(project["id"], project["user_id"], proposal["id"], proposal["selected_candidate_ids"], confirmed=True)
+    assert project
     job, created = db.create_async_generation_job(
-        project["id"], "character", f"character:{project['id']}"
+        project["id"], "character", f"character:{project['id']}", target_id="profiles",
+        input_payload={"stage": "profiles", "proposal_id": proposal["id"],
+                       "selected_candidate_ids": proposal["selected_candidate_ids"],
+                       "input_fingerprint": character_input_fingerprint(project)},
     )
     assert created and job
     monkeypatch.setattr("app.main.get_ai_provider", lambda _settings: provider)
@@ -75,7 +83,7 @@ def test_character_job_completes_and_persists_characters(
     "provider,error_text",
     [
         (FailingCharacterProvider(), "テスト用のCharacter生成失敗"),
-        (InvalidCharacterProvider(), "キャラクター設定"),
+        (InvalidCharacterProvider(), "詳細設定"),
     ],
 )
 def test_character_failure_reaches_retryable_terminal_state(
@@ -124,8 +132,8 @@ def test_stale_character_job_recovers_and_status_api_exposes_terminal_state(
     stale_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     with db.connection() as connection:
         connection.execute(
-            "UPDATE generation_jobs SET created_at = ?, updated_at = ? WHERE id = ?",
-            (stale_time, stale_time, job["id"]),
+            "UPDATE generation_jobs SET updated_at = ? WHERE id = ?",
+            (stale_time, job["id"]),
         )
 
     status = client.get(f"/api/projects/{project['id']}/generation/status")
@@ -179,7 +187,10 @@ def test_external_character_endpoint_returns_persisted_job(
         "app.main.get_ai_provider", lambda _settings: ExternalCharacterProvider()
     )
 
-    response = client.post(f"/api/projects/{project['id']}/characters")
+    proposal = project["character_proposal"]
+    response = client.post(f"/api/projects/{project['id']}/characters", json={
+        "proposal_id": proposal["id"], "selected_candidate_ids": proposal["selected_candidate_ids"],
+    })
 
     assert response.status_code == 202
     payload = response.json()

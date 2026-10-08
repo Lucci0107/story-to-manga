@@ -527,6 +527,8 @@
     let characterPollingState = "idle";
     let characterRecoveryNotice = null;
     let characterStateSyncInFlight = false;
+    let characterCandidateDraftId = null;
+    let selectedCharacterCandidateIds = new Set();
     let knowledgeRequestId = 0;
     let qaKnowledgeWarningOpen = false;
     let recommendationLoading = false;
@@ -713,7 +715,7 @@
     }
 
     function statusLabel(status) {
-      const labels = { draft: "下書き", analysis_ready: "解析済み", characters_ready: "人物設定済み", storyboard_ready: "ネーム準備済み", processing: "生成中", partially_failed: "一部エラー", completed: "完成に近い" };
+      const labels = { draft: "下書き", analysis_ready: "解析済み", characters_ready: "人物設定済み", character_proposal_ready: "人物候補の確認待ち", storyboard_ready: "ネーム準備済み", processing: "生成中", partially_failed: "一部エラー", completed: "完成に近い" };
       return labels[status] || "下書き";
     }
 
@@ -885,7 +887,7 @@
 
     function renderProgress() {
       const hasAnalysis = Boolean(state.analysis);
-      const hasCharacters = (state.characters || []).length > 0;
+      const hasCharacters = (state.active_characters || state.characters || []).length > 0;
       const hasStoryboard = (state.storyboard || []).length > 0;
       const hasGenerated = generatedCount() > 0;
       const completed = { story: Boolean(state.original_text), knowledge: (state.knowledge || []).some(function (item) { return item.enabled; }), analysis: hasAnalysis, settings: Boolean(state.settings), characters: hasCharacters, storyboard: hasStoryboard, generate: hasGenerated, edit: hasGenerated, qa: Boolean(state.quality_check), preview: hasGenerated, export: hasGenerated };
@@ -1179,6 +1181,10 @@
       return "/api/projects/" + encodeURIComponent(state.id) + "/generation/status";
     }
 
+    function characterOperationMessage(job) {
+      return job?.target_id === "proposal" ? "主要人物の候補を提案しています…" : "選択した人物の設定を生成しています…";
+    }
+
     function clearCharacterPollingTimer() {
       if (characterPollingTimer) window.clearTimeout(characterPollingTimer);
       characterPollingTimer = null;
@@ -1273,8 +1279,8 @@
         await fetchProject(false).catch(function () {});
         characterRecoveryNotice = null;
         if (characterJobState && ["queued", "processing"].includes(characterJobState.status)) {
-          showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "サーバー上のJob状態を復元しています", submessage: "確認できた状態に戻して処理を追跡します。" });
-          await pollCharacterJob(characterJobState.id, "キャラクター設定を生成しています…");
+          showProcessingDialog({ message: characterOperationMessage(characterJobState), progress: "サーバー上の処理状態を復元しています", submessage: "確認できた状態に戻して処理を追跡します。" });
+          await pollCharacterJob(characterJobState.id, characterOperationMessage(characterJobState));
         } else {
           render();
           showToast("保存済みの人物設定状態を確認しました");
@@ -1331,7 +1337,7 @@
             characterRecoveryNotice = null;
             characterPollingState = "completed";
             finished = true;
-            showToast("キャラクターバイブルを作成しました");
+            showToast(job.target_id === "proposal" ? "主要人物の候補を提案しました。対象者を確認してください" : "選択した人物の設定を作成しました");
             render();
             return;
           }
@@ -1349,8 +1355,8 @@
           }
           updateProcessingDialog({
             message: operationMessage,
-            progress: job.status === "queued" ? "生成キューで順番を待っています" : "AIが人物設定を作成しています",
-            submessage: "完了後に人物設定を保存します。画面を閉じても処理は継続します。"
+            progress: job.status === "queued" ? "生成キューで順番を待っています" : job.target_id === "proposal" ? "原稿から人物の役割・重要度を確認しています" : "確定した対象だけの詳細設定を作成しています",
+            submessage: job.target_id === "proposal" ? "提案を保存したところで停止します。詳細設定は対象者の確認後に作成します。" : "設定済みの人物は再利用します。完了後に新しい人物の設定を保存します。"
           });
           if (activeStep === "characters") render();
         }
@@ -1393,8 +1399,8 @@
           return;
         }
         if (!["queued", "processing"].includes(characterJobState.status)) return;
-        showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "サーバー上の処理状態を復元しています", submessage: "再読み込み前に開始したJobを引き続き確認します。" });
-        await pollCharacterJob(characterJobState.id, "キャラクター設定を生成しています…");
+        showProcessingDialog({ message: characterOperationMessage(characterJobState), progress: "サーバー上の処理状態を復元しています", submessage: "再読み込み前に開始したJobを引き続き確認します。" });
+        await pollCharacterJob(characterJobState.id, characterOperationMessage(characterJobState));
       } catch (error) {
         if (characterRecoveryKind(error) === "not_found") await rediscoverCharacterStateAfterNotFound();
         else showCharacterRecoveryNotice(characterRecoveryKind(error));
@@ -1404,42 +1410,95 @@
       }
     }
 
+    function characterProposalPanel(busy) {
+      const proposal = state.character_proposal;
+      if (!proposal) return '<section class="surface-panel panel-padding character-proposal"><h3>まず主要人物を提案します</h3><p>原稿全体から候補を調べ、出現率と物語上の重要度を提示します。対象を選んで確定すると、その人物だけの詳細設定を作成します。</p><button type="button" class="primary-button compact-button" data-propose-characters' + (busy ? ' disabled' : '') + '>主要人物を提案</button></section>';
+      if (characterCandidateDraftId !== proposal.id) {
+        characterCandidateDraftId = proposal.id;
+        selectedCharacterCandidateIds = new Set(proposal.selected_candidate_ids || []);
+      }
+      const disabled = busy || proposal.stale ? ' disabled' : '';
+      const importanceLabels = { 5: '主役', 4: '主要人物', 3: '継続する脇役', 2: '局所的な役割', 1: '一時的な登場' };
+      const candidateCard = function (person) {
+        const checked = selectedCharacterCandidateIds.has(person.id) ? ' checked' : '';
+        const sections = (person.appearing_sections || []).map(function (section) { return section.title; }).join(' / ');
+        const quotes = (person.source_quotes || []).map(function (quote) { return '<blockquote>' + escapeHtml(quote) + '</blockquote>'; }).join('');
+        return '<article class="candidate-card"><label class="candidate-selection"><input type="checkbox" data-character-candidate="' + escapeAttr(person.id) + '" aria-label="' + escapeAttr(person.name + 'を設定対象に選ぶ') + '"' + checked + disabled + '><span><strong>' + escapeHtml(person.name) + '</strong><span class="candidate-role">' + escapeHtml(person.role) + '</span></span></label><div class="candidate-tags"><span>' + escapeHtml(importanceLabels[person.importance] || '確認対象') + '</span>' + (person.recommended ? '<span class="candidate-recommended">AI推奨</span>' : '') + (person.existing_character_id ? '<span>設定済み</span>' : '') + '</div><p class="candidate-frequency">出現率 <strong>' + Number(person.appearance_rate || 0) + '%</strong><span>' + Number(person.appearance_section_count || 0) + ' / ' + Number(proposal.section_count || 0) + escapeHtml(proposal.section_label || '区間') + ' ・ 名前の言及 ' + Number(person.mention_count || 0) + '回</span></p><p class="candidate-reason">' + escapeHtml(person.recommendation_reason) + '</p><details class="candidate-evidence"><summary>登場箇所・抽出根拠</summary><p>' + escapeHtml(sections || '名前による出現箇所は未確認') + '</p>' + quotes + '</details></article>';
+      };
+      const recommended = proposal.candidates.filter(function (person) { return person.recommended; });
+      const others = proposal.candidates.filter(function (person) { return !person.recommended; });
+      const othersSelected = others.some(function (person) { return selectedCharacterCandidateIds.has(person.id); });
+      const stale = proposal.stale ? '<div class="form-notice error-notice"><p>原稿・解析が更新されています。主要人物を再提案して選び直してください。</p></div>' : '';
+      return '<section class="surface-panel panel-padding character-proposal"><div class="candidate-proposal-heading"><div><span class="eyebrow">1. 候補を確認</span><h3>主要人物の提案</h3><p>AI推奨 ' + recommended.length + '人 ／ 候補 ' + proposal.candidates.length + '人。詳細設定を作る対象を選んでください。</p></div><button type="button" class="secondary-button compact-button" data-propose-characters data-refresh-proposal' + (busy ? ' disabled' : '') + '>主要人物を再提案</button></div>' + stale + '<p class="field-help">' + escapeHtml(proposal.frequency_note) + '</p><div class="candidate-selection-tools"><button type="button" class="text-button" data-select-recommended' + disabled + '>AI推奨だけ選ぶ</button><button type="button" class="text-button" data-clear-candidates' + disabled + '>選択を解除</button></div><div class="candidate-grid">' + recommended.map(candidateCard).join('') + '</div>' + (others.length ? '<details class="candidate-others"' + (othersSelected ? ' open' : '') + '><summary>その他の候補（' + others.length + '人）を確認・追加</summary><div class="candidate-grid">' + others.map(candidateCard).join('') + '</div></details>' : '') + '<div class="candidate-confirmation"><div><span class="eyebrow">2. 対象を確定</span><p data-candidate-selection-summary aria-live="polite"></p><p class="field-help">設定済みの人物は再利用します。新しい人物だけ詳細設定を作成し、保存済みの設定を保持します。</p></div><div class="candidate-confirmation-actions"><button type="button" class="secondary-button compact-button" data-save-character-selection' + disabled + '>選択だけ保存</button><button type="button" class="primary-button compact-button" data-confirm-characters' + disabled + '></button></div></div></section>';
+    }
+
+    function updateCharacterCandidateSelection() {
+      const proposal = state.character_proposal;
+      if (!proposal) return;
+      content.querySelectorAll('[data-character-candidate]').forEach(function (input) { input.checked = selectedCharacterCandidateIds.has(input.dataset.characterCandidate); });
+      const selected = proposal.candidates.filter(function (person) { return selectedCharacterCandidateIds.has(person.id); });
+      const newCount = selected.filter(function (person) { return !person.existing_character_id; }).length;
+      const summary = content.querySelector('[data-candidate-selection-summary]');
+      if (summary) summary.textContent = '選択 ' + selected.length + '人（新規 ' + newCount + '人・設定済み ' + (selected.length - newCount) + '人）';
+      const confirm = content.querySelector('[data-confirm-characters]');
+      if (confirm) {
+        confirm.textContent = '選択を確定して' + selected.length + '人の人物設定を作成';
+        confirm.disabled = !selected.length || proposal.stale || characterPolling || characterStateSyncInFlight || ['queued', 'processing'].includes(characterJobState?.status);
+      }
+    }
+
+    async function saveCharacterCandidateSelection() {
+      const proposal = state.character_proposal;
+      const button = content.querySelector('[data-save-character-selection]');
+      if (!proposal || proposal.stale || button?.disabled) return;
+      if (button) button.disabled = true;
+      try {
+        const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/character-proposal/selection', {method: 'PUT', body: JSON.stringify({proposal_id: proposal.id, selected_candidate_ids: [...selectedCharacterCandidateIds]})});
+        state = data.project;
+        showToast('選択を保存しました。人物の詳細設定はまだ生成していません');
+      } catch (error) { showToast(error.message, 'error'); }
+      finally { if (button) button.disabled = false; }
+    }
+
     function renderCharacters() {
       const characters = state.characters || [];
+      const activeCharacters = state.character_proposal?.confirmed_at ? state.active_characters || [] : [];
+      const activeIds = new Set(activeCharacters.map(function (person) { return person.id; }));
+      const storedCharacters = characters.filter(function (person) { return !activeIds.has(person.id); });
       const jobStatus = characterJobState?.status;
       const jobActive = jobStatus === "queued" || jobStatus === "processing"
         || (!characterJobState && state.status === "processing" && state.current_step === "characters");
       const busy = characterPolling || jobActive || characterStateSyncInFlight;
       const disabled = busy ? " disabled" : "";
-      const next = busy
+      const next = busy || !activeCharacters.length
         ? '<div class="save-row"><button type="button" class="primary-button compact-button" data-next-step="storyboard" disabled>ネームを作る <span aria-hidden="true">→</span></button></div>'
         : nextButton("storyboard", "ネームを作る");
-      const actionLabel = jobActive && characterPolling
-        ? "人物設定を作成中…"
-        : jobActive
-          ? "処理状態を再確認"
-          : jobStatus === "failed"
-            ? "人物設定を再試行"
-            : characters.length ? "原稿全体から人物設定を作り直す" : "生成する";
       const jobNotice = jobStatus === "failed"
         ? '<div class="form-notice error-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(characterJobState.error || "人物設定の生成に失敗しました。再試行できます。") + '</p></div>'
         : jobActive
-          ? '<div class="form-notice" role="status"><span class="notice-mark">…</span><p>人物設定を生成しています。再読み込み後もサーバーのJob状態から復元します。</p></div>'
+          ? '<div class="form-notice" role="status"><span class="notice-mark">…</span><p>' + escapeHtml(characterOperationMessage(characterJobState)) + ' 再読み込み後も処理状況を確認できます。</p></div>'
           : "";
       const fields = function (character) {
         const textField = function (key, label, rows) { return '<label class="editor-label">' + escapeHtml(label) + '<textarea data-character-field="' + key + '" rows="' + rows + '">' + escapeHtml(character[key] || "") + '</textarea></label>'; };
         return textField("appearance", "外見", 3) + textField("clothing", "服装", 2) + textField("personality", "性格", 2) + textField("distinguishing_features", "識別ポイント", 2) + textField("visual_prompt", "生成用の一貫性メモ", 2) + textField("negative_constraints", "変えない制約", 2) +
           '<details class="full"><summary>スタイルシート用の詳細設定</summary><div class="character-fields">' + textField("age_range", "年齢（不明は未設定）", 1) + textField("height", "身長・サイズ（不明は未設定）", 1) + textField("body_type", "体格・頭身", 2) + textField("hairstyle", "髪型", 2) + textField("hair_color", "髪色", 1) + textField("eye_characteristics", "目の特徴", 2) + textField("accessories", "既存の小物", 2) + textField("relationship_notes", "人物関係", 2) + textField("palette_notes", "色・素材のメモ", 2) + textField("costume_detail_notes", "衣装詳細・未確認の箇所", 2) + textField("identity_notes", "左右特徴・同一性メモ", 2) + '<label class="editor-label">人物シートの比率<select data-character-field="sheet_ratio"><option value="3:4"' + (character.sheet_ratio !== "3:2" ? ' selected' : '') + '>3:4（縦長）</option><option value="3:2"' + (character.sheet_ratio === "3:2" ? ' selected' : '') + '>3:2（横長）</option></select></label></div></details>';
       };
-      const cards = characters.map(function (character, index) {
+      const renderCharacterCard = function (character, index) {
         return '<article class="surface-panel character-card" data-character-id="' + escapeAttr(character.id) + '"><div class="character-card-header"><div><h3>' + escapeHtml(character.name || "名前未設定") + '</h3><p>' + escapeHtml(character.role || "役割未設定") + ' / ' + escapeHtml(character.age_range || "年齢未設定") + '</p></div><span class="character-stamp">' + String(index + 1).padStart(2, "0") + '</span></div><div class="character-fields">' + '<label class="editor-label">名前<input data-character-field="name" value="' + escapeAttr(character.name || "") + '"></label>' + '<label class="editor-label">役割<input data-character-field="role" value="' + escapeAttr(character.role || "") + '"></label>' + fields(character) + '</div><div class="sheet-actions"><button type="button" class="secondary-button compact-button" data-show-character-sheet="' + escapeAttr(character.id) + '">スタイルシート設計を確認</button></div><div data-character-sheet-view></div></article>';
-      }).join("");
+      };
+      const cards = activeCharacters.map(renderCharacterCard).join("");
+      const storedCards = storedCharacters.map(renderCharacterCard).join("");
       const body = characters.length
-        ? '<div class="callout"><p><strong>登録人物：' + characters.length + '人</strong>　人物ごとにスタイルシート設計を作成できます。</p></div><div class="character-grid">' + cards + '</div><div class="save-row character-save-row"><button type="button" class="secondary-button compact-button" data-regenerate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button><button type="button" class="primary-button compact-button" data-save-characters' + disabled + '>キャラクターを保存</button></div>' + next
-        : '<section class="surface-panel empty-panel"><h3>キャラクターバイブルを作る</h3><p>原稿全体から主要人物・重要な脇役を抽出し、同じ人物を描き続けるための基準を作成します。</p><button type="button" class="primary-button compact-button" data-generate-characters' + disabled + '>' + escapeHtml(actionLabel) + '</button></section>';
-      content.innerHTML = heading("キャラクターを固定する", "同一人物の外見・服装を後続コマへ引き継ぐための設定です。") + renderCharacterRecoveryNotice() + jobNotice + body;
-      content.querySelector("[data-generate-characters]")?.addEventListener("click", generateCharacters);
-      content.querySelector("[data-regenerate-characters]")?.addEventListener("click", generateCharacters);
+        ? '<div class="callout"><p><strong>今回使う人物設定：' + activeCharacters.length + '人</strong> ／ 保存済み：' + characters.length + '人。確定した主要人物だけを新しいネーム作成に使います。</p></div><div class="character-grid">' + cards + '</div>' + (storedCharacters.length ? '<details class="surface-panel panel-padding"><summary>保管中の人物設定（' + storedCharacters.length + '人）を確認・編集</summary><p class="field-help">保存内容を保持しています。今回の制作に使う場合は、上の候補から選択して確定してください。</p><div class="character-grid">' + storedCards + '</div></details>' : '') + '<div class="save-row character-save-row"><button type="button" class="primary-button compact-button" data-save-characters' + disabled + '>キャラクターを保存</button></div>' + next
+        : '<p class="field-help">人物の詳細設定はまだ作成していません。上の候補を確認して、対象者を確定してください。</p>' + next;
+      content.innerHTML = heading("人物を選んで設定する", "主要人物の提案を確認してから、選んだ人物だけの外見・服装などを設定します。") + renderCharacterRecoveryNotice() + jobNotice + characterProposalPanel(busy) + body;
+      content.querySelectorAll('[data-propose-characters]').forEach(function (button) { button.addEventListener('click', function () { generateCharacters('proposal', button.hasAttribute('data-refresh-proposal')); }); });
+      content.querySelectorAll('[data-character-candidate]').forEach(function (input) { input.addEventListener('change', function () { if (input.checked) selectedCharacterCandidateIds.add(input.dataset.characterCandidate); else selectedCharacterCandidateIds.delete(input.dataset.characterCandidate); updateCharacterCandidateSelection(); }); });
+      content.querySelector('[data-select-recommended]')?.addEventListener('click', function () { selectedCharacterCandidateIds = new Set(state.character_proposal.candidates.filter(function (person) { return person.recommended; }).map(function (person) { return person.id; })); updateCharacterCandidateSelection(); });
+      content.querySelector('[data-clear-candidates]')?.addEventListener('click', function () { selectedCharacterCandidateIds.clear(); updateCharacterCandidateSelection(); });
+      content.querySelector('[data-save-character-selection]')?.addEventListener('click', saveCharacterCandidateSelection);
+      content.querySelector('[data-confirm-characters]')?.addEventListener('click', function () { generateCharacters('profiles'); });
+      updateCharacterCandidateSelection();
       content.querySelectorAll("[data-show-character-sheet]").forEach(function(button) { button.addEventListener("click", function() { showCharacterSheet(button); }); });
       content.querySelector("[data-character-recheck]")?.addEventListener("click", recheckCharacterGenerationState);
       content.querySelector("[data-character-reload]")?.addEventListener("click", function () { window.location.reload(); });
@@ -1474,27 +1533,31 @@
       finally { button.disabled = false; }
     }
 
-    async function generateCharacters() {
+    async function generateCharacters(stage, refresh) {
       if (!state.analysis) { showToast("先に物語解析を生成してください", "error"); return; }
       if (characterPolling || characterStateSyncInFlight || ["queued", "processing"].includes(characterJobState?.status)) return;
-      const button = content.querySelector("[data-generate-characters], [data-regenerate-characters]");
-      const originalButtonText = button?.textContent || "生成する";
-      if (button) { button.disabled = true; button.textContent = "人物設定を作成中…"; }
-      showProcessingDialog({ message: "キャラクター設定を生成しています…", progress: "原稿全体の登場人物と関係性を確認しています", submessage: "後続のコマでも同じ人物として描ける設定を作成しています。" });
+      const proposalStage = stage !== 'profiles';
+      const proposal = state.character_proposal;
+      if (!proposalStage && (!proposal || proposal.stale || !selectedCharacterCandidateIds.size)) { showToast('主要人物の候補を確認し、対象者を選択してください', 'error'); return; }
+      const button = content.querySelector(proposalStage ? '[data-propose-characters]' : '[data-confirm-characters]');
+      const originalButtonText = button?.textContent || '主要人物を提案';
+      if (button) { button.disabled = true; button.textContent = proposalStage ? '主要人物を提案中…' : '選択した人物の設定を作成中…'; }
+      const requestBody = proposalStage ? {refresh: Boolean(refresh)} : {proposal_id: proposal.id, selected_candidate_ids: [...selectedCharacterCandidateIds]};
+      showProcessingDialog({ message: proposalStage ? '主要人物の候補を提案しています…' : '選択した人物の設定を生成しています…', progress: proposalStage ? '原稿全体の登場人物と役割を確認しています' : '確認した対象だけの詳細設定を作成します', submessage: proposalStage ? '提案を保存したところで停止します。詳細設定は対象者の確認後に作成します。' : '設定済みの人物は再利用し、新しい人物の設定だけ作成します。' });
       let handedOff = false;
       try {
-        const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/characters", { method: "POST", body: "{}" });
+        const data = await api('/api/projects/' + encodeURIComponent(state.id) + (proposalStage ? '/character-proposal' : '/characters'), {method: 'POST', body: JSON.stringify(requestBody)});
         state = data.project;
         if (data.accepted && data.job?.id) {
           handedOff = true;
           characterJobState = data.job;
           characterRecoveryNotice = null;
-          updateProcessingDialog({ progress: "生成キューへ登録しました", submessage: "サーバー側のJob状態を確認しながら人物設定を保存します。" });
-          await pollCharacterJob(data.job.id, "キャラクター設定を生成しています…");
+          updateProcessingDialog({ progress: '処理を受け付けました', submessage: proposalStage ? '候補の提案まで処理し、ユーザーの確認を待ちます。' : '選択した対象だけの人物設定を保存します。' });
+          await pollCharacterJob(data.job.id, characterOperationMessage(data.job));
           return;
         }
         characterJobState = null;
-        showToast("キャラクターバイブルを作成しました");
+        showToast(proposalStage ? '主要人物の候補を表示しました。対象者を確認してください' : '選択した人物の設定を作成しました');
         render();
       } catch (error) {
         // POST応答だけが失われた場合は再送せず、既存Jobを一度だけ再確認する。
@@ -1504,7 +1567,7 @@
           if (status.project_status) state.status = status.project_status;
           if (characterJobState && ["queued", "processing"].includes(characterJobState.status)) {
             handedOff = true;
-            await pollCharacterJob(characterJobState.id, "キャラクター設定を生成しています…");
+            await pollCharacterJob(characterJobState.id, characterOperationMessage(characterJobState));
             return;
           }
           await fetchProject(false).catch(function () {});

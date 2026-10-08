@@ -11,10 +11,10 @@ from .character_cast import CharacterValidationError
 EXCLUSION_REASONS = {"incidental_person", "reference_only", "generic_or_hypothetical", "background_group"}
 
 
-def cast_review_schema(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+def cast_review_schema(candidates: List[Dict[str, Any]], *, for_proposal: bool = False) -> Dict[str, Any]:
     names = [item["name"] for item in candidates]
     name_schema = {"type": "string", "enum": names}
-    return {
+    schema = {
         "type": "object",
         "properties": {
             "groups": {"type": "array", "minItems": 1, "maxItems": len(names), "items": {
@@ -33,6 +33,14 @@ def cast_review_schema(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         },
         "required": ["groups", "excluded"], "additionalProperties": False,
     }
+    if for_proposal:
+        group = schema["properties"]["groups"]["items"]
+        group["properties"].update({
+            "importance": {"type": "integer", "minimum": 1, "maximum": 5},
+            "recommendation_reason": {"type": "string", "minLength": 1, "maxLength": 240},
+        })
+        group["required"] += ["importance", "recommendation_reason"]
+    return schema
 
 
 def _coverage_error() -> CharacterValidationError:
@@ -44,13 +52,14 @@ def _coverage_error() -> CharacterValidationError:
     )
 
 
-def normalize_cast_review(value: Dict[str, Any], candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def normalize_cast_review(value: Dict[str, Any], candidates: List[Dict[str, Any]], *,
+                          for_proposal: bool = False) -> List[Dict[str, Any]]:
     """全候補の処遇を確認してから、原文の根拠を残して同一人物をまとめる。"""
 
     groups, excluded = value.get("groups"), value.get("excluded")
     if not isinstance(groups, list) or not groups or not isinstance(excluded, list):
         raise _coverage_error()
-    if len(groups) > MAX_CHARACTERS:
+    if not for_proposal and len(groups) > MAX_CHARACTERS:
         raise CharacterValidationError(
             f"固定する人物が保存上限の{MAX_CHARACTERS}人を超えています。漫画化する範囲を分けてください",
             category="character_limit", repair_hint="同一人物の重複を整理し、重要な人物を人数合わせで除外しないでください。",
@@ -66,6 +75,15 @@ def normalize_cast_review(value: Dict[str, Any], candidates: List[Dict[str, Any]
                 or len(set(members)) != len(members)):
             raise _coverage_error()
         seen.update(members)
+        if for_proposal and (
+            type(group.get("importance")) is not int or not 1 <= group["importance"] <= 5
+            or not isinstance(group.get("recommendation_reason"), str)
+            or not group["recommendation_reason"].strip() or len(group["recommendation_reason"]) > 240
+        ):
+            raise CharacterValidationError(
+                "主要人物の重要度・提案理由を確認できません", category="character_recommendation",
+                repair_hint="各groupsに1〜5の整数importanceと240文字以内の空でないrecommendation_reasonを付けてください。",
+            )
     for item in excluded:
         if (not isinstance(item, dict) or not isinstance(item.get("name"), str)
                 or item["name"] not in lookup or item["name"] in seen
@@ -86,5 +104,12 @@ def normalize_cast_review(value: Dict[str, Any], candidates: List[Dict[str, Any]
             "role": " / ".join(dict.fromkeys(member["role"] for member in members))[:CHARACTER_TEXT_MAX_LENGTH],
             "source_quotes": list(dict.fromkeys(quote for member in members for quote in member["source_quotes"])),
             "source_parts": sorted({part for member in members for part in member.get("source_parts", [])}),
+            **({"importance": group["importance"],
+                "recommendation_reason": group["recommendation_reason"].strip()} if for_proposal else {}),
         })
+    if for_proposal:
+        for item in excluded:
+            if item["reason"] == "incidental_person":
+                result.append({**lookup[item["name"]], "importance": 1,
+                               "recommendation_reason": "一時的な登場のため、初期の人物設定対象から外す提案です。必要なら選択できます。"})
     return result

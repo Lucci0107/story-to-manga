@@ -76,7 +76,7 @@ def _bounded_sections(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return result
 
 
-def build_story_source_profile(text: str) -> Dict[str, Any]:
+def build_story_source_profile(text: str, *, include_section_text: bool = False) -> Dict[str, Any]:
     """原作は参照データとして数え、本文を書き換えずに推定用の情報を返す。"""
 
     source = str(text or "").replace("\r\n", "\n").strip()
@@ -117,7 +117,7 @@ def build_story_source_profile(text: str) -> Dict[str, Any]:
     # 独立した章・場面には導入と転換の余白を見込む。単なる分割区間には加算しない。
     if len(selected) > 1:
         reference_pages += substantive
-    return {
+    profile = {
         "source_fingerprint": story_fingerprint(source),
         "source_character_count": len(source),
         "narrative_character_count": len(body),
@@ -130,3 +130,6 @@ def build_story_source_profile(text: str) -> Dict[str, Any]:
         "reference_page_count": max(minimum, reference_pages),
         "sections": _bounded_sections(sections),
     }
+    if include_section_text:
+        profile["section_texts"] = sections
+    return profile

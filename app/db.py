@@ -23,6 +23,7 @@ from .config import get_settings
 from .services.database import DatabaseConnection, connection as database_connection
 from .services.layout import ensure_storyboard_layout
 from .services.model_registry import DEFAULT_AI_MODEL_SETTINGS
+from .services.character_proposal import character_input_fingerprint, merge_generated_characters
 from .services.reading_order import (
     canonicalize_stored_settings,
     canonicalize_storyboard_panel_orders,
@@ -293,6 +294,8 @@ def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
             conn.execute("ALTER TABLE projects ADD COLUMN ai_model_settings_json TEXT")
         if "manga_settings_recommendation_json" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN manga_settings_recommendation_json TEXT")
+        if "character_proposal_json" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN character_proposal_json TEXT")
         if "generation_metadata_json" not in project_columns:
             conn.execute(
                 "ALTER TABLE projects ADD COLUMN generation_metadata_json TEXT NOT NULL DEFAULT '[]'"
@@ -318,6 +321,8 @@ def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
             )
         if "error_category" not in job_columns:
             conn.execute("ALTER TABLE generation_jobs ADD COLUMN error_category TEXT")
+        if "input_json" not in job_columns:
+            conn.execute("ALTER TABLE generation_jobs ADD COLUMN input_json TEXT")
         # Process再起動でBackgroundTasksは復元できないため、取り残したJobとPanelを
         # 失敗状態へ揃え、UIから個別に再試行できるようにする。
         interrupted_message = "処理が中断されました。再試行してください"
@@ -631,6 +636,7 @@ def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             row["manga_settings_recommendation_json"], None
         ),
         "characters": _loads(row["characters_json"], []),
+        "character_proposal": _loads(row["character_proposal_json"], None),
         "storyboard": storyboard,
         "quality_check": _loads(row["quality_check_json"], None),
         "ai_model_settings": _loads(row["ai_model_settings_json"], None),
@@ -1538,7 +1544,8 @@ def create_generation_job(
 
 
 def create_async_generation_job(
-    project_id: str, job_type: str, idempotency_key: str
+    project_id: str, job_type: str, idempotency_key: str, *,
+    target_id: Optional[str] = None, input_payload: Optional[Dict[str, Any]] = None,
 ) -> tuple[Optional[Dict[str, Any]], bool]:
     """長時間のProject処理をJobへ登録し、新規作成かどうかも返す。"""
 
@@ -1561,10 +1568,11 @@ def create_async_generation_job(
             conn.execute(
                 """
                 INSERT INTO generation_jobs
-                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at, updated_at)
-                VALUES (?, ?, NULL, ?, 'queued', NULL, ?, ?, ?)
+                  (id, project_id, target_id, job_type, status, error, idempotency_key, created_at, updated_at, input_json)
+                VALUES (?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?)
                 """,
-                (job_id, project_id, job_type, idempotency_key, now, now),
+                (job_id, project_id, target_id, job_type, idempotency_key, now, now,
+                 _json(input_payload) if input_payload is not None else None),
             )
     except Exception:  # DB固有の一意制約例外をRepository境界で吸収する。
         with connection() as conn:
@@ -1787,11 +1795,12 @@ def complete_storyboard_job(
         if not job or job["status"] not in {"queued", "processing"}:
             return bool(job and job["status"] == "completed")
         project = conn.execute(
-            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            "SELECT characters_json FROM projects WHERE id = ? AND user_id = ?",
             (project_id, user_id),
         ).fetchone()
         if not project:
             raise ValueError("Projectが見つかりません")
+        characters = merge_generated_characters(_loads(project["characters_json"], []), characters)
         conn.execute(
             """
             UPDATE projects
@@ -1819,6 +1828,7 @@ def complete_character_job(
     project_id: str,
     user_id: str,
     characters: List[Dict[str, Any]],
+    *, proposal_id: Optional[str] = None,
 ) -> bool:
     """Character保存とJob完了を同一transactionで確定する。
 
@@ -1830,7 +1840,7 @@ def complete_character_job(
     with connection() as conn:
         job = conn.execute(
             """
-            SELECT status FROM generation_jobs
+            SELECT status, input_json FROM generation_jobs
             WHERE id = ? AND project_id = ? AND job_type = 'character'
             """,
             (job_id, project_id),
@@ -1838,19 +1848,28 @@ def complete_character_job(
         if not job or job["status"] not in {"queued", "processing"}:
             return bool(job and job["status"] == "completed")
         project = conn.execute(
-            "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+            "SELECT * FROM projects WHERE id = ? AND user_id = ?",
             (project_id, user_id),
         ).fetchone()
         if not project:
             return False
+        proposal = _loads(project["character_proposal_json"], None)
+        if proposal_id is not None:
+            expected_ids = _loads(job["input_json"], {}).get("selected_candidate_ids")
+            if (not proposal or not proposal.get("confirmed_at") or proposal.get("id") != proposal_id
+                    or proposal.get("selected_candidate_ids") != expected_ids
+                    or proposal.get("input_fingerprint") != character_input_fingerprint(_project_from_row(project))):
+                return False
+            characters = merge_generated_characters(_loads(project["characters_json"], []), characters)
+            proposal = {**proposal, "status": "generated", "generated_at": now}
         conn.execute(
             """
             UPDATE projects
             SET characters_json = ?, status = 'characters_ready', current_step = 'characters',
-                quality_check_json = NULL, updated_at = ?
+                quality_check_json = NULL, character_proposal_json = ?, updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
-            (_json(characters), now, project_id, user_id),
+            (_json(characters), _json(proposal) if proposal is not None else None, now, project_id, user_id),
         )
         conn.execute(
             """
@@ -1862,6 +1881,73 @@ def complete_character_job(
             (now, now, job_id, project_id),
         )
     return True
+
+
+def append_character_profiles(job_id: str, project_id: str, user_id: str, proposal_id: str,
+                              characters: List[Dict[str, Any]]) -> bool:
+    """完了した対象だけ保存し、後のバッチが失敗しても再生成しない。"""
+
+    with connection() as conn:
+        job = conn.execute("SELECT status, input_json FROM generation_jobs WHERE id = ? AND project_id = ? AND job_type = 'character'",
+                           (job_id, project_id)).fetchone()
+        row = conn.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)).fetchone()
+        if not job or job["status"] not in {"queued", "processing"} or not row:
+            return False
+        project = _project_from_row(row)
+        proposal = project.get("character_proposal") or {}
+        expected_ids = _loads(job["input_json"], {}).get("selected_candidate_ids")
+        if (not proposal.get("confirmed_at") or proposal.get("id") != proposal_id
+                or proposal.get("selected_candidate_ids") != expected_ids
+                or proposal.get("input_fingerprint") != character_input_fingerprint(project)):
+            return False
+        merged = merge_generated_characters(project["characters"], characters)
+        now = utc_now()
+        conn.execute("UPDATE projects SET characters_json = ?, quality_check_json = NULL, updated_at = ? WHERE id = ? AND user_id = ?",
+                     (_json(merged), now, project_id, user_id))
+        conn.execute("UPDATE generation_jobs SET updated_at = ? WHERE id = ?", (now, job_id))
+    return True
+
+
+def complete_character_proposal_job(job_id: str, project_id: str, user_id: str,
+                                    proposal: Dict[str, Any]) -> bool:
+    """候補の保存とJob完了を同時に確定し、失敗済みJobの遅延応答を捨てる。"""
+
+    now = utc_now()
+    with connection() as conn:
+        job = conn.execute("SELECT status FROM generation_jobs WHERE id = ? AND project_id = ? AND job_type = 'character'",
+                           (job_id, project_id)).fetchone()
+        row = conn.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)).fetchone()
+        if not job or job["status"] not in {"queued", "processing"}:
+            return False
+        if not row or proposal["input_fingerprint"] != character_input_fingerprint(_project_from_row(row)):
+            return False
+        conn.execute(
+            "UPDATE projects SET character_proposal_json = ?, status = 'character_proposal_ready', current_step = 'characters', updated_at = ? WHERE id = ? AND user_id = ?",
+            (_json(proposal), now, project_id, user_id),
+        )
+        conn.execute("UPDATE generation_jobs SET status = 'completed', error = NULL, error_category = NULL, completed_at = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+                     (now, now, job_id, project_id))
+    return True
+
+
+def save_character_selection(project_id: str, user_id: str, proposal_id: str, selected_ids: List[str], *,
+                              confirmed: bool = False) -> Optional[Dict[str, Any]]:
+    """選択の保存を詳細生成と区別し、古い提案の選択を新しい提案へ適用しない。"""
+
+    from .services.character_proposal import validate_selection
+
+    with connection() as conn:
+        row = conn.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)).fetchone()
+        if not row:
+            return None
+        project = _project_from_row(row)
+        validate_selection(project, proposal_id, selected_ids, allow_empty=not confirmed)
+        proposal = {**project["character_proposal"], "selected_candidate_ids": selected_ids,
+                    "status": "confirmed" if confirmed else "awaiting_confirmation",
+                    "confirmed_at": utc_now() if confirmed else None}
+        conn.execute("UPDATE projects SET character_proposal_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                     (_json(proposal), utc_now(), project_id, user_id))
+    return get_project(project_id, user_id)
 
 
 def fail_character_job(

@@ -197,6 +197,49 @@ def test_character_request_uses_task_specific_timeout(monkeypatch: pytest.Monkey
     assert timeouts == [180.0]
 
 
+def test_proposal_stops_before_profiles_and_confirmed_profiles_do_not_repeat_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    names = [f"提案人物{i:02d}" for i in range(1, 15)]
+    source = "\n\n".join(f"## 第{i}章\n{name}は主役を支えた。\n" + "物語の経過を振り返った。" * 90
+                         for i, name in enumerate(names, 1))
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requests.append(payload)
+        context = json.JSONDecoder().raw_decode(payload["input"])[0]
+        stage = payload["text"]["format"]["name"]
+        if stage == "character_cast":
+            value = {"cast": [{"name": name, "participation": "story_actor", "aliases": [], "role": "協力者",
+                               "source_quotes": [f"{name}は主役を支えた。"]} for name in names if name in context["story_content"]]}
+        elif stage == "character_cast_review":
+            value = {"groups": [{"name": item["name"], "members": [item["name"]], "importance": 5 if index == 0 else 3,
+                                 "recommendation_reason": "初期の設定対象として役割を確認してください。"}
+                                for index, item in enumerate(context["candidates"])], "excluded": []}
+        else:
+            value = {"characters": [{**valid_character(), "name": item["name"]} for item in context["target_cast"]]}
+        return FakeHTTPResponse(response_with_json(value))
+
+    monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIProvider({"character_model": "gpt-6.1-sol", "reasoning_effort": "xhigh"})
+    roster = provider.propose_characters(source, valid_analysis(), {"prompt_text": "未知の実在人物の属性を創作しない。"})
+    assert len(roster) == 14
+    assert not any(item["text"]["format"]["name"] == "character_bible" for item in requests)
+    assert provider.last_generation_metadata["profiles_generated"] == 0
+    extraction_count = len(requests)
+    saved_batches: list[list[dict]] = []
+    provider.character_profiles_callback = saved_batches.append
+    result = provider.generate_character_profiles(roster[:3], valid_analysis(), {"prompt_text": "同一性を保持する。"})
+    assert [item["name"] for item in result] == names[:3]
+    assert len(requests) == extraction_count + 1
+    assert len(saved_batches) == 1 and len(saved_batches[0]) == 3
+    assert all(item["text"]["format"]["name"] == "character_bible" for item in requests[extraction_count:])
+    assert all(item["model"] == "gpt-6.1-sol" and item["reasoning"] == {"effort": "xhigh"}
+               and "<knowledge_reference>" in item["input"] for item in requests)
+
+
 def test_long_character_source_covers_fourteen_people_and_repairs_missing_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

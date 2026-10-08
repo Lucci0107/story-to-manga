@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import mimetypes
 import secrets
 import time
@@ -31,6 +32,8 @@ from .schemas import (
     ExportRequest,
     GenerateRequest,
     AIModelSettingsPayload,
+    CharacterProposalRequest,
+    CharacterSelectionRequest,
     KnowledgeCreatePayload,
     KnowledgeMetadataPatch,
     ProjectKnowledgePatch,
@@ -47,6 +50,10 @@ from .schemas import (
 from .services.generation_design import design_data, design_hash, audit_design, public_design
 from .services.architect import recommend_architect, compile_architect
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider
+from .services.character_proposal import (
+    active_characters, build_character_proposal, character_input_fingerprint, existing_character, panel_characters,
+    proposal_is_stale, proposal_view, validate_selection,
+)
 from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artwork
 from .services.extraction import StoryExtractionError, extract_uploaded_file
 from .services.export import CompositionReadabilityError, export_pdf, export_zip, render_page_png
@@ -119,6 +126,7 @@ STATUS_LABELS = {
     "draft": "下書き",
     "analysis_ready": "解析済み",
     "characters_ready": "人物設定済み",
+    "character_proposal_ready": "人物候補の確認待ち",
     "storyboard_ready": "ネーム準備済み",
     "processing": "生成中",
     "partially_failed": "一部エラー",
@@ -275,6 +283,8 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
         )
     return {
         **project,
+        "character_proposal": proposal_view(project),
+        "active_characters": active_characters(project),
         "manga_settings_recommendation": recommendation,
         "status_label": STATUS_LABELS.get(project.get("status"), "下書き"),
         "page_count": len(pages),
@@ -680,7 +690,7 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             if getattr(provider, "uses_external_api", False) and prompt_source != "user":
                 base_prompt = provider.panel_prompt(
                     latest_panel,
-                    latest.get("characters") or [],
+                    panel_characters(latest, latest_panel),
                     latest.get("settings") or {},
                     knowledge_context,
                 )
@@ -690,7 +700,7 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                 if not base_prompt.strip():
                     base_prompt = provider.panel_prompt(
                         latest_panel,
-                        latest.get("characters") or [],
+                        panel_characters(latest, latest_panel),
                         latest.get("settings") or {},
                         knowledge_context,
                     )
@@ -700,7 +710,7 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                 from .services.ai_pipeline import compose_panel_prompt
 
                 # LLMの要約や手入力Promptから確定構図が脱落しないよう、生成境界で付加する。
-                latest_panel["generation_prompt"] += "\n確定済み構図・描画条件:\n" + compose_panel_prompt(latest_panel, latest.get("characters") or [], latest.get("settings") or {})
+                latest_panel["generation_prompt"] += "\n確定済み構図・描画条件:\n" + compose_panel_prompt(latest_panel, panel_characters(latest, latest_panel), latest.get("settings") or {})
             latest_panel["generation_prompt"] += compile_architect(latest.get("settings") or {}, latest_panel)
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
             # 外部画像APIの待機中も、Jobが生きていることを記録する。
@@ -780,6 +790,58 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             )
 
 
+def create_character_proposal(provider: Any, project: dict, user_id: str) -> dict:
+    context = retrieve_knowledge_context(project["id"], user_id, "character", str(project["analysis"]))
+    candidates = provider.propose_characters(project["original_text"], project["analysis"], context, project["settings"])
+    if not candidates:
+        raise AIProviderError("原稿から人物候補を確認できませんでした", retryable=False)
+    return build_character_proposal(candidates, project, metadata=provider.last_generation_metadata,
+                                    knowledge_refs=context.get("references", []))
+
+
+def selected_character_profiles(provider: Any, project: dict, user_id: str, payload: dict, *, job_id: str) -> list[dict]:
+    """確認済みの選択だけを使い、設定済みの人物は追加のAI要求から外す。"""
+
+    proposal = project.get("character_proposal") or {}
+    if (not proposal.get("confirmed_at") or payload.get("input_fingerprint") != character_input_fingerprint(project)
+            or payload.get("selected_candidate_ids") != proposal.get("selected_candidate_ids")):
+        raise AIProviderError("主要人物の選択を確認してから人物設定を作成してください", retryable=False,
+                              error_category="character_confirmation")
+    try:
+        selected = validate_selection(project, payload["proposal_id"], payload["selected_candidate_ids"])
+    except (ValueError, KeyError) as exc:
+        raise AIProviderError("人物候補が更新されています。対象を選び直してください", retryable=False,
+                              error_category="character_confirmation") from exc
+    targets = [item for item in selected if existing_character(item, project.get("characters") or []) is None]
+    if not targets:
+        return []
+    context = retrieve_knowledge_context(project["id"], user_id, "character", str(project["analysis"]))
+    design_targets = [{key: item.get(key, []) if key in {"aliases", "source_quotes"} else item[key]
+                       for key in ("name", "aliases", "role", "source_quotes")} for item in targets]
+    target_names = {item["name"] for item in targets}
+
+    def save_batch(batch: list[dict]) -> None:
+        if any(item.get("name") not in target_names or not item.get("appearance") for item in batch):
+            raise AIProviderError("選択した人物の詳細設定を検証できませんでした", retryable=False,
+                                  error_category="character_coverage")
+        for item in batch:
+            item["knowledge_refs"] = context.get("references", [])
+        if not db.append_character_profiles(job_id, project["id"], user_id, payload["proposal_id"], batch):
+            raise AIProviderError("人物候補や処理状態が更新されています。対象を再確認してください", retryable=False,
+                                  error_category="character_confirmation")
+
+    provider.character_profiles_callback = save_batch
+    characters = provider.generate_character_profiles(design_targets, project["analysis"], context, project["settings"])
+    characters = normalize_characters(characters)
+    if ([item["name"] for item in characters] != [item["name"] for item in targets]
+            or any(not item.get("appearance") for item in characters)):
+        raise AIProviderError("選択した人物の詳細設定を検証できませんでした", retryable=False,
+                              error_category="character_coverage")
+    for item in characters:
+        item["knowledge_refs"] = context.get("references", [])
+    return characters
+
+
 def process_character_job(project_id: str, user_id: str, job_id: str) -> None:
     """Character Bibleをバックグラウンドで処理し、必ずterminal stateへ収束させる。"""
 
@@ -794,40 +856,23 @@ def process_character_job(project_id: str, user_id: str, job_id: str) -> None:
         if not project or not project.get("analysis"):
             raise AIProviderError("先に物語解析を生成してください", retryable=False)
         db.touch_generation_job(job_id)
-        knowledge_context = retrieve_knowledge_context(
-            project_id,
-            user_id,
-            "character",
-            str(project["analysis"]),
-        )
         provider = get_ai_provider(project_ai_model_settings(project, user_id))
         provider.character_progress_callback = lambda: db.touch_generation_job(job_id)
-        characters = provider.characters(
-            project["original_text"],
-            project["analysis"],
-            knowledge_context,
-            project["settings"],
-        )
-        characters = normalize_characters(characters)
-        if not characters or any(
-            not character.get("name") or not character.get("appearance")
-            for character in characters
-        ):
-            raise AIProviderError(
-                "AIのキャラクター設定を検証できませんでした",
-                retryable=False,
-                error_category="validation",
-            )
-        for character in characters:
-            character["knowledge_refs"] = knowledge_context.get("references", [])
-        db.touch_generation_job(job_id)
-        if not db.complete_character_job(job_id, project_id, user_id, characters):
-            logger.warning(
-                "character generation completion ignored for inactive job project_id=%s job_id=%s",
-                project_id,
-                job_id,
-            )
+        payload = json.loads(job.get("input_json") or "{}")
+        if payload.get("stage") == "proposal":
+            proposal = create_character_proposal(provider, project, user_id)
+            if not db.complete_character_proposal_job(job_id, project_id, user_id, proposal):
+                raise AIProviderError("原稿や処理状態が更新されています。主要人物を再提案してください", retryable=False,
+                                      error_category="character_confirmation")
+            record_provider_generation(project_id, user_id, provider)
+            logger.info("character proposal completed project_id=%s job_id=%s candidate_count=%s duration_seconds=%.2f",
+                        project_id, job_id, len(proposal["candidates"]), time.monotonic() - started)
             return
+        characters = selected_character_profiles(provider, project, user_id, payload, job_id=job_id)
+        db.touch_generation_job(job_id)
+        if not db.complete_character_job(job_id, project_id, user_id, characters, proposal_id=payload["proposal_id"]):
+            raise AIProviderError("原稿や処理状態が更新されています。人物候補を再確認してください", retryable=False,
+                                  error_category="character_confirmation")
         record_provider_generation(project_id, user_id, provider)
         logger.info(
             "character job completed project_id=%s job_id=%s character_count=%s duration_seconds=%.2f",
@@ -918,9 +963,9 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             "storyboard",
             str(project["analysis"]),
         )
-        characters = project.get("characters") or provider.characters(
-            project["original_text"], project["analysis"], knowledge_context, project["settings"]
-        )
+        characters = active_characters(project)
+        if not characters:
+            raise AIProviderError("先に主要人物を選択して人物設定を作成してください", retryable=False)
         storyboard = provider.storyboard(
             project["original_text"],
             project["analysis"],
@@ -936,8 +981,6 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
                 validation_message or "Storyboardのページを生成できませんでした",
                 retryable=False,
             )
-        if not project.get("characters"):
-            record_provider_generation(project_id, user_id, provider)
         record_provider_generation(project_id, user_id, provider)
         for page in storyboard:
             page["knowledge_refs"] = knowledge_context.get("references", [])
@@ -1816,7 +1859,7 @@ async def api_quality_check(project_id: str, user=Depends(current_user)):
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
     if getattr(provider, "uses_external_api", False):
         try:
-            review = provider.quality_check(project, context)
+            review = provider.quality_check({**project, "characters": active_characters(project)}, context)
         except AIProviderError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         record_provider_generation(project_id, user["id"], provider)
@@ -1922,89 +1965,86 @@ async def api_generate_analysis(project_id: str, user=Depends(current_user)):
     }
 
 
-@app.post("/api/projects/{project_id}/characters")
-async def api_generate_characters(
-    project_id: str,
-    background_tasks: BackgroundTasks,
-    user=Depends(current_user),
-):
+def queue_character_operation(project: dict, user_id: str, provider: Any, payload: dict,
+                              background_tasks: BackgroundTasks) -> JSONResponse:
+    job, created = db.create_async_generation_job(
+        project["id"], "character", f"character:{project['id']}",
+        target_id=payload["stage"], input_payload=payload,
+    )
+    if not job:
+        raise HTTPException(status_code=503, detail="人物の処理を開始できませんでした")
+    if not created and json.loads(job.get("input_json") or "{}") != payload:
+        raise HTTPException(status_code=409, detail="別の人物処理が実行中です。完了してから対象を変更してください")
+    if created:
+        if payload["stage"] == "profiles":
+            try:
+                db.save_character_selection(project["id"], user_id, payload["proposal_id"],
+                                            payload["selected_candidate_ids"], confirmed=True)
+            except ValueError as exc:
+                db.fail_character_job(job["id"], project["id"], user_id, str(exc), "character_confirmation")
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        db.update_project(project["id"], user_id, status="processing", current_step="characters")
+        if getattr(provider, "uses_external_api", False):
+            background_tasks.add_task(process_character_job, project["id"], user_id, job["id"])
+        else:
+            process_character_job(project["id"], user_id, job["id"])
+            job = db.get_generation_job(job["id"]) or job
+            if job["status"] == "failed":
+                raise HTTPException(status_code=502, detail=job.get("error") or "人物処理に失敗しました")
+    updated = require_project(project["id"], user_id)
+    accepted = job["status"] in {"queued", "processing"}
+    return JSONResponse({"accepted": accepted, "job": job, "project": project_view(updated),
+                         "mode": provider.provider_name}, status_code=202 if accepted else 200)
+
+
+@app.post("/api/projects/{project_id}/character-proposal")
+async def api_propose_characters(project_id: str, background_tasks: BackgroundTasks,
+                                 payload: CharacterProposalRequest = CharacterProposalRequest(),
+                                 user=Depends(current_user)):
     project = require_project(project_id, user["id"])
     if not project.get("analysis"):
         raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
+    if not payload.refresh and not proposal_is_stale(project.get("character_proposal"), project):
+        return {"project": project_view(project), "cached": True, "accepted": False}
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
+    return queue_character_operation(project, user["id"], provider,
+                                     {"stage": "proposal", "input_fingerprint": character_input_fingerprint(project)},
+                                     background_tasks)
 
-    # 外部AIはHTTPリクエストへ閉じ込めず、保存済みJobとして追跡する。
-    # Demoは既存の即時応答契約を維持し、課金APIなしのローカル確認を高速にする。
-    if getattr(provider, "uses_external_api", False):
-        job, created = db.create_async_generation_job(
-            project_id,
-            "character",
-            f"character:{project_id}",
-        )
-        if not job:
-            raise HTTPException(status_code=503, detail="Character処理を開始できませんでした")
-        if created:
-            updated = db.update_project(
-                project_id,
-                user["id"],
-                status="processing",
-                current_step="characters",
-                clear_quality_check=True,
-            )
-            background_tasks.add_task(
-                process_character_job,
-                project_id,
-                user["id"],
-                str(job["id"]),
-            )
-        else:
-            updated = project
-            if project.get("status") != "processing" or project.get("current_step") != "characters":
-                updated = db.update_project(
-                    project_id,
-                    user["id"],
-                    status="processing",
-                    current_step="characters",
-                ) or project
-        return JSONResponse(
-            {
-                "accepted": True,
-                "job": job,
-                "project": project_view(updated or project),
-                "mode": provider.provider_name,
-            },
-            status_code=202,
-        )
 
-    knowledge_context = retrieve_knowledge_context(
-        project_id,
-        user["id"],
-        "character",
-        str(project["analysis"]),
-    )
+@app.put("/api/projects/{project_id}/character-proposal/selection")
+async def api_save_character_selection(project_id: str, payload: CharacterSelectionRequest,
+                                       user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    if db.get_active_generation_job(project_id, "character"):
+        raise HTTPException(status_code=409, detail="人物処理が実行中です。完了してから選択を変更してください")
     try:
-        characters = provider.characters(
-            project["original_text"], project["analysis"], knowledge_context, project["settings"]
-        )
-    except AIProviderError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    characters = normalize_characters(characters)
-    record_provider_generation(project_id, user["id"], provider)
-    for character in characters:
-        character["knowledge_refs"] = knowledge_context.get("references", [])
-    updated = db.update_project(
-        project_id,
-        user["id"],
-        characters=characters,
-        status="characters_ready",
-        current_step="characters",
-        clear_quality_check=True,
-    )
-    return {
-        "project": project_view(updated or project),
-        "mode": provider.provider_name,
-        "knowledge": knowledge_context,
-    }
+        validate_selection(project, payload.proposal_id, payload.selected_candidate_ids, allow_empty=True)
+        updated = db.save_character_selection(project_id, user["id"], payload.proposal_id, payload.selected_candidate_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"project": project_view(updated or project), "profiles_generated": 0}
+
+
+@app.post("/api/projects/{project_id}/characters")
+async def api_generate_characters(project_id: str, background_tasks: BackgroundTasks,
+                                  payload: Optional[CharacterSelectionRequest] = None,
+                                  user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    if not project.get("analysis"):
+        raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
+    if payload is None:
+        raise HTTPException(status_code=409, detail="先に主要人物の提案を確認し、人物設定の対象を選択して確定してください")
+    try:
+        validate_selection(project, payload.proposal_id, payload.selected_candidate_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
+    return queue_character_operation(project, user["id"], provider, {
+        "stage": "profiles", "proposal_id": payload.proposal_id,
+        "selected_candidate_ids": payload.selected_candidate_ids,
+        "input_fingerprint": character_input_fingerprint(project),
+    }, background_tasks)
 
 
 @app.post("/api/projects/{project_id}/storyboard")
@@ -2016,6 +2056,10 @@ async def api_generate_storyboard(
     project = require_project(project_id, user["id"])
     if not project.get("analysis"):
         raise HTTPException(status_code=400, detail="先に物語解析を生成してください")
+    if not active_characters(project):
+        raise HTTPException(status_code=400, detail="先に主要人物を選択して人物設定を作成してください")
+    if db.get_active_generation_job(project_id, "character"):
+        raise HTTPException(status_code=409, detail="人物の処理が完了してからネームを作成してください")
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
 
     if getattr(provider, "uses_external_api", False):
@@ -2058,9 +2102,7 @@ async def api_generate_storyboard(
         str(project["analysis"]),
     )
     try:
-        characters = project.get("characters") or provider.characters(
-            project["original_text"], project["analysis"], knowledge_context, project["settings"]
-        )
+        characters = active_characters(project)
         storyboard = provider.storyboard(
             project["original_text"],
             project["analysis"],
@@ -2068,8 +2110,6 @@ async def api_generate_storyboard(
             characters,
             knowledge_context,
         )
-        if not project.get("characters"):
-            record_provider_generation(project_id, user["id"], provider)
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     storyboard = normalize_storyboard(storyboard, project["settings"])
@@ -2081,7 +2121,6 @@ async def api_generate_storyboard(
     updated = db.update_project(
         project_id,
         user["id"],
-        characters=characters,
         storyboard=storyboard,
         status="storyboard_ready",
         current_step="storyboard",

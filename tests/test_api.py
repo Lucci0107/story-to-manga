@@ -22,6 +22,13 @@ def client_for(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+def confirm_characters(client: TestClient, project_id: str):
+    proposal = client.post(f"/api/projects/{project_id}/character-proposal").json()["project"]["character_proposal"]
+    return client.post(f"/api/projects/{project_id}/characters", json={
+        "proposal_id": proposal["id"], "selected_candidate_ids": proposal["selected_candidate_ids"],
+    })
+
+
 def test_private_screen_redirects_without_session(tmp_path: Path) -> None:
     client = client_for(tmp_path)
     response = client.get("/dashboard", follow_redirects=False)
@@ -77,7 +84,7 @@ def test_project_pipeline_and_export(tmp_path: Path) -> None:
     analysis = client.post(f"/api/projects/{project_id}/analysis")
     assert analysis.status_code == 200
     assert analysis.json()["project"]["analysis"]
-    characters = client.post(f"/api/projects/{project_id}/characters")
+    characters = confirm_characters(client, project_id)
     assert characters.status_code == 200
     storyboard = client.post(f"/api/projects/{project_id}/storyboard")
     assert storyboard.status_code == 200
@@ -151,7 +158,7 @@ def test_external_storyboard_uses_persisted_background_job(
 
     monkeypatch.setattr("app.main.get_ai_provider", lambda _settings: DemoAIProvider())
     assert client.post(f"/api/projects/{project_id}/analysis").status_code == 200
-    assert client.post(f"/api/projects/{project_id}/characters").status_code == 200
+    assert confirm_characters(client, project_id).status_code == 200
 
     class ExternalDemoProvider(DemoAIProvider):
         provider_name = "openai"

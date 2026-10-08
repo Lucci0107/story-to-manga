@@ -32,7 +32,8 @@ def test_processing_dialog_covers_long_operations_and_cleans_up() -> None:
         "物語を取り込んでいます…",
         "ナレッジを処理しています…",
         "物語を解析しています…",
-        "キャラクター設定を生成しています…",
+        "主要人物の候補を提案しています…",
+        "選択した人物の設定を生成しています…",
         "ストーリーボードを生成しています…",
         "漫画画像を生成しています…",
         "漫画画像を再生成しています…",
@@ -82,8 +83,9 @@ def test_character_job_ui_restores_terminal_and_reload_states() -> None:
     assert 'job.status === "completed"' in APP_SCRIPT
     assert 'job.status === "failed"' in APP_SCRIPT
     assert 'characterPolling = false;' in APP_SCRIPT
-    assert '"人物設定を再試行"' in APP_SCRIPT
-    assert '"処理状態を再確認"' in APP_SCRIPT
+    assert 'data-confirm-characters' in APP_SCRIPT
+    assert 'data-propose-characters' in APP_SCRIPT
+    assert 'data-save-character-selection' in APP_SCRIPT
     character_polling = APP_SCRIPT.split("async function pollCharacterJob(", 1)[1].split(
         "async function restoreCharacterJobState(", 1
     )[0]
