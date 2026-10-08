@@ -761,6 +761,22 @@ body.processing-dialog-open { overflow: hidden; }
   .name-review-actions > *, .sheet-actions > * { max-width: 100%; white-space: normal; }
 }
 .character-proposal { margin-bottom: 28px; }
+.stored-character-choice { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+.stored-character-choice input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.stored-character-tools, .deleted-character-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 14px 0; }
+.stored-character-tools p { font-size: 12px; color: var(--muted); }
+.deleted-characters { margin-top: 24px; }
+.deleted-character-row { border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.deleted-character-row strong { min-width: 0; overflow-wrap: anywhere; }
+.deleted-character-row button { flex-shrink: 0; }
+.character-delete-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 28px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink); box-shadow: 0 24px 80px rgba(0, 0, 0, .22); }
+.character-delete-dialog::backdrop { background: color-mix(in srgb, var(--chrome) 62%, transparent); backdrop-filter: blur(3px); }
+.character-delete-dialog h2 { margin: 0 0 12px; font-size: 22px; }
+.character-delete-dialog p { color: var(--muted); font-size: 13px; }
+.character-delete-dialog ul { max-height: 35dvh; overflow: auto; margin: 20px 0; padding-left: 22px; overflow-wrap: anywhere; }
+.character-delete-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; }
+body.character-delete-dialog-open { overflow: hidden; }
+@media (max-width: 640px) { .stored-character-tools { align-items: stretch; flex-direction: column; } }
 .candidate-proposal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .candidate-proposal-heading h3 { margin: 5px 0 10px; font-size: 24px; }
 .candidate-proposal-heading p { margin: 0 0 15px; color: var(--muted); }

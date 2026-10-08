@@ -34,6 +34,8 @@ from .schemas import (
     AIModelSettingsPayload,
     CharacterProposalRequest,
     CharacterSelectionRequest,
+    CharacterArchiveRequest,
+    MAX_STORED_CHARACTERS,
     KnowledgeCreatePayload,
     KnowledgeMetadataPatch,
     ProjectKnowledgePatch,
@@ -52,7 +54,7 @@ from .services.architect import recommend_architect, compile_architect
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider
 from .services.character_proposal import (
     active_characters, build_character_proposal, character_input_fingerprint, existing_character, panel_characters,
-    proposal_is_stale, proposal_view, validate_selection,
+    proposal_is_stale, proposal_view, protected_character_ids, validate_selection,
 )
 from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artwork
 from .services.extraction import StoryExtractionError, extract_uploaded_file
@@ -285,6 +287,7 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
         **project,
         "character_proposal": proposal_view(project),
         "active_characters": active_characters(project),
+        "protected_character_ids": sorted(protected_character_ids(project)),
         "manga_settings_recommendation": recommendation,
         "status_label": STATUS_LABELS.get(project.get("status"), "下書き"),
         "page_count": len(pages),
@@ -1881,7 +1884,7 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
         settings = validate_settings({**(project.get("settings") or {}), **submitted_settings})
     if payload.original_text is not None and not payload.original_text.strip():
         raise HTTPException(status_code=422, detail="本文を空にすることはできません")
-    characters = normalize_characters(payload.characters) if payload.characters is not None else None
+    characters = normalize_characters(payload.characters, limit=MAX_STORED_CHARACTERS) if payload.characters is not None else None
     storyboard = (
         normalize_storyboard(payload.storyboard, settings or project.get("settings") or {})
         if payload.storyboard is not None
@@ -1891,8 +1894,6 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
         valid, message = validate_storyboard(storyboard)
         if not valid:
             raise HTTPException(status_code=422, detail=message)
-    if characters is not None and len(characters) > 64:
-        raise HTTPException(status_code=422, detail="キャラクターは64人以内で指定してください")
     clear_quality_check = any(
         value is not None
         for value in (payload.original_text, payload.settings, payload.analysis, payload.characters, payload.storyboard)
@@ -2024,6 +2025,25 @@ async def api_save_character_selection(project_id: str, payload: CharacterSelect
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"project": project_view(updated or project), "profiles_generated": 0}
+
+
+def update_character_archive(project_id: str, user_id: str, payload: CharacterArchiveRequest, *, restore: bool) -> dict:
+    project = require_project(project_id, user_id)
+    try:
+        updated = db.change_character_archive(project_id, user_id, payload.character_ids, restore=restore)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"project": project_view(updated or project), "changed_count": len(payload.character_ids), "profiles_generated": 0}
+
+
+@app.post("/api/projects/{project_id}/characters/delete")
+async def api_delete_stored_characters(project_id: str, payload: CharacterArchiveRequest, user=Depends(current_user)):
+    return update_character_archive(project_id, user["id"], payload, restore=False)
+
+
+@app.post("/api/projects/{project_id}/characters/restore")
+async def api_restore_stored_characters(project_id: str, payload: CharacterArchiveRequest, user=Depends(current_user)):
+    return update_character_archive(project_id, user["id"], payload, restore=True)
 
 
 @app.post("/api/projects/{project_id}/characters")

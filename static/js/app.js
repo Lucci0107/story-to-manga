@@ -529,6 +529,8 @@
     let characterStateSyncInFlight = false;
     let characterCandidateDraftId = null;
     let selectedCharacterCandidateIds = new Set();
+    let selectedStoredCharacterIds = new Set();
+    let characterArchiveBusy = false;
     let knowledgeRequestId = 0;
     let qaKnowledgeWarningOpen = false;
     let recommendationLoading = false;
@@ -1461,15 +1463,88 @@
       finally { if (button) button.disabled = false; }
     }
 
+    function hasUnsavedCharacterFields() {
+      return (state.characters || []).some(function (person) {
+        const card = content.querySelector('[data-character-id="' + CSS.escape(person.id) + '"]');
+        return [...(card?.querySelectorAll('[data-character-field]') || [])].some(function (input) {
+          const key = input.dataset.characterField;
+          const saved = key === 'sheet_ratio' ? person[key] || '3:4' : person[key] ?? '';
+          return String(saved) !== input.value;
+        });
+      });
+    }
+
+    function updateStoredCharacterSelection() {
+      const button = content.querySelector('[data-delete-stored-characters]');
+      if (!button) return;
+      button.textContent = '選択した' + selectedStoredCharacterIds.size + '人を削除';
+      button.disabled = !selectedStoredCharacterIds.size || characterArchiveBusy || characterPolling
+        || characterStateSyncInFlight || ['queued', 'processing'].includes(characterJobState?.status);
+    }
+
+    function confirmStoredCharacterDeletion(people) {
+      return new Promise(function (resolve) {
+        const previousFocus = document.activeElement;
+        const dialog = document.createElement('dialog');
+        dialog.className = 'character-delete-dialog';
+        dialog.setAttribute('aria-labelledby', 'character-delete-title');
+        dialog.setAttribute('aria-describedby', 'character-delete-description');
+        dialog.innerHTML = '<h2 id="character-delete-title">' + people.length + '人の人物設定を削除しますか？</h2>'
+          + '<p id="character-delete-description">削除した設定は「削除した人物」から復元できます。</p><ul>'
+          + people.map(function (person) { return '<li>' + escapeHtml(person.name) + '</li>'; }).join('')
+          + '</ul><div class="character-delete-actions"><button type="button" class="secondary-button compact-button" data-cancel-character-deletion>キャンセル</button>'
+          + '<button type="button" class="primary-button compact-button" data-confirm-character-deletion>' + people.length + '人を削除</button></div>';
+        dialog.addEventListener('close', function () {
+          const confirmed = dialog.returnValue === 'delete';
+          dialog.remove();
+          document.body.classList.remove('character-delete-dialog-open');
+          if (previousFocus?.isConnected) previousFocus.focus();
+          resolve(confirmed);
+        }, {once:true});
+        dialog.querySelector('[data-cancel-character-deletion]').addEventListener('click', function () { dialog.close('cancel'); });
+        dialog.querySelector('[data-confirm-character-deletion]').addEventListener('click', function () { dialog.close('delete'); });
+        document.body.append(dialog);
+        document.body.classList.add('character-delete-dialog-open');
+        dialog.showModal();
+        dialog.querySelector('[data-cancel-character-deletion]').focus();
+      });
+    }
+
+    async function changeStoredCharacterArchive(characterIds, restore) {
+      if (!characterIds.length || characterArchiveBusy || characterPolling || ['queued', 'processing'].includes(characterJobState?.status)) return;
+      if (hasUnsavedCharacterFields()) { showToast('人物設定に未保存の編集があります。「キャラクターを保存」してから操作してください', 'error'); return; }
+      const people = (restore ? state.deleted_characters || [] : state.characters || []).filter(function (person) { return characterIds.includes(person.id); });
+      if (!restore && !await confirmStoredCharacterDeletion(people)) return;
+      characterArchiveBusy = true;
+      showProcessingDialog({message: restore ? '人物設定を復元しています…' : '人物設定を削除しています…', submessage: '人物設定の保存状態を更新しています。'});
+      let succeeded = false;
+      try {
+        const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/characters/' + (restore ? 'restore' : 'delete'), {method:'POST', body:JSON.stringify({character_ids:characterIds})});
+        state = data.project;
+        selectedStoredCharacterIds.clear();
+        succeeded = true;
+        showToast(data.changed_count + '人の人物設定を' + (restore ? '復元しました' : '削除しました。「削除した人物」から復元できます'));
+      } catch (error) { showToast(error.message, 'error'); }
+      finally {
+        characterArchiveBusy = false;
+        hideProcessingDialog();
+        if (succeeded && activeStep === 'characters') render();
+        else updateStoredCharacterSelection();
+      }
+    }
+
     function renderCharacters() {
       const characters = state.characters || [];
       const activeCharacters = state.character_proposal?.confirmed_at ? state.active_characters || [] : [];
       const activeIds = new Set(activeCharacters.map(function (person) { return person.id; }));
       const storedCharacters = characters.filter(function (person) { return !activeIds.has(person.id); });
+      const protectedIds = new Set(state.protected_character_ids || []);
+      const deletableIds = new Set(storedCharacters.filter(function (person) { return !protectedIds.has(person.id); }).map(function (person) { return person.id; }));
+      selectedStoredCharacterIds = new Set([...selectedStoredCharacterIds].filter(function (id) { return deletableIds.has(id); }));
       const jobStatus = characterJobState?.status;
       const jobActive = jobStatus === "queued" || jobStatus === "processing"
         || (!characterJobState && state.status === "processing" && state.current_step === "characters");
-      const busy = characterPolling || jobActive || characterStateSyncInFlight;
+      const busy = characterPolling || jobActive || characterStateSyncInFlight || characterArchiveBusy;
       const disabled = busy ? " disabled" : "";
       const next = busy || !activeCharacters.length
         ? '<div class="save-row"><button type="button" class="primary-button compact-button" data-next-step="storyboard" disabled>ネームを作る <span aria-hidden="true">→</span></button></div>'
@@ -1485,14 +1560,17 @@
           '<details class="full"><summary>スタイルシート用の詳細設定</summary><div class="character-fields">' + textField("age_range", "年齢（不明は未設定）", 1) + textField("height", "身長・サイズ（不明は未設定）", 1) + textField("body_type", "体格・頭身", 2) + textField("hairstyle", "髪型", 2) + textField("hair_color", "髪色", 1) + textField("eye_characteristics", "目の特徴", 2) + textField("accessories", "既存の小物", 2) + textField("relationship_notes", "人物関係", 2) + textField("palette_notes", "色・素材のメモ", 2) + textField("costume_detail_notes", "衣装詳細・未確認の箇所", 2) + textField("identity_notes", "左右特徴・同一性メモ", 2) + '<label class="editor-label">人物シートの比率<select data-character-field="sheet_ratio"><option value="3:4"' + (character.sheet_ratio !== "3:2" ? ' selected' : '') + '>3:4（縦長）</option><option value="3:2"' + (character.sheet_ratio === "3:2" ? ' selected' : '') + '>3:2（横長）</option></select></label></div></details>';
       };
       const renderCharacterCard = function (character, index) {
-        return '<article class="surface-panel character-card" data-character-id="' + escapeAttr(character.id) + '"><div class="character-card-header"><div><h3>' + escapeHtml(character.name || "名前未設定") + '</h3><p>' + escapeHtml(character.role || "役割未設定") + ' / ' + escapeHtml(character.age_range || "年齢未設定") + '</p></div><span class="character-stamp">' + String(index + 1).padStart(2, "0") + '</span></div><div class="character-fields">' + '<label class="editor-label">名前<input data-character-field="name" value="' + escapeAttr(character.name || "") + '"></label>' + '<label class="editor-label">役割<input data-character-field="role" value="' + escapeAttr(character.role || "") + '"></label>' + fields(character) + '</div><div class="sheet-actions"><button type="button" class="secondary-button compact-button" data-show-character-sheet="' + escapeAttr(character.id) + '">スタイルシート設計を確認</button></div><div data-character-sheet-view></div></article>';
+        const removalChoice = activeIds.has(character.id) ? '' : '<label class="stored-character-choice"><input type="checkbox" data-select-stored-character="' + escapeAttr(character.id) + '" aria-label="' + escapeAttr(character.name + 'を削除対象に選ぶ') + '"' + (selectedStoredCharacterIds.has(character.id) ? ' checked' : '') + (busy || protectedIds.has(character.id) ? ' disabled' : '') + '>削除対象に選ぶ</label>' + (protectedIds.has(character.id) ? '<p class="field-help">既存のコマで使用中のため削除できません。</p>' : '');
+        return '<article class="surface-panel character-card" data-character-id="' + escapeAttr(character.id) + '">' + removalChoice + '<div class="character-card-header"><div><h3>' + escapeHtml(character.name || "名前未設定") + '</h3><p>' + escapeHtml(character.role || "役割未設定") + ' / ' + escapeHtml(character.age_range || "年齢未設定") + '</p></div><span class="character-stamp">' + String(index + 1).padStart(2, "0") + '</span></div><div class="character-fields">' + '<label class="editor-label">名前<input data-character-field="name" value="' + escapeAttr(character.name || "") + '"></label>' + '<label class="editor-label">役割<input data-character-field="role" value="' + escapeAttr(character.role || "") + '"></label>' + fields(character) + '</div><div class="sheet-actions"><button type="button" class="secondary-button compact-button" data-show-character-sheet="' + escapeAttr(character.id) + '">スタイルシート設計を確認</button></div><div data-character-sheet-view></div></article>';
       };
       const cards = activeCharacters.map(renderCharacterCard).join("");
       const storedCards = storedCharacters.map(renderCharacterCard).join("");
       const body = characters.length
-        ? '<div class="callout"><p><strong>今回使う人物設定：' + activeCharacters.length + '人</strong> ／ 保存済み：' + characters.length + '人。確定した主要人物だけを新しいネーム作成に使います。</p></div><div class="character-grid">' + cards + '</div>' + (storedCharacters.length ? '<details class="surface-panel panel-padding"><summary>保管中の人物設定（' + storedCharacters.length + '人）を確認・編集</summary><p class="field-help">保存内容を保持しています。今回の制作に使う場合は、上の候補から選択して確定してください。</p><div class="character-grid">' + storedCards + '</div></details>' : '') + '<div class="save-row character-save-row"><button type="button" class="primary-button compact-button" data-save-characters' + disabled + '>キャラクターを保存</button></div>' + next
+        ? '<div class="callout"><p><strong>今回使う人物設定：' + activeCharacters.length + '人</strong> ／ 保存済み：' + characters.length + '人。確定した主要人物だけを新しいネーム作成に使います。</p></div><div class="character-grid">' + cards + '</div>' + (storedCharacters.length ? '<details class="surface-panel panel-padding"><summary>保管中の人物設定（' + storedCharacters.length + '人）を確認・編集・削除</summary><p class="field-help">今回の制作に使う場合は、上の候補から選択して確定してください。不要な人物は削除対象に選んで削除できます。</p><div class="stored-character-tools"><p>今回使う人物や、既存のコマで使用中の人物は保護しています。</p><button type="button" class="secondary-button compact-button" data-delete-stored-characters disabled>選択した0人を削除</button></div><div class="character-grid">' + storedCards + '</div></details>' : '') + '<div class="save-row character-save-row"><button type="button" class="primary-button compact-button" data-save-characters' + disabled + '>キャラクターを保存</button></div>' + next
         : '<p class="field-help">人物の詳細設定はまだ作成していません。上の候補を確認して、対象者を確定してください。</p>' + next;
-      content.innerHTML = heading("人物を選んで設定する", "主要人物の提案を確認してから、選んだ人物だけの外見・服装などを設定します。") + renderCharacterRecoveryNotice() + jobNotice + characterProposalPanel(busy) + body;
+      const deleted = state.deleted_characters || [];
+      const deletedPanel = deleted.length ? '<details class="surface-panel panel-padding deleted-characters"><summary>削除した人物（' + deleted.length + '人）を復元</summary><p class="field-help">復元すると、保存済みの外見・服装・スタイルシート設定を再利用できます。</p>' + deleted.map(function (person) { return '<div class="deleted-character-row"><strong>' + escapeHtml(person.name) + '</strong><button type="button" class="secondary-button compact-button" data-restore-character="' + escapeAttr(person.id) + '" aria-label="' + escapeAttr(person.name + 'の人物設定を復元') + '"' + disabled + '>復元</button></div>'; }).join('') + '</details>' : '';
+      content.innerHTML = heading("人物を選んで設定する", "主要人物の提案を確認してから、選んだ人物だけの外見・服装などを設定します。") + renderCharacterRecoveryNotice() + jobNotice + characterProposalPanel(busy) + body + deletedPanel;
       content.querySelectorAll('[data-propose-characters]').forEach(function (button) { button.addEventListener('click', function () { generateCharacters('proposal', button.hasAttribute('data-refresh-proposal')); }); });
       content.querySelectorAll('[data-character-candidate]').forEach(function (input) { input.addEventListener('change', function () { if (input.checked) selectedCharacterCandidateIds.add(input.dataset.characterCandidate); else selectedCharacterCandidateIds.delete(input.dataset.characterCandidate); updateCharacterCandidateSelection(); }); });
       content.querySelector('[data-select-recommended]')?.addEventListener('click', function () { selectedCharacterCandidateIds = new Set(state.character_proposal.candidates.filter(function (person) { return person.recommended; }).map(function (person) { return person.id; })); updateCharacterCandidateSelection(); });
@@ -1500,6 +1578,10 @@
       content.querySelector('[data-save-character-selection]')?.addEventListener('click', saveCharacterCandidateSelection);
       content.querySelector('[data-confirm-characters]')?.addEventListener('click', function () { generateCharacters('profiles'); });
       updateCharacterCandidateSelection();
+      content.querySelectorAll('[data-select-stored-character]').forEach(function (input) { input.addEventListener('change', function () { if (input.checked) selectedStoredCharacterIds.add(input.dataset.selectStoredCharacter); else selectedStoredCharacterIds.delete(input.dataset.selectStoredCharacter); updateStoredCharacterSelection(); }); });
+      content.querySelector('[data-delete-stored-characters]')?.addEventListener('click', function () { changeStoredCharacterArchive([...selectedStoredCharacterIds], false); });
+      content.querySelectorAll('[data-restore-character]').forEach(function (button) { button.addEventListener('click', function () { changeStoredCharacterArchive([button.dataset.restoreCharacter], true); }); });
+      updateStoredCharacterSelection();
       content.querySelectorAll("[data-show-character-sheet]").forEach(function(button) { button.addEventListener("click", function() { showCharacterSheet(button); }); });
       content.querySelector("[data-character-recheck]")?.addEventListener("click", recheckCharacterGenerationState);
       content.querySelector("[data-character-reload]")?.addEventListener("click", function () { window.location.reload(); });

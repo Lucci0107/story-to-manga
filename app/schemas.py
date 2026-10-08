@@ -18,6 +18,8 @@ from .services.reading_order import (
 
 ALLOWED_STEPS = {"story", "knowledge", "analysis", "settings", "characters", "storyboard", "generate", "edit", "qa", "preview", "export"}
 MAX_CHARACTERS = 64
+# 今回の制作対象と、過去の設定を含む保管件数は別々に制限する。
+MAX_STORED_CHARACTERS = 512
 CHARACTER_NAME_MAX_LENGTH = 80
 CHARACTER_TEXT_MAX_LENGTH = 2_000
 ALLOWED_DIRECTIONS = set(LEGACY_DIRECTION_ALIASES)
@@ -211,7 +213,7 @@ class ProjectPatch(BaseModel):
     current_step: Optional[str] = None
     settings: Optional[SettingsPayload] = None
     analysis: Optional[Dict[str, Any]] = None
-    characters: Optional[List[Dict[str, Any]]] = None
+    characters: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=MAX_STORED_CHARACTERS)
     storyboard: Optional[List[Dict[str, Any]]] = None
     status: Optional[str] = None
 
@@ -237,6 +239,10 @@ class CharacterProposalRequest(BaseModel):
 class CharacterSelectionRequest(BaseModel):
     proposal_id: str = Field(min_length=1, max_length=80)
     selected_candidate_ids: List[str] = Field(max_length=MAX_CHARACTERS)
+
+
+class CharacterArchiveRequest(BaseModel):
+    character_ids: List[str] = Field(min_length=1, max_length=MAX_STORED_CHARACTERS)
 
 
 class SettingsRecommendationRequest(BaseModel):
@@ -491,8 +497,8 @@ def normalize_analysis(value: Any) -> Dict[str, Any]:
     return normalized
 
 
-def normalize_characters(value: Any) -> List[Dict[str, Any]]:
-    """外部AIの人物配列を編集画面用の必須項目へそろえる。"""
+def normalize_characters(value: Any, *, limit: int = MAX_CHARACTERS) -> List[Dict[str, Any]]:
+    """人物配列をそろえる。保管した設定の編集では保管上限を指定する。"""
 
     if not isinstance(value, list):
         return []
@@ -519,7 +525,7 @@ def normalize_characters(value: Any) -> List[Dict[str, Any]]:
         "costume_detail_notes",
     ]
     normalized: List[Dict[str, Any]] = []
-    for item in value[:MAX_CHARACTERS]:
+    for item in value[:limit]:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "人物"))[:CHARACTER_NAME_MAX_LENGTH].strip() or "人物"

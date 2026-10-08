@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ..schemas import MAX_CHARACTERS
+from ..schemas import MAX_CHARACTERS, MAX_STORED_CHARACTERS
 from .story_profile import build_story_source_profile
 
 RECOMMENDED_CHARACTER_LIMIT = 12
@@ -100,8 +100,8 @@ def validate_selection(project: dict, proposal_id: str, selected_ids: list[str],
     targets = [item for item in proposal["candidates"] if item["id"] in set(selected_ids)]
     existing = project.get("characters") or []
     new_count = sum(existing_character(item, existing) is None for item in targets)
-    if len(existing) + new_count > MAX_CHARACTERS:
-        raise ValueError(f"保存済みの人物と合わせて{MAX_CHARACTERS}人を超えます。生成する対象を減らしてください")
+    if len(existing) + new_count > MAX_STORED_CHARACTERS:
+        raise ValueError(f"人物設定の保管上限（{MAX_STORED_CHARACTERS}人）を超えます。既存の設定を整理するか、別のプロジェクトで続けてください")
     return targets
 
 
@@ -110,8 +110,8 @@ def merge_generated_characters(existing: list[dict], generated: list[dict]) -> l
     for item in generated:
         if existing_character(item, result) is None:
             result.append(item)
-    if len(result) > MAX_CHARACTERS:
-        raise ValueError("人物設定の保存上限を超えています")
+    if len(result) > MAX_STORED_CHARACTERS:
+        raise ValueError(f"人物設定の保管上限（{MAX_STORED_CHARACTERS}人）を超えています")
     return result
 
 
@@ -151,3 +151,44 @@ def panel_characters(project: dict, panel: dict) -> list[dict]:
     names = {_identity(name) for name in panel.get("characters") or []}
     return [item for item in project.get("characters") or []
             if names.intersection({_identity(name) for name in [item["name"], *item.get("aliases", [])]})]
+
+
+def protected_character_ids(project: dict) -> set[str]:
+    """確定した制作対象と、既存のコマが参照する設定は削除から保護する。"""
+
+    proposal = project.get("character_proposal") or {}
+    protected = {item["id"] for item in active_characters(project)} if proposal.get("confirmed_at") else set()
+    panel_names = {_identity(name) for page in project.get("storyboard") or []
+                   for panel in page.get("panels") or [] for name in panel.get("characters") or []}
+    protected.update(item["id"] for item in project.get("characters") or []
+                     if panel_names.intersection({_identity(name) for name in [item["name"], *item.get("aliases", [])]}))
+    return protected
+
+
+def change_character_archive(project: dict, character_ids: list[str], *, restore: bool = False) -> tuple[list[dict], list[dict]]:
+    """設定を削除欄へ移す／復元する。既存のコマと確認済みの制作対象は保持する。"""
+
+    if not character_ids or len(character_ids) > MAX_STORED_CHARACTERS or len(set(character_ids)) != len(character_ids):
+        raise ValueError("対象の人物を重複なく選択してください")
+    stored = project.get("characters") or []
+    deleted = project.get("deleted_characters") or []
+    selected_ids = set(character_ids)
+    source = deleted if restore else stored
+    if not selected_ids.issubset({item["id"] for item in source}):
+        raise ValueError("対象の人物設定が更新されています。画面を再読み込みしてください")
+    selected = [item for item in source if item["id"] in selected_ids]
+    if restore:
+        if len(stored) + len(selected) > MAX_STORED_CHARACTERS:
+            raise ValueError(f"復元すると人物設定の保管上限（{MAX_STORED_CHARACTERS}人）を超えます")
+        if any(item["id"] in {person["id"] for person in stored}
+               or existing_character(item, stored) is not None for item in selected):
+            raise ValueError("同じ人物の設定がすでに存在します。現在の設定を確認してから復元してください")
+        restored = [{key: value for key, value in item.items() if key != "deleted_at"} for item in selected]
+        return [*stored, *restored], [item for item in deleted if item["id"] not in selected_ids]
+    if selected_ids.intersection(protected_character_ids(project)):
+        raise ValueError("今回使う人物や既存のコマで使用中の人物は削除できません。制作対象・コマの登場人物を確認してください")
+    if len(deleted) + len(selected) > MAX_STORED_CHARACTERS:
+        raise ValueError(f"削除した人物の保管上限（{MAX_STORED_CHARACTERS}人）に達しています。復元してから整理してください")
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    return ([item for item in stored if item["id"] not in selected_ids],
+            [*deleted, *[{**item, "deleted_at": deleted_at} for item in selected]])

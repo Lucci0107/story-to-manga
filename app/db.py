@@ -23,7 +23,7 @@ from .config import get_settings
 from .services.database import DatabaseConnection, connection as database_connection
 from .services.layout import ensure_storyboard_layout
 from .services.model_registry import DEFAULT_AI_MODEL_SETTINGS
-from .services.character_proposal import character_input_fingerprint, merge_generated_characters
+from .services.character_proposal import change_character_archive as change_archive, character_input_fingerprint, merge_generated_characters
 from .services.reading_order import (
     canonicalize_stored_settings,
     canonicalize_storyboard_panel_orders,
@@ -296,6 +296,8 @@ def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
             conn.execute("ALTER TABLE projects ADD COLUMN manga_settings_recommendation_json TEXT")
         if "character_proposal_json" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN character_proposal_json TEXT")
+        if "deleted_characters_json" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN deleted_characters_json TEXT")
         if "generation_metadata_json" not in project_columns:
             conn.execute(
                 "ALTER TABLE projects ADD COLUMN generation_metadata_json TEXT NOT NULL DEFAULT '[]'"
@@ -636,6 +638,7 @@ def _project_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             row["manga_settings_recommendation_json"], None
         ),
         "characters": _loads(row["characters_json"], []),
+        "deleted_characters": _loads(row["deleted_characters_json"], []),
         "character_proposal": _loads(row["character_proposal_json"], None),
         "storyboard": storyboard,
         "quality_check": _loads(row["quality_check_json"], None),
@@ -1947,6 +1950,24 @@ def save_character_selection(project_id: str, user_id: str, proposal_id: str, se
                     "confirmed_at": utc_now() if confirmed else None}
         conn.execute("UPDATE projects SET character_proposal_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
                      (_json(proposal), utc_now(), project_id, user_id))
+    return get_project(project_id, user_id)
+
+
+def change_character_archive(project_id: str, user_id: str, character_ids: List[str], *,
+                             restore: bool = False) -> Optional[Dict[str, Any]]:
+    """生成処理との競合を避け、削除・復元と保管件数の更新を同時に保存する。"""
+
+    with connection() as conn:
+        row = conn.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)).fetchone()
+        if not row:
+            return None
+        active_job = conn.execute("SELECT id FROM generation_jobs WHERE project_id = ? AND status IN ('queued', 'processing') LIMIT 1",
+                                  (project_id,)).fetchone()
+        if active_job:
+            raise ValueError("人物や漫画の生成中は削除・復元できません。処理が完了してから操作してください")
+        characters, deleted = change_archive(_project_from_row(row), character_ids, restore=restore)
+        conn.execute("UPDATE projects SET characters_json = ?, deleted_characters_json = ?, quality_check_json = NULL, updated_at = ? WHERE id = ? AND user_id = ?",
+                     (_json(characters), _json(deleted), utc_now(), project_id, user_id))
     return get_project(project_id, user_id)
 
 
