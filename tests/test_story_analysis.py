@@ -159,7 +159,7 @@ def test_storyboard_cannot_omit_the_ending_event_even_with_the_right_page_count(
     monkeypatch.setattr(provider, "_json_call", ungrounded)
     with pytest.raises(AIProviderError):
         provider.storyboard(text, value, {"target_page_count": 16}, [{"name": "蒼"}])
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_an_event_can_progress_across_multiple_pages_without_empty_allowed_events():

@@ -1256,6 +1256,16 @@ def update_project(
 ) -> Optional[Dict[str, Any]]:
     """指定されたProject項目だけを更新する。"""
 
+    if (all(value is None for value in (title, original_text, settings, characters, storyboard))
+            and not update_analysis and not clear_quality_check):
+        # 画面移動・状態更新で、生成中の旧ネームを再計算して途中保存を失効させない。
+        with connection() as conn:
+            conn.execute(
+                "UPDATE projects SET status = COALESCE(?, status), current_step = COALESCE(?, current_step), "
+                "updated_at = ? WHERE id = ? AND user_id = ?",
+                (status, current_step, utc_now(), project_id, user_id),
+            )
+        return get_project(project_id, user_id)
     current = get_project(project_id, user_id)
     if not current:
         return None
@@ -1961,6 +1971,26 @@ def save_storyboard_checkpoint(job_id: str, project_id: str, user_id: str, pages
         inputs["pages"] = pages
         conn.execute("UPDATE generation_jobs SET input_json = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
                      (_json(inputs), utc_now(), job_id))
+    return True
+
+
+def update_storyboard_progress(job_id: str, project_id: str, user_id: str, progress: Dict[str, Any]) -> bool:
+    """生成範囲と処理開始時刻だけを保存する。原稿・AI出力は含めない。"""
+
+    now = utc_now()
+    with connection() as conn:
+        job = conn.execute(
+            "SELECT input_json FROM generation_jobs WHERE id = ? AND project_id = ? AND job_type = 'storyboard' "
+            "AND status = 'processing' AND EXISTS (SELECT id FROM projects WHERE id = ? AND user_id = ?)",
+            (job_id, project_id, project_id, user_id),
+        ).fetchone()
+        if not job:
+            return False
+        inputs = _loads(job["input_json"], {})
+        inputs["progress"] = {"page_start": progress["page_start"], "page_end": progress["page_end"],
+                              "phase": progress["phase"], "attempt": progress["attempt"], "started_at": now}
+        conn.execute("UPDATE generation_jobs SET input_json = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
+                     (_json(inputs), now, job_id))
     return True
 
 

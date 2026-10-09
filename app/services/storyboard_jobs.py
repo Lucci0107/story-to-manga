@@ -40,4 +40,6 @@ def public_storyboard_job(job: dict | None) -> dict | None:
     completed = len(inputs.get("pages") or [])
     result.update(completed_pages=completed, target_pages=(inputs.get("settings") or {}).get("target_page_count", 0),
                   next_page=completed + 1)
+    progress = inputs.get("progress") or {}
+    result["progress"] = {key: progress[key] for key in ("page_start", "page_end", "phase", "attempt", "started_at") if key in progress}
     return result

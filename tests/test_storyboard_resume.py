@@ -16,7 +16,7 @@ from app.services.ai_pipeline import AIProviderError, DemoAIProvider, OpenAIProv
 from app.services.architect import finalize_storyboard
 from app.services.openai_client import OpenAIRequestError
 from app.services.story_analysis import analysis_content_fingerprint, analysis_source_status
-from app.services.storyboard_jobs import storyboard_project_inputs
+from app.services.storyboard_jobs import public_storyboard_job, storyboard_project_inputs
 
 
 def source_and_analysis():
@@ -40,7 +40,7 @@ def configure_provider(monkeypatch):
     ))
 
 
-@pytest.mark.parametrize("category", ["timeout", "output_limit"])
+@pytest.mark.parametrize("category", ["timeout", "output_limit", "validation"])
 def test_only_failed_range_is_split_and_completed_pages_are_saved(monkeypatch, category):
     text, analysis = source_and_analysis()
     configure_provider(monkeypatch)
@@ -103,6 +103,59 @@ def test_storyboard_timeout_does_not_repeat_the_same_paid_request(monkeypatch):
         OpenAIProvider()._json_call("編集者", "原稿", schema_name="manga_storyboard", schema=STORYBOARD_SCHEMA, task_key="storyboard")
     assert len(calls) == 1 and calls[0]["retry_timeouts"] is False
     assert error.value.error_category == "timeout" and error.value.retryable is False
+
+
+def test_fixed_event_ids_are_constrained_then_saved_as_exact_source_events(monkeypatch):
+    text, analysis = source_and_analysis()
+    configure_provider(monkeypatch)
+    provider, contexts, progress, saved = OpenAIProvider(), [], [], []
+
+    def respond(_system, user, **kwargs):
+        context = json.JSONDecoder().raw_decode(user)[0]
+        contexts.append(context)
+        enum = kwargs["schema"]["properties"]["pages"]["items"]["properties"]["panels"]["items"]["properties"]["event_ids"]["items"]["enum"]
+        assert set(enum) == {event["id"] for event in context["event_catalog"]}
+        if len(contexts) == 1:
+            # 原文の要約・独自IDは受け付けず、特定した不備を次の要求に含める。
+            return {"pages": [page(planned["page_number"], analysis, ["独自の出来事参照"])
+                              for planned in context["event_plan"]]}
+        if len(contexts) == 2:
+            assert "本文1ページのevent_idsは" in user and "event_catalogのid" in user
+        return {"pages": [page(planned["page_number"], analysis, planned["allowed_event_ids"])
+                          for planned in context["event_plan"]]}
+
+    provider._json_call = respond
+    provider.storyboard_request_callback = progress.append
+    provider.storyboard_pages_callback = lambda pages: saved.append(copy.deepcopy(pages))
+    result = provider.storyboard(text, analysis, {"target_page_count": 4}, [{"name": "主人公"}])
+    assert [item["phase"] for item in progress] == ["generating", "repairing", "generating"]
+    assert [(item["page_start"], item["page_end"]) for item in progress] == [(1, 2), (1, 2), (3, 4)]
+    assert [len(value) for value in saved] == [2, 4]
+    source_events = set(analysis["major_events"])
+    assert all(set(panel["event_ids"]).issubset(source_events) for value in result for panel in value["panels"])
+
+
+def test_invalid_event_references_split_only_the_failed_range_and_stop_at_one_page(monkeypatch):
+    text, analysis = source_and_analysis()
+    configure_provider(monkeypatch)
+    provider, ranges = OpenAIProvider(), []
+    provider.storyboard_cached_pages = [page(number, analysis) for number in range(1, 19)]
+
+    def respond(_system, user, **_kwargs):
+        context = json.JSONDecoder().raw_decode(user)[0]
+        start, end = context["page_range"]["start"], context["page_range"]["end"]
+        ranges.append((start, end))
+        return {"pages": [page(number, analysis, ["非公開原稿に存在しない参照"])
+                          for number in range(start, end + 1)]}
+
+    provider._json_call = respond
+    with pytest.raises(AIProviderError) as error:
+        provider.storyboard(text, analysis, {"target_page_count": 20}, [{"name": "主人公"}])
+    assert ranges == [(19, 20), (19, 20), (19, 19), (19, 19)]
+    assert len(provider.storyboard_cached_pages) == 18
+    assert error.value.error_category == "validation"
+    assert "本文19ページの1コマ目" in str(error.value) and "再試行" in str(error.value)
+    assert "非公開原稿" not in str(error.value)
 
 
 class PartialProvider(DemoAIProvider):
@@ -203,6 +256,41 @@ def test_checkpoint_rejects_changed_source_and_late_failed_results(tmp_path, mon
     db.fail_storyboard_job(job["id"], project["id"], project["user_id"], "停止しました", "timeout")
     assert db.start_generation_job(job["id"]) is False
     assert db.save_storyboard_checkpoint(job["id"], project["id"], project["user_id"], []) is False
+
+
+def test_request_progress_preserves_checkpoint_and_has_owner_and_terminal_guards(tmp_path, monkeypatch):
+    _client, project, _provider = project_fixture(tmp_path, monkeypatch)
+    inputs = {**storyboard_project_inputs(project), "pages": [page(1, project["analysis"])]}
+    job, _ = db.create_async_generation_job(project["id"], "storyboard", "progress", input_payload=inputs)
+    db.start_generation_job(job["id"])
+    details = {"page_start": 2, "page_end": 3, "phase": "repairing", "attempt": 2, "raw_source": "公開しない原稿内容"}
+    assert not db.update_storyboard_progress(job["id"], project["id"], "another-user", details)
+    assert db.update_storyboard_progress(job["id"], project["id"], project["user_id"], details)
+    updated = db.get_generation_job(job["id"])
+    public = public_storyboard_job(updated)
+    assert public["completed_pages"] == 1 and public["progress"]["page_start"] == 2
+    assert public["progress"]["phase"] == "repairing" and public["progress"]["started_at"]
+    assert "公開しない" not in json.dumps(public, ensure_ascii=False)
+    assert "input_json" not in public and "raw_source" not in public["progress"]
+    assert json.loads(updated["input_json"])["pages"] == inputs["pages"]
+    db.fail_storyboard_job(job["id"], project["id"], project["user_id"], "停止しました")
+    assert not db.update_storyboard_progress(job["id"], project["id"], project["user_id"], details)
+
+
+def test_navigation_does_not_reflow_old_name_or_invalidate_in_progress_checkpoint(tmp_path, monkeypatch):
+    client, project, _provider = project_fixture(tmp_path, monkeypatch)
+    inputs = storyboard_project_inputs(project)
+    job, _ = db.create_async_generation_job(project["id"], "storyboard", "navigate", input_payload=inputs)
+    db.start_generation_job(job["id"])
+    with db.connection() as conn:
+        before = conn.execute("SELECT storyboard_json FROM projects WHERE id = ?", (project["id"],)).fetchone()["storyboard_json"]
+    response = client.patch(f"/api/projects/{project['id']}", json={"current_step": "analysis"})
+    assert response.status_code == 200
+    with db.connection() as conn:
+        after = conn.execute("SELECT storyboard_json FROM projects WHERE id = ?", (project["id"],)).fetchone()["storyboard_json"]
+    assert after == before
+    assert db.save_storyboard_checkpoint(job["id"], project["id"], project["user_id"], [page(1, project["analysis"])])
+    assert db.get_generation_job(job["id"])["status"] == "processing"
 
 
 def test_duplicate_requests_queue_only_one_storyboard_worker(tmp_path, monkeypatch):

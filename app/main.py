@@ -969,6 +969,12 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             )
 
         setattr(provider, "storyboard_progress_callback", heartbeat)
+
+        def request_progress(progress: Dict[str, Any]) -> None:
+            if not db.update_storyboard_progress(job_id, project_id, user_id, progress):
+                raise AIProviderError("このネーム生成は終了しています。保存済みの続きから再試行してください", retryable=False)
+
+        setattr(provider, "storyboard_request_callback", request_progress)
         knowledge_context = retrieve_knowledge_context(
             project_id,
             user_id,

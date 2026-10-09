@@ -44,6 +44,7 @@ from .character_cast import (
 from .character_cast_review import cast_review_schema, normalize_cast_review
 from .character_proposal import candidate_frequency
 from .story_profile import build_story_source_profile
+from .storyboard_events import StoryboardValidationError, event_catalog, ground_storyboard_events
 from .story_analysis import (
     LEGACY_EXCERPT_THRESHOLD, analysis_batches, analysis_content_fingerprint,
     complete_source_analysis, section_analysis_schema, story_analysis_units,
@@ -1116,6 +1117,11 @@ class OpenAIProvider(DemoAIProvider):
         for attempt in range(2):
             if attempt and task_key == "character" and callable(self.character_progress_callback):
                 self.character_progress_callback()
+            if task_key == "storyboard" and callable(getattr(self, "storyboard_request_callback", None)):
+                self.storyboard_request_callback({
+                    **getattr(self, "storyboard_current_range", {}),
+                    "phase": "repairing" if attempt else "generating", "attempt": attempt + 1,
+                })
             try:
                 raw = self._json_call(
                     system,
@@ -1135,9 +1141,9 @@ class OpenAIProvider(DemoAIProvider):
                     task_key, schema_name, getattr(exc, "error_category", None) or "validation", attempt + 1,
                 )
                 if attempt == 0 and getattr(exc, "retryable", True):
-                    repair_hint = exc.repair_hint if isinstance(exc, CharacterValidationError) else ""
+                    repair_hint = exc.repair_hint if isinstance(exc, (CharacterValidationError, StoryboardValidationError)) else ""
                     if task_key == "storyboard":
-                        repair_hint += "event_idsに各ページのallowed_eventsの文字列をそのまま設定し、この範囲の出来事をコマの動作・背景・発言へ漏れなく反映してください。"
+                        repair_hint += "event_idsにはevent_catalogのidをそのまま設定し、この範囲の出来事をコマの動作・背景・発言へ漏れなく反映してください。"
                     retry_user = (
                         f"{user}\n\n前回の出力を利用せず、指定されたJSON Schemaに完全一致する"
                         "値を返してください。空の配列や空文字列で重要項目を省略しないでください。"
@@ -1154,6 +1160,12 @@ class OpenAIProvider(DemoAIProvider):
             raise AIProviderError(
                 f"{stage}を検証できませんでした。{last_error}。再試行してください",
                 retryable=False, error_category=last_error.error_category,
+            ) from last_error
+        if task_key == "storyboard":
+            message = str(last_error) if isinstance(last_error, StoryboardValidationError) else "本文のページ数またはコマ構成が指定と一致しません"
+            raise AIProviderError(
+                f"{message}。保存済みの続きから再試行してください",
+                retryable=False, error_category="validation",
             ) from last_error
         raise AIProviderError("AIの構造化出力を検証できませんでした") from last_error
 
@@ -1590,6 +1602,9 @@ class OpenAIProvider(DemoAIProvider):
                 len(ranges),
             ),
         }
+        catalog = event_catalog(base_context["event_plan"])
+        event_ids_by_text = {event["text"]: event["id"] for event in catalog}
+        event_text_by_id = {event["id"]: event["text"] for event in catalog}
         # 小さな既存Projectは従来どおり1回で生成し、可変ページ数が大きい場合だけ
         # Structured Outputを分割してtoken切断とHTTP timeoutを避ける。
         exact_page_count = len(ranges) > 1 or bool(settings.get("script_tone_primary") or settings.get("rendering_style_id"))
@@ -1609,6 +1624,16 @@ class OpenAIProvider(DemoAIProvider):
                 pages_schema = schema["properties"]["pages"]
                 pages_schema["minItems"] = batch_count
                 pages_schema["maxItems"] = batch_count
+            expected = [
+                {**page, "page_number": number,
+                 "allowed_event_ids": [event_ids_by_text[event] for event in page["allowed_events"]],
+                 "forbidden_until_later": page["forbidden_until_later"][:1]}
+                for number, page in enumerate(base_context["event_plan"][page_start - 1:page_end], page_start)
+            ]
+            allowed_ids = {event_id for page in expected for event_id in page["allowed_event_ids"]}
+            batch_catalog = [event for event in catalog if event["id"] in allowed_ids]
+            if analysis.get("source_coverage") and batch_catalog:
+                schema["properties"]["pages"]["items"]["properties"]["panels"]["items"]["properties"]["event_ids"]["items"]["enum"] = [event["id"] for event in batch_catalog]
             previous_context = [
                 {
                     "page_number": page.get("page_number"),
@@ -1620,8 +1645,8 @@ class OpenAIProvider(DemoAIProvider):
             batch_context = {
                 **base_context,
                 "event_sequence": list(dict.fromkeys(event for page in base_context["event_plan"][page_start - 1:page_end] for event in page["allowed_events"])),
-                "event_plan": [{**page, "forbidden_until_later": page["forbidden_until_later"][:1]}
-                               for page in base_context["event_plan"][page_start - 1:page_end]],
+                "event_plan": expected,
+                "event_catalog": batch_catalog,
                 "story_reference": base_context["story_reference"] or storyboard_source_reference(
                     source_units, analysis, base_context["event_plan"], page_start, page_end
                 ),
@@ -1651,7 +1676,9 @@ class OpenAIProvider(DemoAIProvider):
                 + "\npagesキーにpage_number, page_role, layout, title, panelsを持つ配列を返してください。"
                 + page_instruction
                 + "各ページには少なくとも1コマを置いてください。"
-                "各Panelにはpanel_role, scene_type, importanceを設定してください。event_idsにはこのページの許可イベントの原文を選んで列挙し、新しい出来事のない間のコマでは空配列にしてください。"
+                "各Panelにはpanel_role, scene_type, importanceを設定してください。event_idsにはこのページのallowed_event_idsから選んだ固定IDだけを列挙してください。出来事の原文や要約は書かず、新しい出来事のない間のコマでは空配列にしてください。"
+                "この範囲のevent_catalogの全IDを、許可されたページの少なくとも1コマのevent_idsに含めてください。"
+                "各参照に対応する出来事をそのコマの動作・背景・発言に実際に反映し、参照だけを付けて出来事を省略しないでください。"
                 "pages内のpanels配列は実際の読者の論理読順（1始まり）で並べてください。"
                 + _language_reference(settings)
                 + _knowledge_reference(knowledge_context)
@@ -1668,20 +1695,14 @@ class OpenAIProvider(DemoAIProvider):
                     batch_index, len(ranges), page_start, page_end
                 )
             batch_started = time.monotonic()
+            self.storyboard_current_range = {"page_start": page_start, "page_end": page_end}
             def normalize_batch(value: Dict[str, Any]) -> List[Dict[str, Any]]:
                 pages = normalize_storyboard(value.get("pages"), settings)
+                for page in pages:
+                    for panel in page.get("panels") or []:
+                        panel["event_ids"] = [event_text_by_id.get(event, event) for event in panel.get("event_ids") or []]
                 if analysis.get("source_coverage"):
-                    expected = base_context["event_plan"][page_start - 1:page_end]
-                    covered = set()
-                    for page, planned in zip(pages, expected):
-                        for panel in page.get("panels", []):
-                            events = set(panel.get("event_ids") or [])
-                            if not events.issubset(set(planned["allowed_events"])):
-                                raise ValueError("コマの出来事がページの許可範囲と一致しません")
-                            covered.update(events)
-                    required = {event for page in expected for event in page["allowed_events"]}
-                    if not required.issubset(covered):
-                        raise ValueError("この範囲の出来事とコマの対応が不足しています")
+                    ground_storyboard_events(pages, expected, catalog)
                 return pages
 
             try:
@@ -1694,7 +1715,10 @@ class OpenAIProvider(DemoAIProvider):
                     and (not exact_page_count or len(value) == batch_count),
                 )
             except AIProviderError as exc:
-                if batch_count == 1 or exc.error_category not in {"timeout", "output_limit"}:
+                split_categories = {"timeout", "output_limit"}
+                if analysis.get("source_coverage"):
+                    split_categories.add("validation")
+                if batch_count == 1 or exc.error_category not in split_categories:
                     raise
                 # 同じ大きな要求を再送せず、失敗した範囲だけを小さくする。
                 logger.info("storyboard batch split page_start=%s page_end=%s category=%s", page_start, page_end, exc.error_category)
