@@ -12,6 +12,7 @@ from typing import Any
 
 from ..schemas import MAX_CHARACTERS, MAX_STORED_CHARACTERS
 from .story_profile import build_story_source_profile
+from .character_references import character_reference, scene_character
 
 RECOMMENDED_CHARACTER_LIMIT = 12
 PROPOSAL_VERSION = 1
@@ -154,12 +155,30 @@ def active_characters(project: dict) -> list[dict]:
     return result
 
 
-def panel_characters(project: dict, panel: dict) -> list[dict]:
-    """コマに実際に登場する人物の設定だけを渡す。既存のコマの人物も保持する。"""
+def source_cast(project: dict) -> list[dict]:
+    """現在の原稿で検証済みの候補を参照する。未選択の脇役の詳細生成は行わない。"""
 
-    names = {_identity(name) for name in panel.get("characters") or []}
-    return [item for item in project.get("characters") or []
-            if names.intersection({_identity(name) for name in [item["name"], *item.get("aliases", [])]})]
+    proposal = project.get("character_proposal")
+    if not proposal or proposal_is_stale(proposal, project):
+        return []
+    selected = set(proposal.get("selected_candidate_ids", [])) if proposal.get("confirmed_at") else set()
+    return [{**{key: item.get(key) for key in ("name", "aliases", "role")},
+             "requires_profile": item.get("id") in selected}
+            for item in proposal.get("candidates", [])]
+
+
+def panel_characters(project: dict, panel: dict) -> list[dict]:
+    """登場する人物の既存設定・年代別の参照・脇役の役割だけを渡す。"""
+
+    result = []
+    cast = source_cast(project)
+    for name in panel.get("characters") or []:
+        reference = character_reference(name, project.get("characters") or [], cast)
+        if reference["kind"] in {"registered", "supporting"}:
+            person = scene_character(reference)
+            if person not in result:
+                result.append(person)
+    return result
 
 
 def protected_character_ids(project: dict) -> set[str]:
@@ -167,10 +186,9 @@ def protected_character_ids(project: dict) -> set[str]:
 
     proposal = project.get("character_proposal") or {}
     protected = {item["id"] for item in active_characters(project)} if proposal.get("confirmed_at") else set()
-    panel_names = {_identity(name) for page in project.get("storyboard") or []
-                   for panel in page.get("panels") or [] for name in panel.get("characters") or []}
-    protected.update(item["id"] for item in project.get("characters") or []
-                     if panel_names.intersection({_identity(name) for name in [item["name"], *item.get("aliases", [])]}))
+    protected.update(item["id"] for page in project.get("storyboard") or []
+                     for panel in page.get("panels") or [] for item in panel_characters(project, panel)
+                     if item.get("id"))
     return protected
 
 

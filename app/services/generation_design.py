@@ -6,7 +6,8 @@ import json
 from .architect import rendering_profile, tone_parameters, event_issues
 from .reading_order import canonicalize_stored_settings
 from .page_types import is_content_page
-from .character_references import anonymous_characters, unresolved_characters
+from .character_references import anonymous_characters, unresolved_characters, character_reference
+from .character_proposal import source_cast
 
 VOLATILE = {
     "generation_status",
@@ -39,11 +40,12 @@ def design_data(
 
     return {
         "version": 1,
-        "character_reference_policy": "registered_profiles_and_anonymous_roles_v1",
+        "character_reference_policy": "registered_life_stages_and_supporting_cast_v2",
         "project_id": project["id"],
         "page": stable(page),
         "target_id": panel["id"],
         "characters": stable(project.get("characters") or []),
+        "source_cast": source_cast(project),
         "settings": project.get("settings") or {},
         "models": models,
         "knowledge": knowledge,
@@ -131,8 +133,13 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
         and not settings.get("script_tone_custom", "").strip()
     ):
         errors.append("脚本トーンの自由記述を入力してください。")
-    if unresolved_characters(panel, project.get("characters") or []):
-        errors.append("登場人物をキャラクター設定へ登録してください。")
+    cast = source_cast(project)
+    character_kinds = {character_reference(name, project.get("characters") or [], cast)["kind"]
+                       for name in panel.get("characters") or []}
+    if "missing_profile" in character_kinds:
+        errors.append("選択した主要人物の人物設定が未完了です。キャラクター画面で選択済みの人物だけ設定を完了してください。")
+    if "ambiguous" in character_kinds:
+        errors.append("人物の呼び方が複数の人物に一致しています。ネームで登録名・別名を使って区別してください。脇役の個別設定は不要です。")
     for character in project.get("characters") or []:
         url = character.get("reference_image_url")
         if url and (
@@ -166,6 +173,9 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
     page_design = json.loads(json.dumps(page))
     for entry in page_design.get("panels", []):
         entry.pop("generation_prompt", None)
+    cast = source_cast(project)
+    references = [character_reference(name, project.get("characters") or [], cast)
+                  for name in panel.get("characters") or []]
     return {
         "page_design": page_design,
         "design_hash": digest,
@@ -175,7 +185,13 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
         "target_id": panel["id"],
         "description": panel.get("description"),
         "characters": panel.get("characters", []),
-        "anonymous_characters": anonymous_characters(panel, project.get("characters") or []),
+        "anonymous_characters": anonymous_characters(panel, project.get("characters") or [], cast),
+        "supporting_characters": [r["name"] for r in references if r["kind"] == "supporting"],
+        "character_references": [{"name": r["name"], "kind": r["kind"], "life_stage": r["life_stage"],
+                                  "reference_source": r["reference_source"],
+                                  "registered_name": (r["character"] or {}).get("name")}
+                                 for r in references],
+        "unresolved_characters": unresolved_characters(panel, project.get("characters") or [], cast),
         "dialogue": panel.get("dialogue", []),
         "narration": panel.get("narration", []),
         "composition": page.get("composition"),

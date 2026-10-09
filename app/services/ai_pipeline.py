@@ -598,7 +598,7 @@ def compose_panel_prompt(
 
     settings = canonicalize_stored_settings(settings)
     order_context = reading_order_context(settings)
-    from .character_references import anonymous_characters, registered_character
+    from .character_references import anonymous_characters, registered_character, character_life_stage
     anonymous = set(anonymous_characters(panel, characters))
     identities = []
     for name in panel.get("characters", []):
@@ -610,6 +610,23 @@ def compose_panel_prompt(
             )
             continue
         character = registered_character(characters, str(name)) or {}
+        if character.get("supporting_role"):
+            origin = "原稿" if character.get("reference_source") == "source_cast" else "ネーム"
+            identities.append(
+                f"{name}: {origin}に登場する脇役「{character.get('source_name', name)}」。役割: {character.get('role', '')}。"
+                "個別の人物設定・スタイルシートは作成しない。主要人物の外見を流用せず、"
+                "原稿とこのコマの描写にない年齢・性別・容貌・経歴を断定しない。"
+            )
+            continue
+        stage = character_life_stage(str(name)) or character.get("life_stage")
+        if stage and character_life_stage(character.get("name", "")) != stage:
+            identities.append(
+                f"{name}: 登録済み「{character.get('name', name)}」と同一人物の{stage}。"
+                "このコマの年代・原稿・顔を見せない等の演出指定を優先する。"
+                "成人・現在の容貌、体型、服装、職業用小物をそのまま使わず、"
+                "当時の資料にある特徴だけを引き継ぐ。未確認の年齢や外見を断定しない。"
+            )
+            continue
         identities.append(
             f"{name}: 外見 {character.get('appearance', '')}; 髪型 {character.get('hairstyle', '')}; "
             f"髪色 {character.get('hair_color', '')}; 目 {character.get('eye_characteristics', '')}; "
@@ -1883,10 +1900,12 @@ class OpenAIProvider(DemoAIProvider):
         )
         settings = canonicalize_stored_settings(settings)
         visual_reference = compose_panel_prompt(panel, characters, settings)
-        selected_names = {str(name) for name in panel.get("characters", [])}
-        selected_characters = [
-            character for character in characters if str(character.get("name", "")) in selected_names
-        ]
+        from .character_references import registered_character, character_life_stage, scene_character
+        selected_characters = []
+        for name in panel.get("characters", []):
+            character = registered_character(characters, str(name))
+            if character:
+                selected_characters.append(scene_character({"character": character, "life_stage": character_life_stage(str(name))}))
         user = json.dumps(
             {
                 "panel": {
