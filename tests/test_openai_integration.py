@@ -942,53 +942,28 @@ def test_invalid_structured_output_request_is_classified_without_body_leak(
     assert "スキーマ設定" in str(raised.value)
 
 
-def test_storyboard_uses_task_specific_timeout_after_transient_failure(
+def test_storyboard_uses_task_specific_timeout_without_repeating_a_single_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Storyboardだけが長いtimeoutを使い、通信retry後に成功できる。"""
+    """Storyboardの長いtimeoutを維持し、1ページの失敗要求を再送しない。"""
 
     calls: list[float] = []
 
-    page = {
-        "page_number": 1,
-        "title": "霧の入口",
-        "layout": "classic",
-        "panels": [
-            {
-                "description": "蒼が灯台を見る",
-                "shot_type": "遠景",
-                "characters": ["蒼"],
-                "action": "立ち止まる",
-                "expression": "迷い",
-                "background": "霧の町",
-                "dialogue": [],
-                "narration": [],
-                "sfx": [],
-            }
-        ],
-    }
-    responses = iter([TimeoutError("simulated timeout"), response_with_json({"pages": [page]})])
-
     def fake_urlopen(_request, timeout):
         calls.append(timeout)
-        response = next(responses)
-        if isinstance(response, Exception):
-            raise response
-        return FakeHTTPResponse(response)
+        raise TimeoutError("simulated timeout")
 
     monkeypatch.setattr("app.services.ai_pipeline.get_settings", runtime_settings)
     monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("app.services.openai_client.time.sleep", lambda _seconds: None)
 
-    result = OpenAIProvider().storyboard(
-        "蒼は灯台へ向かった。",
-        valid_analysis(),
-        {"target_page_count": 1, "language": "ja"},
-        [valid_character()],
-    )
-
-    assert len(result) == 1
-    assert calls == [240.0, 240.0]
+    with pytest.raises(AIProviderError) as error:
+        OpenAIProvider().storyboard(
+            "蒼は灯台へ向かった。", valid_analysis(),
+            {"target_page_count": 1, "language": "ja"}, [valid_character()],
+        )
+    assert error.value.error_category == "timeout"
+    assert calls == [240.0]
 
 
 def test_storyboard_batches_do_not_repeat_long_story_body(

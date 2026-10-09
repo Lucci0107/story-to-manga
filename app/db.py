@@ -1310,6 +1310,15 @@ def update_project(
     return get_project(project_id, user_id)
 
 
+def set_project_processing(project_id: str, user_id: str, step: str) -> Optional[Dict[str, Any]]:
+    """生成開始の状態だけを変え、保存済みネームの再計算・上書きをしない。"""
+
+    with connection() as conn:
+        conn.execute("UPDATE projects SET status = 'processing', current_step = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                     (step, utc_now(), project_id, user_id))
+    return get_project(project_id, user_id)
+
+
 def adopt_name_page_count(project: dict, target_page_count: int) -> Optional[Dict[str, Any]]:
     """確認したネームの本文数だけを目標に反映し、本文・画像・旧版を保持する。"""
 
@@ -1754,10 +1763,7 @@ def start_generation_job(job_id: str) -> bool:
             """,
             (now, job_id),
         )
-        if cursor.rowcount:
-            return True
-    current = get_generation_job(job_id)
-    return bool(current and current.get("status") == "processing")
+        return bool(cursor.rowcount)
 
 
 def touch_generation_job(job_id: str) -> None:
@@ -1898,7 +1904,7 @@ def complete_storyboard_job(
     with connection() as conn:
         job = conn.execute(
             """
-            SELECT status FROM generation_jobs
+            SELECT status, input_json FROM generation_jobs
             WHERE id = ? AND project_id = ? AND job_type = 'storyboard'
             """,
             (job_id, project_id),
@@ -1906,11 +1912,15 @@ def complete_storyboard_job(
         if not job or job["status"] not in {"queued", "processing"}:
             return bool(job and job["status"] == "completed")
         project = conn.execute(
-            "SELECT characters_json FROM projects WHERE id = ? AND user_id = ?",
+            "SELECT * FROM projects WHERE id = ? AND user_id = ?",
             (project_id, user_id),
         ).fetchone()
         if not project:
             raise ValueError("Projectが見つかりません")
+        from .services.storyboard_jobs import storyboard_inputs_match
+        inputs = _loads(job["input_json"], {})
+        if inputs.get("version") and not storyboard_inputs_match(_project_from_row(project), inputs):
+            return False
         characters = merge_generated_characters(_loads(project["characters_json"], []), characters)
         conn.execute(
             """
@@ -1931,6 +1941,26 @@ def complete_storyboard_job(
         )
         if any(p.get("name_review_required") for p in storyboard):
             conn.execute("INSERT INTO manga_workflows (project_id) VALUES (?) ON CONFLICT (project_id) DO NOTHING", (project_id,))
+    return True
+
+
+def save_storyboard_checkpoint(job_id: str, project_id: str, user_id: str, pages: List[Dict[str, Any]]) -> bool:
+    """生成済みの本文をJobへ保存する。旧ネームは全編が完成するまで保持する。"""
+
+    from .services.storyboard_jobs import storyboard_inputs_match
+
+    with connection() as conn:
+        job = conn.execute("SELECT status, input_json FROM generation_jobs WHERE id = ? AND project_id = ? AND job_type = 'storyboard'",
+                           (job_id, project_id)).fetchone()
+        row = conn.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)).fetchone()
+        if not job or job["status"] != "processing" or not row:
+            return False
+        inputs = _loads(job["input_json"], {})
+        if not storyboard_inputs_match(_project_from_row(row), inputs):
+            return False
+        inputs["pages"] = pages
+        conn.execute("UPDATE generation_jobs SET input_json = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
+                     (_json(inputs), utc_now(), job_id))
     return True
 
 

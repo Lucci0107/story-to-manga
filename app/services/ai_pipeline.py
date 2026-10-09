@@ -803,6 +803,8 @@ class DemoAIProvider:
         self.storyboard_progress_callback: Optional[
             Callable[[int, int, int, int], None]
         ] = None
+        self.storyboard_cached_pages: List[Dict[str, Any]] = []
+        self.storyboard_pages_callback: Optional[Callable[[List[Dict[str, Any]]], None]] = None
 
     def _record_demo(self, task: str) -> None:
         """デモ処理も実行履歴の形をそろえる（外部APIは呼ばない）。"""
@@ -1013,8 +1015,8 @@ class OpenAIProvider(DemoAIProvider):
                     timeout=timeout,
                     max_retries=max_retries,
                     client_request_id=client_request_id,
-                    # 長い人物要求のtimeoutは同じ要求を繰り返さず、下の区間・人数分割で回復する。
-                    retry_timeouts=task_key not in {"character", "story_analysis"},
+                    # 長い生成のtimeoutは同じ要求を繰り返さず、失敗した範囲を分割して回復する。
+                    retry_timeouts=task_key not in {"character", "story_analysis", "storyboard"},
                 )
             except OpenAIRequestError as exc:
                 logger.warning(
@@ -1572,6 +1574,8 @@ class OpenAIProvider(DemoAIProvider):
         target_pages = max(1, min(MAX_CONTENT_PAGES, int(settings.get("target_page_count", 8))))
         source_units = story_analysis_units(text)
         batch_size = getattr(get_settings(), "storyboard_batch_pages", 8)
+        if analysis.get("source_coverage"):
+            batch_size = min(batch_size, getattr(get_settings(), "storyboard_full_source_batch_pages", 2))
         ranges = [
             (start, min(target_pages, start + batch_size - 1))
             for start in range(1, target_pages + 1, batch_size)
@@ -1589,8 +1593,16 @@ class OpenAIProvider(DemoAIProvider):
         # 小さな既存Projectは従来どおり1回で生成し、可変ページ数が大きい場合だけ
         # Structured Outputを分割してtoken切断とHTTP timeoutを避ける。
         exact_page_count = len(ranges) > 1 or bool(settings.get("script_tone_primary") or settings.get("rendering_style_id"))
-        generated_pages: List[Dict[str, Any]] = []
-        for batch_index, (page_start, page_end) in enumerate(ranges, start=1):
+        generated_pages = json.loads(json.dumps(self.storyboard_cached_pages))
+        if (len(generated_pages) > target_pages
+                or any(page.get("page_number") != number or not page.get("panels")
+                       or page.get("page_kind") in {"cover", "back_cover"}
+                       or page.get("source_analysis_fingerprint") != analysis_content_fingerprint(analysis)
+                       for number, page in enumerate(generated_pages, 1))):
+            raise AIProviderError("保存済みの生成範囲を検証できませんでした", retryable=False)
+
+        def generate_range(page_start: int, page_end: int) -> None:
+            batch_index = (page_start - 1) // batch_size + 1
             batch_count = page_end - page_start + 1
             schema = json.loads(json.dumps(STORYBOARD_SCHEMA))
             if exact_page_count:
@@ -1672,22 +1684,24 @@ class OpenAIProvider(DemoAIProvider):
                         raise ValueError("この範囲の出来事とコマの対応が不足しています")
                 return pages
 
-            batch_pages = self._validated_call(
-                system,
-                user,
-                schema_name=(
-                    f"manga_storyboard_{page_start}_{page_end}"
-                    if exact_page_count
-                    else "manga_storyboard"
-                ),
-                schema=schema,
-                task_key="storyboard",
-                normalizer=normalize_batch,
-                validator=lambda value: isinstance(value, list)
-                and bool(value)
-                and all(page.get("panels") for page in value)
-                and (not exact_page_count or len(value) == batch_count),
-            )
+            try:
+                batch_pages = self._validated_call(
+                    system, user,
+                    schema_name=(f"manga_storyboard_{page_start}_{page_end}" if exact_page_count else "manga_storyboard"),
+                    schema=schema, task_key="storyboard", normalizer=normalize_batch,
+                    validator=lambda value: isinstance(value, list) and bool(value)
+                    and all(page.get("panels") for page in value)
+                    and (not exact_page_count or len(value) == batch_count),
+                )
+            except AIProviderError as exc:
+                if batch_count == 1 or exc.error_category not in {"timeout", "output_limit"}:
+                    raise
+                # 同じ大きな要求を再送せず、失敗した範囲だけを小さくする。
+                logger.info("storyboard batch split page_start=%s page_end=%s category=%s", page_start, page_end, exc.error_category)
+                middle = (page_start + page_end) // 2
+                generate_range(page_start, middle)
+                generate_range(middle + 1, page_end)
+                return
             metadata = self.last_generation_metadata or {}
             logger.info(
                 "storyboard batch completed batch=%s/%s page_start=%s page_end=%s requested_model=%s actual_model=%s pages=%s duration_seconds=%.2f",
@@ -1706,10 +1720,15 @@ class OpenAIProvider(DemoAIProvider):
                 page["page_number"] = page_start + page_offset
                 page["source_analysis_fingerprint"] = analysis_content_fingerprint(analysis)
             generated_pages.extend(batch_pages)
+            if callable(self.storyboard_pages_callback):
+                self.storyboard_pages_callback(generated_pages)
             if callable(self.storyboard_progress_callback):
                 self.storyboard_progress_callback(
                     batch_index, len(ranges), page_start, page_end
                 )
+        first_page = len(generated_pages) + 1
+        for page_start in range(first_page, target_pages + 1, batch_size):
+            generate_range(page_start, min(target_pages, page_start + batch_size - 1))
         return compose_prompts(
             normalize_storyboard(finalize_storyboard(generated_pages, analysis, settings), settings), characters, settings
         )

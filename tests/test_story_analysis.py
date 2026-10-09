@@ -130,12 +130,12 @@ def test_source_chapters_and_events_are_selected_for_the_correct_storyboard_batc
     mock_transport(monkeypatch, requests)
     pages = OpenAIProvider().storyboard(text, value, {"target_page_count": 16, "language": "ja"},
                                       [{"name": "蒼", "role": "主人公"}, {"name": "原稿に登場しない人物", "appearance": "不要な外見設定"}])
-    assert len(pages) == 16 and len(requests) == 2
+    assert len(pages) == 16 and len(requests) == 8
     contexts = [json.JSONDecoder().raw_decode(request["input"])[0] for request in requests]
     assert "中間の固有事件1。" in json.dumps(contexts[0]["story_reference"], ensure_ascii=False)
     assert "結末の固有事件31。" in json.dumps(contexts[-1]["story_reference"], ensure_ascii=False)
     assert "結末の固有事件31。" not in json.dumps(contexts[0]["story_reference"], ensure_ascii=False)
-    assert all(len(context["event_plan"]) == 8 for context in contexts)
+    assert all(len(context["event_plan"]) == 2 for context in contexts)
     assert all("source_sections" not in context["analysis"] for context in contexts)
     assert all(len(context["characters"]) == 1 for context in contexts)
     assert all(page["source_analysis_fingerprint"] == analysis_content_fingerprint(value) for page in pages)

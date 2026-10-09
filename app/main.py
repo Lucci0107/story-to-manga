@@ -54,6 +54,7 @@ from .services.architect import recommend_architect, compile_architect, add_requ
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider, compose_prompts
 from .services.page_types import is_content_page, page_label, requested_cover_kinds
 from .services.story_analysis import analysis_content_fingerprint, analysis_source_status
+from .services.storyboard_jobs import public_storyboard_job, storyboard_inputs_match, storyboard_project_inputs
 from .services.character_proposal import (
     active_characters, build_character_proposal, character_input_fingerprint, existing_character, panel_characters,
     proposal_is_stale, proposal_view, protected_character_ids, validate_selection,
@@ -927,19 +928,19 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
     """Storyboardの長時間AI処理をHTTP応答から切り離して実行する。"""
 
     job = db.get_generation_job(job_id)
-    if not job:
+    if not job or not db.start_generation_job(job_id):
         return
     started = time.monotonic()
     requested_pages = 0
     requested_model = "unknown"
     try:
-        db.update_generation_job(job_id, "processing")
         project = db.get_project(project_id, user_id)
         if not project or not project.get("analysis"):
             raise AIProviderError("先に物語解析を生成してください", retryable=False)
         if analysis_source_status(project["original_text"], project["analysis"])["requires_reanalysis"]:
             raise AIProviderError("原稿全体を解析し直してからネームを作成してください", retryable=False)
-        model_settings = project_ai_model_settings(project, user_id)
+        inputs = json.loads(job.get("input_json") or "{}")
+        model_settings = inputs.get("model_settings") or project_ai_model_settings(project, user_id)
         provider = get_ai_provider(model_settings)
         requested_pages = int((project.get("settings") or {}).get("target_page_count", 0))
         requested_model = model_for_task(model_settings, "storyboard")
@@ -974,6 +975,17 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
             "storyboard",
             str(project["analysis"]),
         )
+        if inputs.get("version"):
+            if (not storyboard_inputs_match(project, inputs)
+                    or inputs.get("knowledge_refs") != knowledge_context.get("references", [])):
+                raise AIProviderError("生成対象が更新されています。現在の内容でネームを作成してください", retryable=False)
+            provider.storyboard_cached_pages = inputs.get("pages") or []
+
+            def save_completed_pages(pages: List[Dict[str, Any]]) -> None:
+                if not db.save_storyboard_checkpoint(job_id, project_id, user_id, pages):
+                    raise AIProviderError("生成中に作品が更新されました。保存済みの内容を確認して再試行してください", retryable=False)
+
+            provider.storyboard_pages_callback = save_completed_pages
         characters = active_characters(project)
         if not characters:
             raise AIProviderError("先に主要人物を選択して人物設定を作成してください", retryable=False)
@@ -992,6 +1004,8 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
                 validation_message or "Storyboardのページを生成できませんでした",
                 retryable=False,
             )
+        if project["analysis"].get("source_coverage") and sum(is_content_page(page) for page in storyboard) != requested_pages:
+            raise AIProviderError("生成した本文ページ数が目標と一致しません。保存済みの範囲から再試行してください", retryable=False)
         record_provider_generation(project_id, user_id, provider)
         for page in storyboard:
             page["knowledge_refs"] = knowledge_context.get("references", [])
@@ -1000,7 +1014,7 @@ def process_storyboard_job(project_id: str, user_id: str, job_id: str) -> None:
         if not db.complete_storyboard_job(
             job_id, project_id, user_id, characters, storyboard
         ):
-            raise RuntimeError("Storyboard Jobを完了状態へ更新できませんでした")
+            raise AIProviderError("生成中に作品が更新されました。保存済みの内容を確認して再試行してください", retryable=False)
         metadata = getattr(provider, "last_generation_metadata", None) or {}
         panel_count = sum(len(page.get("panels", [])) for page in storyboard)
         logger.info(
@@ -2161,20 +2175,25 @@ async def api_generate_storyboard(
     provider = get_ai_provider(project_ai_model_settings(project, user["id"]))
 
     if getattr(provider, "uses_external_api", False):
+        context = retrieve_knowledge_context(project_id, user["id"], "storyboard", str(project["analysis"]))
+        inputs = {**storyboard_project_inputs(project), "model_settings": project_ai_model_settings(project, user["id"]),
+                  "knowledge_refs": context.get("references", [])}
+        previous = db.latest_generation_job(project_id, "storyboard")
+        previous_inputs = json.loads(previous.get("input_json") or "{}") if previous else {}
+        if previous and previous.get("status") == "failed" and all(previous_inputs.get(key) == value for key, value in inputs.items()):
+            inputs["pages"] = previous_inputs.get("pages") or []
         job, created = db.create_async_generation_job(
             project_id,
             "storyboard",
             f"storyboard:{project_id}",
+            input_payload=inputs,
         )
         if not job:
             raise HTTPException(status_code=503, detail="Storyboard処理を開始できませんでした")
+        if not created and not storyboard_inputs_match(project, json.loads(job.get("input_json") or "{}")):
+            raise HTTPException(409, "別のネーム生成が進行中です。完了してから対象を変更してください")
         if created:
-            updated = db.update_project(
-                project_id,
-                user["id"],
-                status="processing",
-                current_step="storyboard",
-            )
+            updated = db.set_project_processing(project_id, user["id"], "storyboard")
             background_tasks.add_task(
                 process_storyboard_job,
                 project_id,
@@ -2186,7 +2205,7 @@ async def api_generate_storyboard(
         return JSONResponse(
             {
                 "accepted": True,
-                "job": job,
+                "job": public_storyboard_job(job),
                 "project": project_view(updated or project),
                 "mode": provider.provider_name,
             },
@@ -2661,9 +2680,9 @@ async def api_generation_status(project_id: str, user=Depends(current_user)):
     return {
         "project_status": project.get("status"),
         "panels": panels,
-        "jobs": jobs,
-        "character_job": character_job,
-        "storyboard_job": storyboard_job,
+        "jobs": [public_storyboard_job(job) if job.get("job_type") == "storyboard" else {key: value for key, value in job.items() if key != "input_json"} for job in jobs],
+        "character_job": {key: value for key, value in character_job.items() if key != "input_json"} if character_job else None,
+        "storyboard_job": public_storyboard_job(storyboard_job),
         "panel_generation": panel_generation_snapshot(project, jobs, recovered_panel),
         "panel_recovery": {
             "stale_job_ids": recovered_stale_panel,

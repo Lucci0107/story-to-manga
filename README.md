@@ -22,7 +22,7 @@ python3 -m venv .venv
 
 設定画面を未導入の既存利用者やモデル指定のない直接呼び出しには、`OPENAI_TEXT_MODEL`（既定`gpt-6-luna`）と`OPENAI_IMAGE_MODEL`（既定`gpt-image-2.5-sunburst`）を使います。Astraが利用できない場合はGPT-6.1 Solへ、GPT-6.1 SolとGPT-6 Lunaが利用できない場合は同系列の5.6モデルへ一度だけ切り替え、実際のモデルと推論を履歴に記録します。通信障害や認証エラーではモデルを切り替えません。
 
-通常のテキスト処理とは別に、Storyboardは`OPENAI_STORYBOARD_TIMEOUT_SECONDS`（既定240秒）、`OPENAI_STORYBOARD_MAX_RETRIES`（既定1回）、`OPENAI_STORYBOARD_MAX_OUTPUT_TOKENS`（既定25000、最大32000）で大きなStructured Outputへ対応します。すべての再試行回数と最大出力トークンには上限があります。
+通常のテキスト処理とは別に、Storyboardは`OPENAI_STORYBOARD_TIMEOUT_SECONDS`（既定240秒）、`OPENAI_STORYBOARD_MAX_RETRIES`（既定1回）、`OPENAI_STORYBOARD_MAX_OUTPUT_TOKENS`（既定25000、最大32000）でStructured Outputへ対応します。原稿全体の解析に基づくネームは`STORYBOARD_FULL_SOURCE_BATCH_PAGES`（既定2、1〜4ページ）で小さく分割します。タイムアウトした同じ要求を自動再送せず、失敗した範囲だけを1ページまで分割します。完了した本文はJobへ保存し、原稿・解析・人物設定・制作設定・Knowledge・モデル・旧ネームが同じ場合は続きから再試行します。旧ネームと画像は全編完成まで保持します。失敗理由・保存済みページ数・再試行ボタンは画面上部に表示し、途中のネームは状態APIへ返しません。すべての再試行回数と最大出力トークンには上限があります。
 
 物語解析は原稿の冒頭・末尾だけに省略せず、章／区間の全文を読み取ります。長文は全区間の解析を検証し、出来事と原文の対応を保存します。6万文字を超える本文は全文を区間に分けて一度ずつ読み、解析結果から全体を統合します。実AIの解析はバックグラウンドJobへ登録し、二重起動を防ぎます。完了した範囲を保存し、同じ入力での再試行では再利用します。`OPENAI_ANALYSIS_MAX_OUTPUT_TOKENS`（既定25000、最大32000）と`OPENAI_ANALYSIS_TIMEOUT_SECONDS`（既定300秒）で出力と推論の余地を確保します。原稿やKnowledgeは命令として実行しません。
 
@@ -145,6 +145,7 @@ Render Blueprintで設定する環境変数は、`render.yaml`に秘密値を置
 - `OPENAI_CHARACTER_TIMEOUT_SECONDS`
 - `STORYBOARD_JOB_STALE_SECONDS`（既定900秒。中断Jobを再試行可能に戻す判定時間）
 - `STORYBOARD_BATCH_PAGES`（既定8ページ。大きなネームのStructured Output分割単位）
+- `STORYBOARD_FULL_SOURCE_BATCH_PAGES`（既定2ページ。原稿全体の解析に基づくネームは、こちらを上限として小さく分割）
 - `MAX_UPLOAD_BYTES`
 - `SESSION_DAYS`
 - `ENABLE_DEMO_LOGIN`（本番では未設定のまま無効化を推奨）

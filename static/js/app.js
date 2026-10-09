@@ -984,7 +984,10 @@
     function analysisSourceNotice() {
       const source = state.analysis_source || {};
       if (source.requires_reanalysis) return '<div class="name-page-count-recovery" role="alert"><strong>ページ数を合わせる前に、原稿全体の解析が必要です</strong><p>' + (source.legacy_excerpt ? '以前の解析は原稿の抜粋だけを参照しています。' : '保存済みの解析が現在の原稿全体に対応していません。') + '原稿は' + source.section_count + (source.chapter_count ? '章' : '区間') + 'ありますが、解析の出来事は' + source.event_count + '件です。冒頭から結末まで解析し直して、ネームを作り直してください。</p><p>保存済みの人物設定と、確認済みの主要人物の選択は再利用します。</p>' + (activeStep === 'analysis' ? '<button type="button" class="primary-button compact-button" data-start-full-analysis>原稿全体を解析し直す</button>' : '<button type="button" class="primary-button compact-button" data-go-full-analysis>原稿全体の解析へ進む →</button>') + '</div>';
-      if (source.storyboard_needs_rebuild) return '<div class="name-page-count-recovery" role="status"><strong>原稿全体の解析ができました。次はネームを作り直してください</strong><p>保存済みの主要人物設定を使い、更新された出来事と結末から本文' + state.settings.target_page_count + 'ページを設計します。表紙・裏表紙は別ページです。現在のネームは作り直すまで保持します。</p>' + (activeStep === 'storyboard' ? '<button type="button" class="primary-button compact-button" data-rebuild-full-name>保存済みの人物設定でネームを作り直す</button>' : '<button type="button" class="primary-button compact-button" data-go-full-name>ネームを作り直す画面へ →</button>') + '</div>';
+      if (source.storyboard_needs_rebuild) {
+        if (activeStep === 'storyboard' && ['failed', 'queued', 'processing'].includes(storyboardJobState?.status)) return '';
+        return '<div class="name-page-count-recovery" role="status"><strong>原稿全体の解析ができました。次はネームを作り直してください</strong><p>保存済みの主要人物設定を使い、更新された出来事と結末から本文' + state.settings.target_page_count + 'ページを設計します。表紙・裏表紙は別ページです。現在のネームは作り直すまで保持します。</p>' + (activeStep === 'storyboard' ? '<button type="button" class="primary-button compact-button" data-rebuild-full-name>保存済みの人物設定でネームを作り直す</button>' : '<button type="button" class="primary-button compact-button" data-go-full-name>ネームを作り直す画面へ →</button>') + '</div>';
+      }
       if (source.complete && activeStep === 'analysis') return '<div class="callout" role="status"><p>原稿全体の' + source.section_count + (source.chapter_count ? '章' : '区間') + 'を解析済み。出来事と結末を確認してください。</p></div>';
       return '';
     }
@@ -1771,6 +1774,8 @@
       const counts = summary.page_counts;
       const mismatch = counts && counts.content_pages !== counts.target_content_pages;
       const sourceNeedsRepair = state.analysis_source?.requires_reanalysis || state.analysis_source?.storyboard_needs_rebuild;
+      const generatingName = ['queued', 'processing'].includes(storyboardJobState?.status);
+      const prepareDisabled = generatingName || (sourceNeedsRepair && storyboardJobState?.status === 'failed');
       const pageCounts = counts ? '<div class="name-page-counts" aria-label="ネームのページ数"><strong>本文の目標 ' + counts.target_content_pages + 'ページ</strong><span>現在の本文 ' + counts.content_pages + 'ページ</span><span>表紙 ' + counts.cover_pages + 'ページ / 裏表紙 ' + (counts.back_cover_pages || 0) + 'ページ / 合計 ' + counts.total_pages + 'ページ</span></div><p class="field-help">表紙・裏表紙は本文の目標ページ数に含みません。</p>' : '';
       const coverChoices = '<p>選択した構成：表紙 ' + (state.settings?.title_mode === 'cover' ? 'あり' : 'なし') + ' / 裏表紙 ' + (state.settings?.back_cover_mode === 'generate' ? 'あり' : 'なし') + '</p>';
       const missingCovers = counts?.content_pages && summary.missing_covers?.length ? '<div class="name-page-count-recovery"><strong>選んだ表紙・裏表紙をネームに追加してください</strong><p>既存の本文・画像を保持して、足りない表紙・裏表紙だけを追加します。画像は全編ネームを確認してから生成できます。</p><div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-add-cover-pages>選んだ表紙・裏表紙を追加</button></div></div>' : '';
@@ -1781,7 +1786,7 @@
       const download = currentId ? '<a class="secondary-button compact-button" href="' + base + '/manga-documents/' + encodeURIComponent(currentId) + '/download">全編Markdownをダウンロード</a>' : '';
       const confirmation = currentId && summary.state !== "confirmed" ? '<button type="button" class="primary-button compact-button" data-confirm-name' + (validation.errors.length ? ' disabled' : '') + '>この版の全編ネームを確定</button>' : '';
       const history = (summary.versions || []).length ? '<details><summary>版履歴（' + summary.versions.length + '件）</summary><ul>' + summary.versions.map(function(version) { return '<li><a href="' + base + '/manga-documents/' + encodeURIComponent(version.id) + '/download">版 ' + version.version_number + '</a> / ' + (version.approved_at ? '確定済み' : '確認待ち') + (version.id === currentId ? ' / 現在の内容' : '') + '</li>'; }).join('') + '</ul></details>' : '';
-      return '<section class="surface-panel panel-padding name-review-panel"><div class="name-review-header"><h3>全編ネームの事前確認</h3><span class="settings-badge">' + escapeHtml(label) + '</span></div><p>背景・人物の位置・セリフの話者と出所・反応・枠の理由を全ページで確認します。' + (summary.required ? '画像を生成する前に、この版を確定してください。' : '既存作品はそのまま出力できます。') + '</p>' + coverChoices + pageCounts + '<div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-prepare-name>全編ネームを出力・確認</button>' + download + confirmation + '</div>' +
+      return '<section class="surface-panel panel-padding name-review-panel"><div class="name-review-header"><h3>全編ネームの事前確認</h3><span class="settings-badge">' + escapeHtml(label) + '</span></div><p>背景・人物の位置・セリフの話者と出所・反応・枠の理由を全ページで確認します。' + (summary.required ? '画像を生成する前に、この版を確定してください。' : '既存作品はそのまま出力できます。') + '</p>' + coverChoices + pageCounts + '<div class="name-review-actions"><button type="button" class="secondary-button compact-button" data-prepare-name' + (prepareDisabled ? ' disabled' : '') + '>全編ネームを出力・確認</button>' + download + confirmation + '</div>' +
         (validation.errors.length ? '<p class="name-validation-error" role="alert">' + escapeHtml(validation.errors.join(' / ')) + '</p>' : '') +
         missingCovers + recovery +
         (validation.warnings.length ? '<details><summary>確認が必要な項目（' + validation.warnings.length + '件）</summary><ul>' + validation.warnings.map(function(value) { return '<li>' + escapeHtml(value) + '</li>'; }).join('') + '</ul></details>' : '') +
@@ -1889,9 +1894,9 @@
         return guidance ? message + " " + guidance : message;
       };
       const jobNotice = jobStatus === "failed"
-        ? '<div class="form-notice error-notice" role="alert"><span class="notice-mark">!</span><p>' + escapeHtml(storyboardErrorMessage(storyboardJobState)) + '</p></div>'
+        ? '<section class="name-page-count-recovery" role="alert"><strong>新しいネームの生成が途中で止まりました</strong><p>' + escapeHtml(storyboardErrorMessage(storyboardJobState)) + '</p><p>新しい本文は' + (storyboardJobState.completed_pages || 0) + ' / ' + state.settings.target_page_count + 'ページを保存済みです。' + ((storyboardJobState.completed_pages || 0) ? '再試行では保存済みの続きだけを生成します。' : '再試行では少ないページずつ生成します。') + '下のページ数と全編ネームは、作り直す前の保存済み内容です。人物設定は再利用します。</p><button type="button" class="primary-button compact-button" data-retry-storyboard>' + ((storyboardJobState.completed_pages || 0) ? '続きからネームを再試行' : 'ネーム生成を再試行') + '</button></section>'
         : jobActive
-          ? '<div class="form-notice" role="status"><span class="notice-mark">…</span><p>Storyboardを生成しています。再読み込み後もサーバーのJob状態から復元します。</p></div>'
+          ? '<div class="name-page-count-recovery" role="status"><strong>新しいネームを生成しています</strong><p>新しい本文 ' + (storyboardJobState?.completed_pages || 0) + ' / ' + state.settings.target_page_count + 'ページを保存済み。全編が完成したら下のネームを切り替えます。画面を閉じても処理は継続します。</p></div>'
           : "";
       const pageMarkup = pages.map(function (page, pageIndex) {
         const panels = (page.panels || []).map(function (panel, panelIndex) { return panelTemplate(page.id, panel, panelIndex); }).join("");
@@ -1903,11 +1908,12 @@
         const resolvedTemplate = familyLabels[page.composition?.family] || page.layout_geometry?.template || "未計算";
         return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + (isCoverPage(page) ? pageLabel(page) : String(page.page_number).padStart(2, '0')) + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-repair-page-layout data-composition-version="4" data-page-id="' + escapeAttr(page.id) + '">共有ガターを更新</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header>' + fallbackNotice + pageBoundaryFields(page) + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
       }).join("");
-      const body = pages.length ? jobNotice + '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : jobNotice + '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
+      const body = pages.length ? '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
-      content.innerHTML = heading("ネームを編集する", "ページをまたぐ展開と、コマごとの視線の流れを確認します。") + orderNote + (pages.length ? nameReviewMarkup() : '') + body;
+      content.innerHTML = heading("ネームを編集する", "ページをまたぐ展開と、コマごとの視線の流れを確認します。") + jobNotice + orderNote + (pages.length ? nameReviewMarkup() : '') + body;
       content.querySelector('.workspace-heading')?.insertAdjacentHTML('afterend', analysisSourceNotice());
       bindAnalysisSourceNotice();
+      content.querySelector('[data-retry-storyboard]')?.addEventListener('click', generateStoryboard);
       bindNameReview();
       bindStoryboardEvents();
     }
@@ -1985,7 +1991,7 @@
     async function pollStoryboardJob(jobId, operationMessage) {
       const runId = ++storyboardPollRun;
       const startedAt = Date.now();
-      const maximumPollingMs = 16 * 60 * 1000;
+      const maximumPollingMs = 120 * 60 * 1000;
       let consecutiveNetworkErrors = 0;
       storyboardPolling = true;
       if (activeStep === "storyboard") render();
@@ -2026,8 +2032,8 @@
           }
           updateProcessingDialog({
             message: operationMessage,
-            progress: job.status === "queued" ? "生成キューで順番を待っています" : "AIがページとコマの構成を作成しています",
-            submessage: "完了後に生成結果を保存します。画面を閉じても処理は継続します。"
+            progress: job.status === "queued" ? "生成キューで順番を待っています" : '新しい本文 ' + (job.completed_pages || 0) + ' / ' + state.settings.target_page_count + 'ページを保存済み',
+            submessage: "少ないページずつ生成し、完了した範囲を保存します。画面を閉じても処理は継続します。"
           });
         }
         throw new Error("Storyboardの処理状況を確認できる時間を超えました。処理状態を再確認してください");

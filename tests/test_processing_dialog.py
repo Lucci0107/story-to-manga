@@ -66,7 +66,7 @@ def test_storyboard_job_ui_restores_terminal_and_reload_states() -> None:
     assert 'storyboardPolling = false;' in APP_SCRIPT
     assert '"ネームを再試行"' in APP_SCRIPT
     assert '"処理状態を再確認"' in APP_SCRIPT
-    assert "maximumPollingMs = 16 * 60 * 1000" in APP_SCRIPT
+    assert "maximumPollingMs = 120 * 60 * 1000" in APP_SCRIPT
     assert "consecutiveNetworkErrors >= 4" in APP_SCRIPT
     assert "restoreStoryboardJobState();" in APP_SCRIPT
     assert 'goToStep("generate")' in APP_SCRIPT

@@ -102,6 +102,7 @@ class Settings:
     openai_storyboard_max_output_tokens: int
     storyboard_job_stale_seconds: int
     storyboard_batch_pages: int
+    storyboard_full_source_batch_pages: int
 
     @property
     def database_path(self) -> Path:
@@ -214,6 +215,9 @@ def get_settings() -> Settings:
         # 大きなStoryboardを単一Structured Outputへ詰め込まないための上限。
         storyboard_batch_pages=max(
             2, min(16, _int_env("STORYBOARD_BATCH_PAGES", 8))
+        ),
+        storyboard_full_source_batch_pages=max(
+            1, min(4, _int_env("STORYBOARD_FULL_SOURCE_BATCH_PAGES", 2))
         ),
     )
 
