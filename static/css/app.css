@@ -387,6 +387,29 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .generation-global-status strong { color: var(--accent-deep); font-size: 12px; }
 .generation-global-status span { line-height: 1.55; }
 .generation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.generation-page-selection { margin-bottom: 20px; border-left: 3px solid var(--accent); }
+.generation-page-selection h3 { margin: 0 0 8px; }
+.generation-range-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; }
+.generation-range-fields .field-label { display: grid; width: 150px; max-width: 100%; gap: 8px; font-size: 12px; }
+.generation-range-fields input[type="number"] { width: 100%; min-height: 42px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; }
+.generation-page-selection .panel-lead { font-size: 12px; line-height: 1.7; }
+.generation-page-selection .field-help { margin-top: 10px; line-height: 1.7; }
+.generation-cover-choices { display: grid; gap: 10px; padding: 8px 0; }
+.generation-cover-choice { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.6; }
+.generation-cover-choice input[type="checkbox"] { flex: 0 0 auto; width: 17px; height: 17px; min-height: 0; accent-color: var(--accent); }
+.generation-selection-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+[data-generation-selection-summary] { display: grid; gap: 5px; font-size: 12px; line-height: 1.6; }
+[data-generation-selection-summary] span { color: var(--muted); }
+.selection-error { color: var(--danger); }
+.generation-review-summary strong { overflow-wrap: anywhere; }
+.generation-batch-approval { display: grid; gap: 14px; margin-bottom: 20px; }
+.generation-batch-approval h3, .generation-batch-approval p { margin: 0; }
+.generation-batch-approval .primary-button { justify-self: start; }
+@media (max-width: 450px) {
+  .generation-range-fields { gap: 12px; }
+  .generation-range-fields .field-label { width: calc(50% - 6px); }
+  .generation-selection-footer .primary-button, .generation-batch-approval .primary-button { width: 100%; }
+}
 .panel-status-list { display: grid; gap: 8px; }
 .generation-panel-row { display: grid; grid-template-columns: 37px minmax(0, 1fr) auto; gap: 11px; align-items: center; border-bottom: 1px solid var(--line); padding: 11px 0; }
 .generation-panel-row:last-child { border-bottom: 0; }

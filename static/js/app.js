@@ -525,6 +525,11 @@
     let panelStateSyncInFlight = false;
     let panelGenerationState = null;
     let expandedGenerationPageIds = null;
+    let generationPageSelection = null;
+    let generationReviewRun = 0;
+    let generationApprovalInFlight = false;
+    // GenerateRequest.panel_idsと同じ上限。選択を空にして全コマ生成へ戻さない。
+    const generationBatchLimit = 128;
     let storyboardPolling = false;
     let storyboardJobState = null;
     let storyboardPollRun = 0;
@@ -2484,6 +2489,7 @@
     }
 
     function renderGenerate() {
+      generationReviewRun += 1;
       const panels = allPanels();
       const generated = panels.filter(function (item) { return item.panel.generation_status === "completed"; }).length;
       const failed = panels.filter(function (item) { return item.panel.generation_status === "failed"; }).length;
@@ -2495,7 +2501,8 @@
       const layoutPreview = panels.length ? renderGenerationLayoutPreview() : '';
       const namePending = state.name_script?.required && state.name_script?.state !== "confirmed";
       const nameNotice = namePending ? '<div class="form-notice" role="status"><span class="notice-mark">i</span><div><p>画像生成の前に、現在の全編ネームを確認して確定してください。</p><button type="button" class="secondary-button compact-button" data-review-name>全編ネームを確認</button></div></div>' : '';
-      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + nameNotice + (panels.length ? '<div class="generate-rail"><section class="surface-panel panel-padding">' + renderPanelRecoveryNotice() + '<div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="primary-button compact-button" data-generate-all' + disabled + '>未生成の設計を確認</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary">' + layoutPreview + '<div class="surface-panel"><h3>今回の対象</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。デモモードではすぐに確認できます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
+      content.innerHTML = heading("コマを生成する", "必要なコマだけを選び、生成後も一枚ずつ再生成できます。") + nameNotice + (panels.length ? renderGenerationPageSelection(panelBusy || namePending) + '<div class="generate-rail"><section class="surface-panel panel-padding">' + renderPanelRecoveryNotice() + '<div class="generation-toolbar"><p>' + panels.length + 'コマ中 ' + generated + 'コマを生成済み</p><div class="generation-actions"><button type="button" class="secondary-button compact-button" data-retry-failed' + (failed && !panelBusy ? "" : " disabled") + '>失敗したコマを再試行</button><button type="button" class="secondary-button compact-button" data-generate-all' + disabled + '>未生成すべての設計を確認</button></div></div>' + globalStatus + '<div class="panel-status-list">' + renderGenerationRows() + '</div></section><aside class="generation-summary">' + layoutPreview + '<div class="surface-panel"><h3>作品全体</h3><div class="generation-summary-number">' + panels.length + '</div><p>コマ。上で選んだ範囲だけ試せます。</p></div><div class="surface-panel"><h3>生成ルール</h3><p class="cost-note">キャラクター設定を毎回参照し、セリフは画像に描かずアプリ側で合成します。</p></div></aside></div>' + nextButton("edit", "編集画面へ") : '<section class="surface-panel empty-panel"><h3>先にネームを作成してください</h3><p>ページ・コマ構成ができると、必要な画像だけ生成できます。</p><button type="button" class="primary-button compact-button" data-goto-storyboard>ネームへ戻る</button></section>');
+      bindGenerationPageSelection(panelBusy || namePending);
       content.querySelector("[data-review-name]")?.addEventListener("click", function() { goToStep("storyboard"); });
       content.querySelector("[data-generate-all]")?.addEventListener("click", function () { reviewGeneration([], false, false); });
       content.querySelector("[data-retry-failed]")?.addEventListener("click", function () { reviewGeneration([], true, false); });
@@ -2508,30 +2515,155 @@
       bindGenerationLayoutPreview();
     }
 
+    function selectedGenerationPages() {
+      const pages = state.storyboard || [];
+      const body = pages.filter(function (page) { return !isCoverPage(page); });
+      const choice = generationPageSelection;
+      const start = Number(choice.start);
+      const end = Number(choice.end);
+      if (body.length && (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > body.length)) {
+        return { error: "本文の範囲を1〜" + body.length + "ページで指定してください。終了は開始以降のページにしてください。", panels: [] };
+      }
+      const selected = pages.filter(function (page) {
+        if (page.page_kind === 'cover') return choice.cover;
+        if (page.page_kind === 'back_cover') return choice.backCover;
+        const number = body.indexOf(page) + 1;
+        return number >= start && number <= end;
+      });
+      const entries = selected.flatMap(function (page) { return page.panels || []; });
+      const completed = entries.filter(function (panel) { return panel.generation_status === "completed"; }).length;
+      const busy = entries.filter(function (panel) { return ["queued", "processing"].includes(panel.generation_status); }).length;
+      const panels = entries.filter(function (panel) { return !["completed", "queued", "processing"].includes(panel.generation_status); });
+      const labels = [];
+      if (body.length) labels.push("本文 " + start + (end === start ? "" : "〜" + end) + "ページ（" + (end - start + 1) + "ページ）");
+      if (selected.some(function (page) { return page.page_kind === 'cover'; })) labels.push("表紙");
+      if (selected.some(function (page) { return page.page_kind === 'back_cover'; })) labels.push("裏表紙");
+      return { panels: panels, completed: completed, busy: busy, label: labels.join(" ＋ "),
+        error: panels.length > generationBatchLimit ? "1回に生成できるのは" + generationBatchLimit + "コマまでです。ページ範囲を狭めてください。" : "" };
+    }
+
+    function renderGenerationPageSelection(disabled) {
+      const pages = state.storyboard || [];
+      const bodyCount = pages.filter(function (page) { return !isCoverPage(page); }).length;
+      if (!generationPageSelection) generationPageSelection = { start: "1", end: String(Math.min(2, bodyCount) || 1), cover: false, backCover: false };
+      const choice = generationPageSelection;
+      const numberDisabled = disabled || !bodyCount ? ' disabled' : '';
+      const coverOptions = [{ key: "cover", kind: "cover", label: "表紙も生成" }, { key: "backCover", kind: "back_cover", label: "裏表紙も生成" }].map(function (option) {
+        const exists = pages.some(function (page) { return page.page_kind === option.kind; });
+        return '<label class="generation-cover-choice"><input type="checkbox" data-generation-choice="' + option.key + '"' + (exists && choice[option.key] ? ' checked' : '') + (disabled || !exists ? ' disabled' : '') + '>' + option.label + (exists ? '' : '（ネームなし）') + '</label>';
+      }).join('');
+      return '<section class="surface-panel panel-padding generation-page-selection" aria-labelledby="generation-page-heading"><h3 id="generation-page-heading">数ページだけ試し生成</h3><p class="panel-lead">まずは本文1〜2ページで絵柄・人物・読みやすさを確認できます。ページ範囲は自由に変更できます。</p><form data-generation-page-form><div class="generation-range-fields"><label class="field-label">本文の開始ページ<input type="number" min="1" max="' + bodyCount + '" step="1" value="' + escapeAttr(choice.start) + '" data-generation-choice="start"' + numberDisabled + '></label><label class="field-label">本文の終了ページ<input type="number" min="1" max="' + bodyCount + '" step="1" value="' + escapeAttr(choice.end) + '" data-generation-choice="end"' + numberDisabled + '></label><div class="generation-cover-choices">' + coverOptions + '</div></div><p class="field-help">表紙・裏表紙は本文のページ範囲に含めません。完成済みのコマは再利用し、未生成・失敗したコマだけを生成します。</p><div class="generation-selection-footer"><div data-generation-selection-summary role="status" aria-live="polite"></div><button type="submit" class="primary-button compact-button" data-review-selected-pages disabled>選んだページの生成内容を確認</button></div><p class="field-help">内容を確認して「この内容でまとめて生成」を押すと、選択したコマの画像生成を開始します。テスト生成にも通常の画像生成料金がかかります。</p></form></section>';
+    }
+
+    function bindGenerationPageSelection(disabled) {
+      const form = content.querySelector('[data-generation-page-form]');
+      if (!form) return;
+      const summary = form.querySelector('[data-generation-selection-summary]');
+      const button = form.querySelector('[data-review-selected-pages]');
+      function updateSelection() {
+        form.querySelectorAll('[data-generation-choice]').forEach(function (field) {
+          generationPageSelection[field.dataset.generationChoice] = field.type === 'checkbox' ? field.checked : field.value;
+        });
+        const selection = selectedGenerationPages();
+        summary.classList.toggle('selection-error', Boolean(selection.error));
+        summary.innerHTML = selection.error ? escapeHtml(selection.error) : '<strong>' + escapeHtml(selection.label || 'ページを選んでください') + '</strong><span>生成対象 ' + selection.panels.length + 'コマ / 完成済み ' + selection.completed + 'コマを再利用' + (selection.busy ? ' / 処理中 ' + selection.busy + 'コマを除外' : '') + '</span>';
+        button.disabled = disabled || Boolean(selection.error) || !selection.panels.length;
+      }
+      form.addEventListener('input', updateSelection);
+      form.addEventListener('change', updateSelection);
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        updateSelection();
+        if (button.disabled) return;
+        const selection = selectedGenerationPages();
+        const panelIds = selection.panels.map(function (panel) { return panel.id; });
+        if (!panelIds.length) return;
+        reviewGeneration(panelIds, true, false);
+      });
+      updateSelection();
+    }
+
+    async function loadGenerationDesigns(selected, runId) {
+      const designs = new Array(selected.length);
+      let nextIndex = 0;
+      async function loadNext() {
+        while (nextIndex < selected.length && runId === generationReviewRun && activeStep === 'generate') {
+          const index = nextIndex++;
+          designs[index] = await api('/api/projects/' + encodeURIComponent(state.id) + '/panels/' + encodeURIComponent(selected[index].panel.id) + '/design');
+        }
+      }
+      // 設計は4件ずつ取得し、全コマ分の要求を同時に送らない。
+      await Promise.all(Array.from({ length: Math.min(4, selected.length) }, loadNext));
+      return designs;
+    }
+
     async function reviewGeneration(panelIds, retryFailed, force) {
       const selected=allPanels().filter(function(item) { const status=item.panel.generation_status || "not_started"; return (!panelIds.length || panelIds.includes(item.panel.id)) && !["queued","processing"].includes(status) && (force || status !== "completed") && (retryFailed || force || status !== "failed"); });
       if (!selected.length) { showToast("生成対象はありません"); return; }
-      content.innerHTML=heading("生成する内容を確認", "各コマの構図・人物・セリフ・描画方式を確認してください。生成には費用がかかる場合があります。") + '<div data-approval-cards role="status">設計を検証しています…</div><button type="button" class="secondary-button" data-cancel-approval>戻る</button>';
+      if (selected.length > generationBatchLimit) { showToast('生成対象は' + selected.length + 'コマあります。上のページ範囲で' + generationBatchLimit + 'コマ以内を選んでください。', 'error'); return; }
+      const runId = ++generationReviewRun;
+      const selectedPageLabels = [...new Set(selected.map(function (item) { return pageLabel(item.page); }))];
+      content.innerHTML=heading("生成する内容を確認", "各コマの構図・人物・セリフ・描画方式を確認してください。生成には費用がかかる場合があります。") + '<div class="form-notice generation-review-summary"><div><strong>' + escapeHtml(selectedPageLabels.join('、')) + ' / ' + selected.length + 'コマ</strong><p>ここに表示したコマだけを生成します。既存のAIモデル・画質設定を使用します。</p><p data-approval-progress role="status" aria-live="polite"></p></div></div><div data-approval-cards>設計を検証しています…</div><div data-batch-approval></div><button type="button" class="secondary-button" data-cancel-approval>戻る</button>';
       content.querySelector('[data-cancel-approval]').onclick=renderGenerate;
       try {
-        const designs=await Promise.all(selected.map(function(item) { return api("/api/projects/"+encodeURIComponent(state.id)+"/panels/"+encodeURIComponent(item.panel.id)+"/design"); }));
+        const designs=await loadGenerationDesigns(selected, runId);
+        if (runId !== generationReviewRun || activeStep !== 'generate') return;
         const host=content.querySelector('[data-approval-cards]'); if (!host) return;
         host.innerHTML=designs.map(function(design,index) {
           const item=selected[index];
           return '<section class="surface-panel panel-padding approval-card"><h3>'+ escapeHtml(pageLabel(design.page_design || item.page)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+pageStage(design.page_design || item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(design.characters.join('、'))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p><p>この先まで描かない：'+escapeHtml((design.event_boundary.forbidden_until_later || []).join(' / '))+'</p><p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
         }).join('');
-        host.querySelectorAll('[data-approve-target]').forEach(function(button) { button.onclick=async function() {
-          button.disabled=true;
-          const design=designs[Number(button.dataset.approveTarget)];
-          try { await api("/api/projects/"+encodeURIComponent(state.id)+"/panels/"+encodeURIComponent(design.target_id)+"/approval",{method:"POST",body:JSON.stringify({design_hash:design.design_hash})}); await queueGeneration([design.target_id],retryFailed,force); }
-          catch(error) { showToast(error.message,"error"); button.disabled=false; }
-        }; });
-      } catch(error) { showToast(error.message,"error"); renderGenerate(); }
+        const invalidCount = designs.filter(function (design) { return design.errors.length; }).length;
+        const batchHost = content.querySelector('[data-batch-approval]');
+        if (selected.length > 1) {
+          batchHost.innerHTML = '<section class="surface-panel panel-padding generation-batch-approval"><h3>' + selected.length + 'コマをまとめて生成</h3><p>' + escapeHtml(selectedPageLabels.join('、')) + '</p>' + (invalidCount ? '<p class="selection-error" role="alert">' + invalidCount + 'コマに修正が必要です。ネームで修正してから再確認してください。</p>' : '<label class="generation-cover-choice"><input type="checkbox" data-confirm-generation-designs>上に表示された全コマの設計を確認しました</label>') + '<button type="button" class="primary-button" data-approve-batch disabled>この内容でまとめて生成（' + selected.length + 'コマ）</button></section>';
+          batchHost.querySelector('[data-confirm-generation-designs]')?.addEventListener('change', function (event) {
+            batchHost.querySelector('[data-approve-batch]').disabled = !event.target.checked || generationApprovalInFlight;
+          });
+          batchHost.querySelector('[data-approve-batch]').onclick = function () { approveAndQueue(designs); };
+        }
+        async function approveAndQueue(targets) {
+          if (generationApprovalInFlight || runId !== generationReviewRun || targets.some(function (design) { return design.errors.length; })) return;
+          generationApprovalInFlight = true;
+          const controls = content.querySelectorAll('[data-approve-target], [data-approve-batch], [data-confirm-generation-designs], [data-cancel-approval]');
+          controls.forEach(function (button) { button.disabled = true; });
+          const progress = content.querySelector('[data-approval-progress]');
+          try {
+            for (let index = 0; index < targets.length; index++) {
+              if (runId !== generationReviewRun || activeStep !== 'generate') return;
+              const design = targets[index];
+              progress.textContent = '確認を保存しています… ' + (index + 1) + ' / ' + targets.length + 'コマ';
+              await api('/api/projects/' + encodeURIComponent(state.id) + '/panels/' + encodeURIComponent(design.target_id) + '/approval', { method: 'POST', body: JSON.stringify({ design_hash: design.design_hash }) });
+            }
+            if (runId !== generationReviewRun || activeStep !== 'generate') return;
+            await queueGeneration(targets.map(function (design) { return design.target_id; }), retryFailed, force);
+          } catch (error) {
+            if (runId === generationReviewRun && activeStep === 'generate') {
+              progress.textContent = '画像生成は開始していません。' + error.message;
+              showToast(error.message, 'error');
+            }
+          } finally {
+            generationApprovalInFlight = false;
+            if (runId === generationReviewRun && activeStep === 'generate') {
+              controls.forEach(function (button) { button.disabled = false; });
+              host.querySelectorAll('[data-approve-target]').forEach(function (button) { button.disabled = Boolean(designs[Number(button.dataset.approveTarget)].errors.length); });
+              const batchButton = batchHost.querySelector('[data-approve-batch]');
+              if (batchButton) batchButton.disabled = Boolean(invalidCount) || !batchHost.querySelector('[data-confirm-generation-designs]')?.checked;
+            }
+          }
+        }
+        host.querySelectorAll('[data-approve-target]').forEach(function (button) {
+          button.onclick = function () { approveAndQueue([designs[Number(button.dataset.approveTarget)]]); };
+        });
+      } catch(error) {
+        if (runId === generationReviewRun && activeStep === 'generate') { showToast(error.message,"error"); renderGenerate(); }
+      }
     }
 
     async function queueGeneration(panelIds, retryFailed, force) {
+      if (!Array.isArray(panelIds) || !panelIds.length) { showToast('生成するコマを選んでください', 'error'); return; }
       if (polling || panelGenerationState?.active || panelRecheckInFlight || panelStateSyncInFlight) return;
-      const buttons = content.querySelectorAll("[data-generate-all], [data-retry-failed], [data-retry-panel], [data-regenerate-panel]");
+      const buttons = content.querySelectorAll("[data-generate-all], [data-retry-failed], [data-retry-panel], [data-regenerate-panel], [data-review-selected-pages], [data-approve-target], [data-approve-batch]");
       buttons.forEach(function (button) { button.disabled = true; });
       const operationMessage = force && panelIds.length === 1 ? "漫画画像を再生成しています…" : "漫画画像を生成しています…";
       panelRecoveryNotice = null;
