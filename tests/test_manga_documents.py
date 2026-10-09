@@ -88,6 +88,42 @@ def test_new_name_gate_and_client_cannot_remove_requirement(workspace):
     assert db.list_generation_jobs(project["id"]) == []
 
 
+def test_repair_centered_text_is_local_and_keeps_unchanged_name_confirmation(workspace):
+    client, project = workspace
+    base = f"/api/projects/{project['id']}"
+    pages = deepcopy(project["storyboard"])
+    pages[0]["panels"][0].update(character_position="center", narration=["あ" * 25, "あ" * 14])
+    pages[0] = reflow_page(pages[0], project["settings"])
+    target = pages[0]["panels"][0]
+    # 保存済み旧計画の、中央の人物に文字が重なる状態を再現する。
+    for item in target["text_layout"]["items"]:
+        item.update(x=.55, overflow=True)
+    target["panel_direction"]["status"] = "needs_revision"
+    pages[1]["panels"][0]["image_url"] = "/static/assets/existing.png"
+    project = db.update_project(project["id"], project["user_id"], storyboard=pages)
+    old_document, _ = prepare_and_confirm(client, project)
+    before = db.get_project(project["id"], project["user_id"])
+    old_design = client.get(base + f"/panels/{target['id']}/design").json()
+
+    response = client.post(base + f"/pages/{pages[0]['id']}/layout/repair", json={})
+    assert response.status_code == 200
+    after = response.json()["project"]
+    repaired = after["storyboard"][0]["panels"][0]
+    assert not any(item["overflow"] for item in repaired["text_layout"]["items"])
+    assert repaired["panel_direction"]["status"] == "ready"
+    for key in ("id", "description", "dialogue", "narration", "characters", "image_url"):
+        assert repaired.get(key) == target.get(key)
+    assert after["storyboard"][1] == before["storyboard"][1]
+    assert after["settings"] == before["settings"]
+    assert after["characters"] == before["characters"]
+    assert db.list_generation_jobs(project["id"]) == []
+    assert after["name_script"]["state"] == "confirmed"
+    assert after["name_script"]["version_id"] == old_document["id"]
+    new_design = client.get(base + f"/panels/{target['id']}/design").json()
+    assert new_design["design_hash"] != old_design["design_hash"]
+    assert new_design["errors"] == []
+
+
 def test_revision_invalidates_name_without_replacing_previous_file(workspace):
     client, project = workspace
     base = f"/api/projects/{project['id']}"

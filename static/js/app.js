@@ -513,6 +513,7 @@
     let activeStep = state.current_step || "story";
     let selectedPageIndex = 0;
     let selectedPanelId = null;
+    let repairedLayoutPageId = null;
     let saveTimer = null;
     let polling = false;
     let panelPollingTimer = null;
@@ -903,6 +904,31 @@
       if (step === "generate") restorePanelGenerationState();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
+
+    function focusStoryboardPage(pageId) {
+      const card = [...content.querySelectorAll('.page-card')].find(function (node) { return node.dataset.pageId === pageId; });
+      if (!card) return;
+      card.querySelector('[data-repair-page-layout]')?.focus({ preventScroll: true });
+      card.scrollIntoView({ block: 'start', behavior: 'instant' });
+    }
+
+    content.addEventListener('click', async function (event) {
+      if (event.target.closest('[data-layout-generation]')) {
+        await goToStep('generate');
+        return;
+      }
+      if (event.target.closest('[data-layout-name-review]')) {
+        const prepare = content.querySelector('[data-prepare-name]');
+        prepare?.focus({ preventScroll: true });
+        prepare?.scrollIntoView({ block: 'center', behavior: 'instant' });
+        return;
+      }
+      const button = event.target.closest('[data-open-layout-page]');
+      if (!button || button.disabled) return;
+      button.disabled = true;
+      await goToStep('storyboard');
+      focusStoryboardPage(button.dataset.openLayoutPage);
+    });
 
     function renderProgress() {
       const hasAnalysis = Boolean(state.analysis);
@@ -1943,7 +1969,7 @@
         const layoutOptions = [{value:"classic", label:"自動"}, {value:"drama", label:"標準ドラマ"}, {value:"conversation", label:"会話"}, {value:"action", label:"アクション"}, {value:"psychological", label:"心理"}, {value:"four_panel", label:"4コマ（均等）"}, {value:"hero", label:"1コマ"}, {value:"wide", label:"横長重視"}].map(function (option) { return '<option value="' + option.value + '"' + (option.value === (page.layout || "classic") ? " selected" : "") + '>' + option.label + '</option>'; }).join("");
         const familyLabels = {"dominant-top":"導入を大きく", "vertical-anchor":"縦長コマを軸に", "diagonal-middle":"中段に変化", "climax-bottom":"最後を大きく", "conversation-asymmetric":"会話に大小のリズム", "psychological":"間と余白", "four-panel":"均等4コマ"};
         const resolvedTemplate = familyLabels[page.composition?.family] || page.layout_geometry?.template || "未計算";
-        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + (isCoverPage(page) ? pageLabel(page) : String(page.page_number).padStart(2, '0')) + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-repair-page-layout data-composition-version="4" data-page-id="' + escapeAttr(page.id) + '">共有ガターを更新</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header>' + fallbackNotice + pageBoundaryFields(page) + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
+        return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + (isCoverPage(page) ? pageLabel(page) : String(page.page_number).padStart(2, '0')) + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-repair-page-layout data-composition-version="4" data-page-id="' + escapeAttr(page.id) + '">共有ガターを更新</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページ削除</button></div></header>' + layoutRecoveryMarkup(page) + fallbackNotice + pageBoundaryFields(page) + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
       }).join("");
       const body = pages.length ? '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
@@ -1987,13 +2013,18 @@
       }); });
       content.querySelectorAll("[data-repair-page-layout]").forEach(function (button) { button.addEventListener("click", async function () {
         if (button.disabled) return;
+        if (!requireSavedStoryboard()) return;
         if (!window.confirm("このページを新版の読みやすさ優先レイアウトで再計算します。コマ配置と文字位置は変更されますが、元画像・セリフは保持され、画像生成は行いません。続けますか？")) return;
         button.disabled = true;
         try {
           const data = await api("/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(button.dataset.pageId) + "/layout/repair" + (button.dataset.compositionVersion === "4" ? "?composition_version=4" : ""), { method: "POST", body: "{}" });
           state = data.project;
-          showToast("このページのコマ割りと文字配置を再計算しました");
+          repairedLayoutPageId = button.dataset.pageId;
+          const page = state.storyboard.find(function (item) { return item.id === button.dataset.pageId; });
+          const remaining = textOverflowPanels(page);
+          showToast(remaining.length ? "再計算しましたが、コマ" + remaining.map(function (panel) { return panel.order; }).join('・') + "の修正が必要です。レイアウトを変更して確認してください。" : "配置を再計算しました。修正後の設計を確認してください。", remaining.length ? "error" : undefined);
           render();
+          focusStoryboardPage(button.dataset.pageId);
         } catch (error) { showToast(error.message, "error"); button.disabled = false; }
       }); });
       content.querySelectorAll("[data-page-move]").forEach(function (button) { button.addEventListener("click", function () {
@@ -2848,14 +2879,33 @@
       }
     }
 
+    function textOverflowPanels(page) {
+      return (page?.panels || []).filter(function (panel) { return (panel.text_layout?.items || []).some(function (item) { return item.overflow; }); });
+    }
+
+    function layoutRecoveryMarkup(page) {
+      const panels = textOverflowPanels(page);
+      if (!panels.length) {
+        if (activeStep !== 'storyboard' || repairedLayoutPageId !== page.id) return '';
+        const namePending = state.name_script?.required && state.name_script?.state !== 'confirmed';
+        return '<section class="page-layout-recovery" role="status"><strong>文字配置を再計算しました</strong>' + (namePending
+          ? '<p>全編ネームを出力・確認して更新した版を確定すると、画像生成に戻れます。</p><button type="button" class="secondary-button compact-button" data-layout-name-review>全編ネームの確認へ</button>'
+          : '<p>コマ生成の確認画面で、修正後の配置を確認してください。</p><button type="button" class="secondary-button compact-button" data-layout-generation>コマ生成へ戻る</button>') + '</section>';
+      }
+      const orders = panels.map(function (panel) { return panel.order; }).join('・');
+      const action = activeStep === 'storyboard'
+        ? '<p>このページの「配置を再計算」を押してください。解消しない場合は「レイアウト」を変更して再確認してください。</p>'
+        : '<button type="button" class="secondary-button compact-button" data-open-layout-page="' + escapeAttr(page.id) + '">このページをネームで修正</button>';
+      return '<section class="page-layout-recovery" role="alert"><strong>' + escapeHtml(pageLabel(page)) + ' / コマ' + escapeHtml(orders) + 'の文字配置を修正してください</strong><p>文字が枠に収まらないか、人物と重なっています。この状態では書き出せません。</p><p>配置の再計算では文章と元画像を保持し、AIによる再生成は行いません。修正後の配置を確認してから生成してください。</p>' + action + '</section>';
+    }
+
     function pageStage(page) {
       if (!page) return '<div class="preview-frame-wrap"><p>ページがありません</p></div>';
       if (Number(page.composition?.composition_version || page.composition_version || 1) >= 2 || (page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
         // Composition v2/v3をブラウザで再解釈せず、PDF・ZIPと同じ最終画像を表示する。
         const src = "/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(page.id) + "/composition.png?v=" + encodeURIComponent(state.updated_at || "");
         const transcript = (page.panels || []).map(function (panel, index) { return "コマ" + (index + 1) + " " + [...(panel.dialogue || []), ...(panel.narration || [])].join(" "); }).join("。 ");
-        const hasOverflow = (page.panels || []).some(function (panel) { return (panel.text_layout?.items || []).some(function (item) { return item.overflow; }); });
-        const warning = hasOverflow ? '<p role="alert">文字領域が不足しています。コマを広げるかページを分割して再計算してください。この状態では書き出せません。</p>' : '';
+        const warning = layoutRecoveryMarkup(page);
         return warning + '<div class="preview-frame-wrap"><img class="composition-final-image" src="' + escapeAttr(src) + '" alt="' + escapeAttr(pageLabel(page) + "。 " + transcript) + '"></div>';
       }
       const panels = page.panels || [];

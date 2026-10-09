@@ -58,6 +58,40 @@ def test_explicit_face_collision_is_not_accepted():
     assert plan_panel_direction(item, {})["status"] == "needs_revision"
 
 
+@pytest.mark.parametrize("language,sides", [("ja", ["right", "left"]), ("en", ["left", "right"])])
+def test_centered_people_use_side_columns_without_losing_text(language, sides):
+    item = panel()
+    item.update(characters=["A", "B", "C"], character_position="center",
+                dialogue=[], narration=["あ" * 25, "あ" * 14])
+    item["geometry"].update(width=.34862, height=.453)
+    direction = plan_panel_direction(item, {"language": language})
+    assert direction["status"] == "ready"
+    assert direction["crop_anchor"]["x"] == "center"
+    texts = direction["text_layout"]["items"]
+    assert [text["text"] for text in texts] == item["narration"]
+    assert [text["side"] for text in texts] == sides
+    assert all(text["font_size"] == 17 and not text["overflow"] for text in texts)
+    character = direction["character_zone"]
+    for text in texts:
+        assert text["x"] + text["width"] < character["x"] or text["x"] > character["x"] + character["width"]
+        assert text["y"] + text["height"] <= .96
+
+
+def test_centered_people_still_block_if_both_columns_are_too_small():
+    item = panel()
+    item.update(character_position="center", dialogue=["長いセリフ" * 100])
+    direction = plan_panel_direction(item, {})
+    assert direction["status"] == "needs_revision"
+    assert direction["text_layout"]["items"][0]["text"] == item["dialogue"][0]
+    assert direction["text_layout"]["items"][0]["font_size"] >= 14
+
+
+def test_centered_people_respect_explicit_protected_regions():
+    item = panel()
+    item.update(character_position="center", protected_zones=[{"x": 0, "y": 0, "width": 1, "height": 1}])
+    assert plan_panel_direction(item, {})["status"] == "needs_revision"
+
+
 def test_prompt_uses_plan_regions():
     item = panel()
     item["panel_direction"] = plan_panel_direction(item, {})

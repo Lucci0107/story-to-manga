@@ -51,10 +51,13 @@ def plan_panel_direction(panel, settings):
     language = settings.get("language", "ja")
     position = str(panel.get("character_position") or panel.get("subject_position") or "")
     character_right = "right" in position or "右" in position or not position and language == "en"
-    text_x = 0.04 if character_right else 0.55
     character_zone = {"x": 0.50 if character_right else 0.04, "y": 0.06, "width": 0.46, "height": 0.88}
-    if "center" in position or "中央" in position:
+    center_position = "center" in position or "中央" in position
+    centered = bool(panel.get("characters")) and center_position
+    if center_position:
         character_zone["x"] = 0.27
+    preferred_text_side = "left" if language == "en" else "right"
+    text_side = preferred_text_side if centered else "left" if character_right else "right"
     face_zone = {"x": character_zone["x"] + 0.04, "y": 0.12, "width": 0.36, "height": 0.38}
     framing = resolve_head_framing(panel)
     target = (framing['headroom_target_min'] + framing['headroom_target_max']) / 2
@@ -75,7 +78,9 @@ def plan_panel_direction(panel, settings):
             types = panel.get("dialogue_types" if kind == "bubble" else "sfx_types") or []
             token = text_direction(item, profile, str(types[index]) if index < len(types) else "")
             size = max(14, round(17 * token["size_scale"]))
-            box_width = 0.41
+            # 中央の人物に通常の半幅文字列を重ねず、左右の余白へ予約する。
+            # 一方の列が埋まったら読順に沿ってもう一方へ送る。文字は縮めない。
+            box_width = min(0.41, character_zone["x"] - 0.06) if centered else 0.41
             padding = 0.18 * box_width * width if token["shape"] == "burst" else 12
             lines = wrap_text(str(text), max(1, box_width * width - 2 * padding), size)
             # 短いセリフを横長の空疎な帯へ引き伸ばさず、生成前に実幅を確定する。
@@ -85,14 +90,17 @@ def plan_panel_direction(panel, settings):
             box_height = (len(lines) * (size + 5) + 24 + (8 if kind == "bubble" else 0)) / height
             if kind == "bubble":
                 box_height = max(box_height, box_width * width / height * 0.36)
-            actual_x = text_x if character_right else 0.96 - box_width
+            if centered and cursor + box_height > 0.96 and text_side == preferred_text_side:
+                text_side = "right" if text_side == "left" else "left"
+                cursor = 0.04
+            actual_x = 0.04 if text_side == "left" else 0.96 - box_width
             rect = {"x": actual_x, "y": cursor, "width": box_width, "height": box_height}
             overlap = any(rect["x"] < zone["x"] + zone["width"] and rect["x"] + rect["width"] > zone["x"]
                           and rect["y"] < zone["y"] + zone["height"] and rect["y"] + rect["height"] > zone["y"] for zone in protected)
             effective_padding = box_width * width * 0.18 if token["shape"] == "burst" else padding
             overflow = cursor + box_height > 0.96 or overlap or any(body_font(size).getlength(line) > box_width * width - 2 * effective_padding + 0.01 for line in lines)
             item.update(rect, font_size=size, lines=lines, line_count=len(lines), direction=token,
-                        overflow=overflow, font_scale=1, side="left" if character_right else "right")
+                        overflow=overflow, font_scale=1, side=text_side)
             items.append(item)
             zones.append({**rect, "type": kind, "item_id": item["id"]})
             cursor += box_height + 0.025
@@ -215,7 +223,7 @@ def plan_panel_direction(panel, settings):
             "headroom_target": feasibility.get('headroom_target'),
             "face_safe_zone": face_zone, "important_prop_zone": prop_zone, "important_hand_zone": hand_zone,
             "protected_zones": protected, "reserved_text_zones": zones,
-            "crop_anchor": {"x": "right" if character_right else "left", "y": "middle"},
+            "crop_anchor": {"x": "center" if centered else "right" if character_right else "left", "y": "middle"},
             "visual_style": profile, "breakout_policy": {"enabled": False, "reason": "専用前景素材と実画像の人物位置確認が必要"},
             "text_layout": {"version": 3, "placement_mode": "pre_generation_plan",
                             # 生成前に確定した文字領域はCompositionと同じ4%の

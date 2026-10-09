@@ -356,7 +356,7 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .empty-panel h3 { margin: 0; font-size: 19px; }
 .empty-panel p { max-width: 35em; margin: 0 0 8px; color: var(--muted); font-size: 11px; }
 .storyboard-list { display: grid; gap: 20px; }
-.page-card { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.page-card { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); scroll-margin-top: 80px; }
 .page-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: var(--surface-soft); padding: 14px 17px; }
 .page-card-title { display: flex; min-width: 0; align-items: center; gap: 11px; }
 .page-number-badge { display: grid; width: 33px; height: 33px; place-items: center; border-radius: 8px; background: var(--chrome); color: #fff; font-family: monospace; font-size: 11px; }
@@ -763,6 +763,9 @@ body.processing-dialog-open { overflow: hidden; }
 .approval-card .preview-frame-wrap { max-width: 390px; margin: 16px 0; }
 .approval-card p { margin: 10px 0; }
 .approval-card [role="alert"] { color: var(--accent); }
+.page-layout-recovery { padding: 16px; margin: 12px 0; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; overflow-wrap: anywhere; }
+.page-layout-recovery p { margin: 10px 0; font-size: 12px; line-height: 1.8; }
+.page-card > .page-layout-recovery { margin: 16px; }
 .name-review-panel { margin-bottom: 24px; }
 .name-review-header, .name-review-actions, .sheet-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .name-review-header { justify-content: space-between; }
