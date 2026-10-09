@@ -1149,3 +1149,37 @@ def test_image_parameter_rejection_names_the_rejected_setting(monkeypatch, param
     monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
     with pytest.raises(OpenAIRequestError, match=label):
         request_json("https://api.openai.com/v1/images/generations", api_key="test-only", payload={"model": "gpt-image-2"})
+
+
+@pytest.mark.parametrize(
+    ("message", "category"),
+    [
+        ("Your request was rejected as a result of our safety system. private-source-fragment", "content_filter"),
+        ("Your request was blocked by our safety filters. private-source-fragment", "content_filter"),
+        ("The generated result was blocked by a safety check. private-source-fragment", "content_filter"),
+        ("Please check the safety of your network. private-source-fragment", "request"),
+    ],
+)
+def test_image_safety_rejection_without_error_code_is_classified_without_source_leak(
+    tmp_path, monkeypatch, caplog, message, category,
+):
+    requests = []
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        raise HTTPError(request.full_url, 400, "bad request", {}, io.BytesIO(json.dumps({
+            "error": {"message": message, "code": None, "type": None, "param": None},
+        }).encode()))
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    with caplog.at_level("INFO", logger="story_to_manga.artwork"):
+        with pytest.raises(ArtworkGenerationError) as raised:
+            save_openai_image(
+                {"generation_prompt": "架空の町の風景"}, runtime_settings(),
+                LocalFileStorage(tmp_path), "blocked.png",
+            )
+    assert raised.value.__cause__.category == category
+    assert raised.value.__cause__.error_code is None
+    assert len(requests) == 1 and not (tmp_path / "blocked.png").exists()
+    assert "private-source-fragment" not in str(raised.value) + caplog.text
+    if category == "content_filter":
+        assert "安全性チェック" in str(raised.value)

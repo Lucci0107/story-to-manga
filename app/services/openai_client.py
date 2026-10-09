@@ -133,24 +133,38 @@ def _safe_error_identifier(value: Any) -> Optional[str]:
     return None
 
 
+def _message_error_category(message: Any, status_code: int) -> Optional[str]:
+    """コードのない拒否応答を、既知の理由だけに分類する。本文は残さない。"""
+
+    if status_code != 400 or not isinstance(message, str):
+        return None
+    normalized = " ".join(message.lower().split())
+    if re.search(r"\b(?:rejected|blocked)\b.{0,100}\b(?:safety system|safety filters?|safety checks?)\b", normalized):
+        return "content_filter"
+    return None
+
+
 def _safe_error_fields(
     exc: urllib.error.HTTPError,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """エラー本文から分類に必要なコードだけを取り出す。本文は保持しない。"""
+) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """コード・項目名・既知の分類だけを取り出す。エラー本文は保持しない。"""
 
     try:
         raw = exc.read(16_384)
         body = json.loads(raw.decode("utf-8"))
         error = body.get("error") if isinstance(body, dict) else None
         if not isinstance(error, dict):
-            return None, None, None
+            return None, None, None, None
         code = error.get("code")
         error_type = error.get("type")
         error_param = error.get("param")
         # エラー項目に原稿や秘密が混入しても、ログへ任意の文字列を渡さない。
-        return _safe_error_identifier(code), _safe_error_identifier(error_type), _safe_error_identifier(error_param)
+        return (
+            _safe_error_identifier(code), _safe_error_identifier(error_type), _safe_error_identifier(error_param),
+            _message_error_category(error.get("message"), exc.code),
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, AttributeError):
-        return None, None, None
+        return None, None, None, None
 
 
 def request_bytes(
@@ -197,8 +211,10 @@ def request_bytes(
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
-            error_code, error_type, error_param = _safe_error_fields(exc)
+            error_code, error_type, error_param, message_category = _safe_error_fields(exc)
             category = _http_error_category(exc.code, error_code, error_type, error_param)
+            if category == "request" and error_code is None and message_category:
+                category = message_category
             # quota枯渇は再試行しても回復しないため、課金APIを余分に呼ばない。
             retryable = (_retryable_status(exc.code) and category != "quota"
                          and (category != "timeout" or retry_timeouts))
