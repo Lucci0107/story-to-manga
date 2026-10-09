@@ -9,6 +9,8 @@ from app import db
 from app.main import app
 from app.schemas import SettingsPayload, normalize_storyboard
 from app.services.architect import finalize_storyboard
+from app.services.ai_pipeline import compose_panel_prompt
+from app.services.character_references import anonymous_characters, registered_character, unresolved_characters
 
 
 @pytest.fixture
@@ -92,3 +94,46 @@ def test_one_changed_design_stops_entire_selected_batch_before_generation(worksp
     assert result.status_code == 409
     assert db.list_generation_jobs(project["id"]) == []
     assert db.get_project(project["id"], project["user_id"])["storyboard"] == before
+
+
+@pytest.mark.parametrize("name,anonymous", [("患者", True), ("未登録の固有人物", False)])
+def test_anonymous_extra_does_not_generate_a_profile_but_named_person_requires_one(workspace, name, anonymous):
+    client, project = workspace
+    base = f"/api/projects/{project['id']}"
+    panel_url = base + "/panels/panel-1-2"
+    assert client.patch(panel_url, json={"characters": [name]}).status_code == 200
+    confirm_name(client, project)
+    design = client.get(panel_url + "/design").json()
+    assert design["anonymous_characters"] == ([name] if anonymous else [])
+    approved = client.post(panel_url + "/approval", json={"design_hash": design["design_hash"]})
+    if anonymous:
+        assert approved.status_code == 200, approved.text
+        generated = client.post(base + "/generate", json={"panel_ids": ["panel-1-2"]})
+        assert generated.status_code == 200, generated.text
+        after = db.get_project(project["id"], project["user_id"])
+        panel = after["storyboard"][1]["panels"][1]
+        assert panel["generation_status"] == "completed"
+        assert "匿名の脇役" in panel["generation_prompt"]
+        assert after["characters"] == project["characters"] == []
+    else:
+        assert approved.status_code == 422
+        assert "キャラクター設定" in approved.json()["detail"]
+        assert not db.list_generation_jobs(project["id"])
+
+
+def test_registered_anonymous_role_uses_its_existing_profile_and_alias():
+    person = {"name": "患者", "aliases": ["入院中の人物"], "appearance": "登録済みの容貌"}
+    for name in ("患者", "入院中の人物"):
+        panel = {"characters": [name]}
+        assert registered_character([person], name) is person
+        assert anonymous_characters(panel, [person]) == []
+        prompt = compose_panel_prompt(panel, [person], {})
+        assert "登録済みの容貌" in prompt and "匿名の脇役" not in prompt
+
+
+def test_shared_role_alias_does_not_merge_two_registered_people():
+    characters = [{"name": "葵", "aliases": ["患者"]}, {"name": "凛", "aliases": ["患者"]}]
+    panel = {"characters": ["患者"]}
+    assert registered_character(characters, "患者") is None
+    assert anonymous_characters(panel, characters) == []
+    assert unresolved_characters(panel, characters) == ["患者"]

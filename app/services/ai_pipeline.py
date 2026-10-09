@@ -598,10 +598,18 @@ def compose_panel_prompt(
 
     settings = canonicalize_stored_settings(settings)
     order_context = reading_order_context(settings)
-    lookup = {str(item.get("name")): item for item in characters}
+    from .character_references import anonymous_characters, registered_character
+    anonymous = set(anonymous_characters(panel, characters))
     identities = []
     for name in panel.get("characters", []):
-        character = lookup.get(str(name), {})
+        if name in anonymous:
+            identities.append(
+                f"{name}: 匿名の脇役。個別の人物設定・スタイルシートはない。"
+                "原稿とコマ説明にない年齢・性別・容貌・経歴を断定せず、顔を見せない等の指定を守る。"
+                "同じ役名でも別の場面の人物と同一人物へ固定せず、登録済みの主要人物の外見を流用しない。"
+            )
+            continue
+        character = registered_character(characters, str(name)) or {}
         identities.append(
             f"{name}: 外見 {character.get('appearance', '')}; 髪型 {character.get('hairstyle', '')}; "
             f"髪色 {character.get('hair_color', '')}; 目 {character.get('eye_characteristics', '')}; "

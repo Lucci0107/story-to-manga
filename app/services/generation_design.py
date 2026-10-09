@@ -6,6 +6,7 @@ import json
 from .architect import rendering_profile, tone_parameters, event_issues
 from .reading_order import canonicalize_stored_settings
 from .page_types import is_content_page
+from .character_references import anonymous_characters, unresolved_characters
 
 VOLATILE = {
     "generation_status",
@@ -38,6 +39,7 @@ def design_data(
 
     return {
         "version": 1,
+        "character_reference_policy": "registered_profiles_and_anonymous_roles_v1",
         "project_id": project["id"],
         "page": stable(page),
         "target_id": panel["id"],
@@ -129,8 +131,7 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
         and not settings.get("script_tone_custom", "").strip()
     ):
         errors.append("脚本トーンの自由記述を入力してください。")
-    names = {c.get("name") for c in project.get("characters") or []}
-    if any(name not in names for name in panel.get("characters") or []):
+    if unresolved_characters(panel, project.get("characters") or []):
         errors.append("登場人物をキャラクター設定へ登録してください。")
     for character in project.get("characters") or []:
         url = character.get("reference_image_url")
@@ -174,6 +175,7 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
         "target_id": panel["id"],
         "description": panel.get("description"),
         "characters": panel.get("characters", []),
+        "anonymous_characters": anonymous_characters(panel, project.get("characters") or []),
         "dialogue": panel.get("dialogue", []),
         "narration": panel.get("narration", []),
         "composition": page.get("composition"),

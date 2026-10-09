@@ -2597,6 +2597,13 @@
       return designs;
     }
 
+    function generationCharacterLabels(design) {
+      const anonymous = new Set(design.anonymous_characters || []);
+      return design.characters.map(function (name) {
+        return anonymous.has(name) ? name + '（匿名の脇役・個別設定なし）' : name;
+      }).join('、');
+    }
+
     async function reviewGeneration(panelIds, retryFailed, force) {
       const selected=allPanels().filter(function(item) { const status=item.panel.generation_status || "not_started"; return (!panelIds.length || panelIds.includes(item.panel.id)) && !["queued","processing"].includes(status) && (force || status !== "completed") && (retryFailed || force || status !== "failed"); });
       if (!selected.length) { showToast("生成対象はありません"); return; }
@@ -2611,7 +2618,7 @@
         const host=content.querySelector('[data-approval-cards]'); if (!host) return;
         host.innerHTML=designs.map(function(design,index) {
           const item=selected[index];
-          return '<section class="surface-panel panel-padding approval-card"><h3>'+ escapeHtml(pageLabel(design.page_design || item.page)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+pageStage(design.page_design || item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(design.characters.join('、'))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p><p>この先まで描かない：'+escapeHtml((design.event_boundary.forbidden_until_later || []).join(' / '))+'</p><p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
+          return '<section class="surface-panel panel-padding approval-card"><h3>'+ escapeHtml(pageLabel(design.page_design || item.page)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+pageStage(design.page_design || item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(generationCharacterLabels(design))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p><p>この先まで描かない：'+escapeHtml((design.event_boundary.forbidden_until_later || []).join(' / '))+'</p><p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
         }).join('');
         const invalidCount = designs.filter(function (design) { return design.errors.length; }).length;
         const batchHost = content.querySelector('[data-batch-approval]');
