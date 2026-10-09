@@ -2489,8 +2489,9 @@
         const geometryLabel = geometry.shape ? " / " + escapeHtml(geometry.shape) + " / " + (Number(geometry.width || 0) * 900 / Math.max(Number(geometry.height || 1) * 1200, 1)).toFixed(2) + ":1" : "";
         const direction = panel.panel_direction;
         const directionLabel = direction ? " / 構図: " + (direction.status === "ready" ? "生成前に設計済み" : "要修正（文字領域不足）") + " / 演出: " + escapeHtml(direction.visual_style?.display_name || "") : "";
-        const metadata = escapeHtml(pageLabel(item.page)) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + geometryLabel + ' / Revision ' + escapeHtml(panel.revision || 0) + generationModel + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "") + (panel.generation_error ? " / " + escapeHtml(panel.generation_error) : "");
-        return '<div class="generation-panel-row"><div class="generation-thumb">' + thumb + '</div><div><strong>' + escapeHtml(panel.description || "コマの説明") + '</strong><small>' + metadata + directionLabel + '</small></div><span class="panel-status panel-status-' + escapeAttr(status) + '">' + escapeHtml(panelStatusLabels[status] || status) + '</span>' + action + '</div>';
+        const metadata = escapeHtml(pageLabel(item.page)) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + geometryLabel + ' / Revision ' + escapeHtml(panel.revision || 0) + generationModel + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "");
+        const failure = status === "failed" && panel.generation_error ? '<p class="generation-panel-error" role="status">停止理由：' + escapeHtml(panel.generation_error) + '</p>' : "";
+        return '<div class="generation-panel-row"><div class="generation-thumb">' + thumb + '</div><div><strong>' + escapeHtml(panel.description || "コマの説明") + '</strong><small>' + metadata + directionLabel + '</small></div><span class="panel-status panel-status-' + escapeAttr(status) + '">' + escapeHtml(panelStatusLabels[status] || status) + '</span>' + failure + action + '</div>';
       }).join("");
     }
 

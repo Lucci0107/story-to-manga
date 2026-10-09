@@ -697,6 +697,25 @@ def compose_prompts(
     return storyboard
 
 
+def image_generation_prompt(
+    base_prompt: str, panel: Dict[str, Any], characters: List[Dict[str, Any]],
+    settings: Dict[str, Any], knowledge_context: Dict[str, Any],
+) -> str:
+    """モデルの要約・参照資料・確定構図を、それぞれ一度だけ組み立てる。"""
+
+    from .knowledge import append_knowledge_prompt
+
+    confirmed_prompt = compose_panel_prompt(panel, characters, settings)
+    base_prompt = str(base_prompt).strip()
+    if panel.get("prompt_source", "generated") != "user":
+        # OpenAIProviderの同一性補足は、以下の最新の確定情報へ置き換える。
+        base_prompt = base_prompt.split("\nContinuity anchor:", 1)[0].strip()
+        if base_prompt and confirmed_prompt.startswith(base_prompt):
+            base_prompt = ""
+    prompt = append_knowledge_prompt(base_prompt, knowledge_context)
+    return prompt + "\n確定済み構図・描画条件:\n" + confirmed_prompt
+
+
 def _knowledge_reference(context: Optional[Dict[str, Any]]) -> str:
     """Knowledgeを命令ではなく参照資料としてLLMへ渡す区切りを作る。"""
 

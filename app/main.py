@@ -50,8 +50,8 @@ from .schemas import (
     validate_storyboard,
 )
 from .services.generation_design import design_data, design_hash, audit_design, public_design
-from .services.architect import recommend_architect, compile_architect, add_requested_covers
-from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider, compose_prompts
+from .services.architect import recommend_architect, add_requested_covers
+from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider, compose_prompts, image_generation_prompt
 from .services.page_types import is_content_page, page_label, requested_cover_kinds
 from .services.story_analysis import analysis_content_fingerprint, analysis_source_status
 from .services.storyboard_jobs import public_storyboard_job, storyboard_inputs_match, storyboard_project_inputs
@@ -63,7 +63,6 @@ from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artw
 from .services.extraction import StoryExtractionError, extract_uploaded_file
 from .services.export import CompositionReadabilityError, export_pdf, export_zip, render_page_png
 from .services.knowledge import (
-    append_knowledge_prompt,
     chunk_knowledge_text,
     default_knowledge_scope,
     knowledge_content_hash,
@@ -715,13 +714,10 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                         knowledge_context,
                     )
                     record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
-            latest_panel["generation_prompt"] = append_knowledge_prompt(base_prompt, knowledge_context)
-            if latest_panel.get("panel_direction") or latest.get("settings",{}).get("rendering_style_id"):
-                from .services.ai_pipeline import compose_panel_prompt
-
-                # LLMの要約や手入力Promptから確定構図が脱落しないよう、生成境界で付加する。
-                latest_panel["generation_prompt"] += "\n確定済み構図・描画条件:\n" + compose_panel_prompt(latest_panel, panel_characters(latest, latest_panel), latest.get("settings") or {})
-            latest_panel["generation_prompt"] += compile_architect(latest.get("settings") or {}, latest_panel)
+            latest_panel["generation_prompt"] = image_generation_prompt(
+                base_prompt, latest_panel, panel_characters(latest, latest_panel),
+                latest.get("settings") or {}, knowledge_context,
+            )
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
             # 外部画像APIの待機中も、Jobが生きていることを記録する。
             db.touch_generation_job(job_id)

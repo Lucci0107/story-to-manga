@@ -8,6 +8,7 @@ APIキーや本文をログへ出さないこと、再試行回数を限定す�
 from __future__ import annotations
 
 import json
+import re
 import socket
 import time
 import urllib.error
@@ -56,6 +57,10 @@ def _http_error_category(
     param = str(error_param or "").lower()
     if status_code == 401:
         return "authentication"
+    if code in {"content_policy_violation", "moderation_blocked", "safety_violation", "content_filter"}:
+        return "content_filter"
+    if code in {"context_length_exceeded", "string_above_max_length", "prompt_too_long"}:
+        return "input_limit"
     if (
         "schema" in code
         or "schema" in error_kind
@@ -86,7 +91,15 @@ def _http_error_category(
     return "api"
 
 
-def _status_message(status_code: int, category: str) -> str:
+def _status_message(status_code: int, category: str, error_param: Optional[str] = None) -> str:
+    if category == "content_filter":
+        return "OpenAIの安全性チェックにより生成が止まりました。送信内容を確認してください"
+    if category == "input_limit":
+        return "OpenAI APIへ送る指示が長さの制限を超えました。描画指示を確認してください"
+    if category in {"request", "unsupported_parameter"} and status_code == 400:
+        image_fields = {"size": "画像サイズ", "quality": "画質", "prompt": "描画指示"}
+        if error_param in image_fields:
+            return f"OpenAI APIが{image_fields[error_param]}の指定を受け付けませんでした。描画設定を確認してください"
     if category == "authentication":
         return "OpenAI APIキーまたはProject権限を確認してください"
     if category == "permission":
@@ -112,6 +125,14 @@ def _status_message(status_code: int, category: str) -> str:
     return "OpenAI APIリクエストに失敗しました"
 
 
+def _safe_error_identifier(value: Any) -> Optional[str]:
+    """コード・項目名だけを許可し、本文とキーを分類用のログへ渡さない。"""
+
+    if isinstance(value, str) and not value.startswith("sk-") and re.fullmatch(r"[A-Za-z0-9_.\[\]-]{1,120}", value):
+        return value
+    return None
+
+
 def _safe_error_fields(
     exc: urllib.error.HTTPError,
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
@@ -126,11 +147,8 @@ def _safe_error_fields(
         code = error.get("code")
         error_type = error.get("type")
         error_param = error.get("param")
-        return (
-            str(code)[:120] if isinstance(code, str) else None,
-            str(error_type)[:120] if isinstance(error_type, str) else None,
-            str(error_param)[:120] if isinstance(error_param, str) else None,
-        )
+        # エラー項目に原稿や秘密が混入しても、ログへ任意の文字列を渡さない。
+        return _safe_error_identifier(code), _safe_error_identifier(error_type), _safe_error_identifier(error_param)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, AttributeError):
         return None, None, None
 
@@ -188,7 +206,7 @@ def request_bytes(
                 time.sleep(min(2.0, 0.4 * (2**attempt)))
                 continue
             raise OpenAIRequestError(
-                _status_message(exc.code, category),
+                _status_message(exc.code, category, error_param),
                 status_code=exc.code,
                 retryable=retryable,
                 error_code=error_code,

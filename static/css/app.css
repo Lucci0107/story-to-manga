@@ -423,6 +423,7 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .generation-thumb span { color: var(--muted); font-family: monospace; font-size: 9px; }
 .generation-panel-row strong { display: block; overflow: hidden; max-width: 320px; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .generation-panel-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+.generation-panel-error { grid-column: 2 / -1; margin: 0; padding: 10px 12px; border-left: 3px solid var(--danger); border-radius: 4px; background: var(--surface-soft); color: var(--danger); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .panel-status { border-radius: 999px; background: var(--surface-soft); color: var(--muted); padding: 4px 8px; font-family: monospace; font-size: 9px; }
 .panel-status-completed { background: #dfeee7; color: var(--success); }
 .panel-status-processing, .panel-status-queued { background: #f6edd0; color: #7c5d19; }

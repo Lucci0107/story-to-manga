@@ -9,8 +9,10 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from io import BytesIO
+import logging
 import re
+import uuid
+from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any, Dict
 from urllib.parse import urlparse
@@ -31,6 +33,10 @@ from .storage import (
 
 class ArtworkGenerationError(RuntimeError):
     """画像生成または画像保存に失敗した。"""
+
+
+logger = logging.getLogger("story_to_manga.artwork")
+IMAGE_PROMPT_MAX_CHARS = 32_000
 
 
 def _slug(value: str) -> str:
@@ -196,12 +202,21 @@ def save_openai_image(
         )
         prompt += "\nActual generation canvas (authoritative): " + json.dumps(canvas_plan, ensure_ascii=False)
         panel["panel_direction"]["generation_canvas"] = canvas_plan
+    if len(prompt) > IMAGE_PROMPT_MAX_CHARS:
+        raise ArtworkGenerationError(
+            "このコマの描画指示と人物設定が画像APIの長さ制限を超えています。指示の量を確認してください"
+        )
     payload = {
         "model": requested_model,
         "prompt": prompt,
         "size": generation_size,
         "quality": "low",
     }
+    client_request_id = f"image_generation-{uuid.uuid4()}"
+    logger.info(
+        "openai image request started model=%s size=%s prompt_chars=%s client_request_id=%s",
+        requested_model, generation_size, len(prompt), client_request_id,
+    )
     try:
         body = request_json(
             runtime.openai_image_url,
@@ -209,6 +224,7 @@ def save_openai_image(
             payload=payload,
             timeout=getattr(runtime, "openai_timeout_seconds", 120.0),
             max_retries=0,
+            client_request_id=client_request_id,
         )
         image_data = body["data"][0]
         encoded = image_data.get("b64_json")
@@ -237,6 +253,11 @@ def save_openai_image(
             return str(response_model) if is_allowed_image_model(str(response_model)) else str(requested_model)
         raise ValueError("画像データがありません")
     except OpenAIRequestError as exc:
+        logger.warning(
+            "openai image request failed model=%s category=%s status_code=%s error_code=%s error_type=%s error_param=%s client_request_id=%s",
+            requested_model, exc.category, exc.status_code, exc.error_code,
+            exc.error_type, exc.error_param, client_request_id,
+        )
         raise ArtworkGenerationError(str(exc)) from exc
     except (AttributeError, OSError, ValueError, KeyError, IndexError, TypeError, binascii.Error, StorageError) as exc:
         raise ArtworkGenerationError("画像生成サービスから有効な画像を取得できませんでした") from exc

@@ -1070,3 +1070,82 @@ def test_invalid_openai_image_is_user_visible(tmp_path: Path, monkeypatch: pytes
             storage,
             storage.asset_key("project-1", "bad.png"),
         )
+
+
+@pytest.mark.parametrize(
+    ("code", "category", "message"),
+    [
+        ("moderation_blocked", "content_filter", "安全性チェック"),
+        ("content_policy_violation", "content_filter", "安全性チェック"),
+        ("string_above_max_length", "input_limit", "長さの制限"),
+    ],
+)
+def test_image_rejection_explains_reason_without_retrying_or_leaking_source(
+    tmp_path, monkeypatch, caplog, code, category, message,
+):
+    """HTTP 400を原因別に表示し、原稿とキーはログへ出さず1回で止める。"""
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        raise HTTPError(request.full_url, 400, "bad request", {}, io.BytesIO(json.dumps({
+            "error": {
+                "code": code, "type": "invalid_request_error", "param": "prompt",
+                "message": "private-story-fragment test-key",
+            },
+        }).encode()))
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    with caplog.at_level("INFO", logger="story_to_manga.artwork"):
+        with pytest.raises(ArtworkGenerationError) as raised:
+            save_openai_image(
+                {"generation_prompt": "private-story-fragment"}, runtime_settings(),
+                LocalFileStorage(tmp_path), "failed.png",
+            )
+    assert len(requests) == 1
+    assert raised.value.__cause__.category == category
+    assert message in str(raised.value)
+    assert "prompt_chars=22" in caplog.text
+    assert f"error_code={code}" in caplog.text
+    assert "client_request_id=image_generation-" in caplog.text
+    assert "private-story-fragment" not in caplog.text + str(raised.value)
+    assert "test-key" not in caplog.text + str(raised.value)
+    assert not (tmp_path / "failed.png").exists()
+
+
+def test_openai_error_metadata_discards_arbitrary_text(monkeypatch):
+    """APIのエラー項目に混ざった本文をログ用メタデータへ残さない。"""
+    def fake_urlopen(request, timeout):
+        raise HTTPError(request.full_url, 400, "bad request", {}, io.BytesIO(json.dumps({
+            "error": {"code": "private source fragment", "type": "秘密の本文", "param": "sk-secret/value"},
+        }).encode()))
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(OpenAIRequestError) as raised:
+        request_json("https://api.openai.com/v1/images/generations", api_key="test-only", payload={"model": "gpt-image-2"})
+    assert raised.value.error_code is raised.value.error_type is raised.value.error_param is None
+
+
+def test_image_prompt_limit_stops_before_chargeable_request(tmp_path, monkeypatch):
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("画像APIへ送信してはいけない")
+
+    monkeypatch.setattr("app.services.artwork.request_json", unexpected)
+    with pytest.raises(ArtworkGenerationError, match="長さ制限"):
+        save_openai_image(
+            {"generation_prompt": "あ" * 32_001}, runtime_settings(),
+            LocalFileStorage(tmp_path), "too-long.png",
+        )
+    assert not (tmp_path / "too-long.png").exists()
+
+
+@pytest.mark.parametrize(("param", "label"), [("size", "画像サイズ"), ("quality", "画質"), ("prompt", "描画指示")])
+def test_image_parameter_rejection_names_the_rejected_setting(monkeypatch, param, label):
+    def fake_urlopen(request, timeout):
+        raise HTTPError(request.full_url, 400, "bad request", {}, io.BytesIO(json.dumps({
+            "error": {"code": "invalid_value", "param": param, "type": "invalid_request_error"},
+        }).encode()))
+
+    monkeypatch.setattr("app.services.openai_client.urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(OpenAIRequestError, match=label):
+        request_json("https://api.openai.com/v1/images/generations", api_key="test-only", payload={"model": "gpt-image-2"})

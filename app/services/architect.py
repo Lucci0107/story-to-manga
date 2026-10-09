@@ -245,6 +245,17 @@ def compile_architect(settings: dict, panel: dict | None = None) -> str:
     profile = rendering_profile(settings)
     if not profile and not settings.get("script_tone_primary"):
         return ""
+    raw_boundary = (panel or {}).get("event_boundary")
+    boundary = raw_boundary if isinstance(raw_boundary, dict) else {}
+    # 全編の順序はネームに保持し、画像には今回許可された範囲だけを渡す。
+    # 後の出来事を「描かないもの」として全文列挙すると、別の場面が混入する。
+    image_boundary = {
+        key: boundary[key]
+        for key in ("allowed_events", "start_state", "page_end_state", "dialogue_scope", "first_reveal")
+        if key in boundary
+    }
+    if boundary:
+        image_boundary["scope_rule"] = "このコマと許可された出来事だけを描く。後の出来事・次ページへの持ち越しは描かない。"
     data: dict[str, Any] = {
         "rendering_style": profile,
         "script_tone": tone_parameters(settings),
@@ -252,7 +263,7 @@ def compile_architect(settings: dict, panel: dict | None = None) -> str:
         "body_ratio": profile.get("body_ratio") or settings.get("character_proportion"),
         "color_behavior": profile.get("color") or settings.get("color_mode"),
         "mood_lighting": profile.get("lighting") or settings.get("mood_lighting"),
-        "event_boundary": (panel or {}).get("event_boundary", {}),
+        "event_boundary": image_boundary,
         "style_adjustments": settings.get("style_adjustments", ""),
     }
     return (
