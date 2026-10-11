@@ -1,8 +1,10 @@
 """生成直前の設計と承認。稼働状態・生成結果を設計ハッシュへ混ぜない。"""
 
 from __future__ import annotations
+
 import hashlib
 import json
+from .cover_text import artwork_settings
 from .architect import rendering_profile, tone_parameters, event_issues
 from .reading_order import canonicalize_stored_settings
 from .page_types import is_content_page
@@ -46,7 +48,7 @@ def design_data(
         "target_id": panel["id"],
         "characters": stable(project.get("characters") or []),
         "source_cast": source_cast(project),
-        "settings": project.get("settings") or {},
+        "settings": artwork_settings(project.get("settings") or {}),
         "models": models,
         "knowledge": knowledge,
         "source_hash": hashlib.sha256(

@@ -53,6 +53,7 @@ from .services.generation_design import design_data, design_hash, audit_design, 
 from .services.architect import recommend_architect, add_requested_covers
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider, compose_prompts, image_generation_prompt
 from .services.page_types import is_content_page, page_label, requested_cover_kinds
+from .services.cover_text import COVER_TEXT_FIELDS, artwork_settings
 from .services.story_analysis import analysis_content_fingerprint, analysis_source_status
 from .services.storyboard_jobs import public_storyboard_job, storyboard_inputs_match, storyboard_project_inputs
 from .services.character_proposal import (
@@ -1921,9 +1922,10 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
         valid, message = validate_storyboard(storyboard)
         if not valid:
             raise HTTPException(status_code=422, detail=message)
-    clear_quality_check = any(
+    settings_affect_artwork = settings is not None and artwork_settings(settings) != artwork_settings(validate_settings(project.get("settings") or {}))
+    clear_quality_check = settings_affect_artwork or any(
         value is not None
-        for value in (payload.original_text, payload.settings, payload.analysis, payload.characters, payload.storyboard)
+        for value in (payload.original_text, payload.analysis, payload.characters, payload.storyboard)
     )
     if clear_quality_check:
         db.invalidate_generation_approvals(project_id,user["id"])
@@ -1941,7 +1943,7 @@ async def api_update_project(project_id: str, payload: ProjectPatch, user=Depend
         storyboard=storyboard,
         clear_quality_check=clear_quality_check,
     )
-    if payload.settings is not None:
+    if payload.settings is not None and set(submitted_settings) - COVER_TEXT_FIELDS:
         updated = db.mark_manga_settings_recommendation_override(
             project_id, user["id"]
         ) or updated

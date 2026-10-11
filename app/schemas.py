@@ -98,6 +98,11 @@ class SettingsPayload(BaseModel):
     mood_lighting: Optional[str] = None
     title_mode: str = "none"
     back_cover_mode: Literal["none", "generate"] = "none"
+    cover_title: str = Field(default="", max_length=160)
+    cover_subtitle: str = Field(default="", max_length=120)
+    cover_author: str = Field(default="", max_length=160)
+    back_cover_blurb: str = Field(default="", max_length=600)
+    back_cover_publication: str = Field(default="", max_length=300)
     layout_policy: Optional[Literal["content_driven", "expressive"]] = None
     source_kind: Literal["unspecified", "fiction", "documentary"] = "unspecified"
     style_adjustments: str = Field(default="", max_length=1000)

@@ -6,6 +6,7 @@ import hashlib
 import json
 
 from .character_proposal import active_characters
+from .cover_text import artwork_settings
 from .story_analysis import analysis_content_fingerprint
 from .story_profile import story_fingerprint
 
@@ -24,12 +25,13 @@ def storyboard_project_inputs(project: dict) -> dict:
         "analysis_fingerprint": analysis_content_fingerprint(project.get("analysis") or {}),
         "character_fingerprint": content_fingerprint(active_characters(project)),
         "storyboard_fingerprint": content_fingerprint(project.get("storyboard") or []),
-        "settings": project["settings"], "title": project["title"],
+        "settings": artwork_settings(project["settings"]), "title": project["title"],
     }
 
 
 def storyboard_inputs_match(project: dict, inputs: dict) -> bool:
-    return all(inputs.get(key) == value for key, value in storyboard_project_inputs(project).items())
+    return all((artwork_settings(inputs.get(key) or {}) if key == "settings" else inputs.get(key)) == value
+               for key, value in storyboard_project_inputs(project).items())
 
 
 def public_storyboard_job(job: dict | None) -> dict | None:

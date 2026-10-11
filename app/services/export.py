@@ -25,6 +25,7 @@ from .composition import PAGE_SIZE, composition_for_page, composition_quality_is
 from .artwork_geometry import resolve_final_crop_window
 from .layout import ensure_page_layout, reflow_page
 from .page_types import is_content_page
+from .cover_text import cover_text
 from .storage import (
     StorageError,
     StorageObjectNotFound,
@@ -91,6 +92,9 @@ def prepare_page_for_render(page: Mapping[str, Any], settings: Mapping[str, Any]
 
 def validate_export_readability(project: Mapping[str, Any]) -> None:
     for raw_page in project.get("storyboard", []) or []:
+        if not is_content_page(raw_page):
+            # 表紙の文字は本文の吹き出し配置とは独立した専用領域へ収める。
+            continue
         page = prepare_page_for_render(raw_page, project.get("settings") or {})
         composition = composition_for_page(page)
         composition_version = int(composition.get("composition_version", 1) or 1)
@@ -373,14 +377,20 @@ def _draw_pdf_accessible_text(c: canvas.Canvas, project: Mapping[str, Any], page
     c.saveState()
     c.setFillColorRGB(1, 1, 1)
     c.setFont(PDF_FONT, 1)
-    values = [str(project.get("title", "")), str(page.get("title", ""))]
+    if not is_content_page(page):
+        text = cover_text(project)
+        keys = ("title", "subtitle", "author", "blurb", "publication") if page.get("page_kind") == "back_cover" else ("title", "subtitle", "author")
+        values = [text[key] for key in keys]
+    else:
+        values = [str(project.get("title", "")), str(page.get("title", ""))]
     for panel in page.get("panels", []):
         if not isinstance(panel, Mapping):
             continue
         values.extend(str(item) for key in ("dialogue", "narration", "sfx") for item in (panel.get(key) or []))
     for index, value in enumerate(values):
         if value.strip():
-            c.drawString(1, 1 + index * 1.2, value[:500])
+            for line in _pdf_wrapped_lines(value, 500, 1):
+                c.drawString(1, 1 + index * 1.2, line)
     c.restoreState()
 
 
@@ -399,7 +409,7 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
         page = prepare_page_for_render(raw_page, settings)
         composition = composition_for_page(page)
         c.setPageSize(A4)
-        if int(composition.get("composition_version", 1) or 1) >= 2:
+        if not is_content_page(page) or int(composition.get("composition_version", 1) or 1) >= 2:
             # Compositionは常に同じ3:4ラスターを使い、A4への再cropや縦横伸縮を避ける。
             rendered = render_page_png(project, page, storage)
             output_height = width * PAGE_SIZE[1] / PAGE_SIZE[0]
@@ -786,6 +796,57 @@ def _render_composition_png(
     return output.getvalue()
 
 
+def _draw_cover_block(draw: ImageDraw.ImageDraw, text: str, box: tuple[int, int, int, int], size: int, *, centered: bool = False, bold: bool = False) -> None:
+    """日本語を実測で改行し、専用の余白に省略せず収める。"""
+    if not text:
+        return
+    x, y, width, height = box
+    wrapped, font = _fit_pil_text(draw, text, width - 4, height - 4, 1, size)
+    bounds = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=1)
+    tx = x + ((width - (bounds[2] - bounds[0])) / 2 if centered else 0) - bounds[0]
+    ty = y + (height - (bounds[3] - bounds[1])) / 2 - bounds[1]
+    draw.multiline_text((tx, ty), wrapped, font=font, fill=(30, 32, 29), spacing=1,
+                        align="center" if centered else "left", stroke_width=1 if bold else 0)
+
+
+def _render_cover_png(project: Dict[str, Any], page: Dict[str, Any], storage: StorageService, width: int, height: int) -> bytes:
+    """元絵を全体表示し、表紙類のタイトル・クレジットを別領域に合成する。"""
+    text = cover_text(project)
+    back = page.get("page_kind") == "back_cover"
+    image = Image.new("RGB", (width, height), (245, 243, 235))
+    draw = ImageDraw.Draw(image)
+    def box(x: float, y: float, w: float, h: float) -> tuple[int, int, int, int]:
+        return round(x * width), round(y * height), round(w * width), round(h * height)
+    _draw_cover_block(draw, text["title"], box(.08, .05, .84, .085 if back else .165), round(width * (.037 if back else .066)), centered=True, bold=True)
+    if text["subtitle"]:
+        _draw_cover_block(draw, text["subtitle"], box(.08, .14 if back else .22, .84, .05), round(width * .027), centered=True)
+    art_y = .21 if back and text["subtitle"] else .17 if back else .29 if text["subtitle"] else .25
+    art_bottom = (.61 if text["blurb"] else .835) if back else .85
+    art_h = art_bottom - art_y
+    x, y, art_w, art_h_px = box(.06, art_y, .88, art_h)
+    panels = page.get("panels") or []
+    if len(panels) == 1:
+        source = _load_panel_source(project, panels[0], storage)
+        if source is None:
+            source = _pil_panel_image(project, panels[0], art_w, art_h_px, storage)
+    else:
+        prepared = prepare_page_for_render(page, project.get("settings") or {})
+        composition = dict(composition_for_page(prepared))
+        composition["overlays"] = [item for item in composition.get("overlays", []) if item.get("type") != "title"]
+        source = Image.open(BytesIO(_render_composition_png(project, prepared, storage, composition, width, height)))
+    art = ImageOps.contain(source.convert("RGB"), (art_w, art_h_px), Image.Resampling.LANCZOS)
+    image.paste(art, (x + (art_w - art.width) // 2, y + (art_h_px - art.height) // 2))
+    if back:
+        _draw_cover_block(draw, text["blurb"], box(.10, .635, .80, .20), round(width * .029))
+        _draw_cover_block(draw, text["publication"], box(.10, .925, .80, .05), round(width * .020), centered=True)
+    # 発行元・価格・ISBN・権利者はユーザーの入力がある場合だけ記載する。
+    draw.line((round(width * .40), round(height * .865), round(width * .60), round(height * .865)), fill=(94, 96, 88), width=max(1, round(width / 450)))
+    _draw_cover_block(draw, text["author"], box(.10, .88, .80, .04 if back else .065), round(width * .033), centered=True)
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 def render_page_png(
     project: Dict[str, Any],
     page: Dict[str, Any],
@@ -796,6 +857,8 @@ def render_page_png(
 ) -> bytes:
     """Preview/PDFと同じ保存済みgeometryからページ画像を生成する。"""
 
+    if not is_content_page(page):
+        return _render_cover_png(project, page, storage, width, height)
     prepared = prepare_page_for_render(page, project.get("settings") or {})
     composition = composition_for_page(prepared)
     if int(composition.get("composition_version", 1) or 1) >= 2:

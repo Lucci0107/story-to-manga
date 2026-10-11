@@ -8,6 +8,7 @@ from typing import Any
 
 from .. import db
 from .page_types import MAX_CONTENT_PAGES, is_content_page, page_label, requested_cover_kinds
+from .cover_text import artwork_settings
 from .architect import rendering_profile, event_issues
 from .manga_contract import contract_metadata
 from .story_analysis import analysis_content_fingerprint, analysis_source_status
@@ -84,7 +85,7 @@ def name_snapshot(project: dict) -> dict:
             refs[key] = _select(ref, ("document_id", "version_id", "version_number", "title"))
         entry["panels"] = panels
         pages.append(entry)
-    settings = {key: value for key, value in (project.get("settings") or {}).items() if key not in {"style_reason", "script_tone_reason"}}
+    settings = {key: value for key, value in artwork_settings(project.get("settings") or {}).items() if key not in {"style_reason", "script_tone_reason"}}
     snapshot = {
         "title": project["title"], "source_filename": project.get("source_filename") or "本文入力",
         "source_hash": hashlib.sha256(str(project.get("original_text") or "").encode("utf-8")).hexdigest(),

@@ -480,6 +480,8 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .page-overlay-sfx { z-index: 5; }
 .speech-bubble[data-text-overflow="true"], .page-narration[data-text-overflow="true"], .page-sfx[data-text-overflow="true"] { outline: 2px solid var(--danger); outline-offset: -2px; }
 .manga-page-number { position: absolute; right: 0; bottom: .8%; left: 0; color: #51534f; text-align: center; font-family: monospace; font-size: 8px; line-height: 1; }
+.cover-text-editor { margin-top: 24px; }
+.cover-settings .settings-grid, .cover-text-editor .settings-grid { margin-top: 16px; }
 .settings-direction-readonly { display: grid; gap: 5px; min-height: 71px; align-content: start; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); padding: 10px 11px; }
 .settings-direction-readonly > span { color: var(--muted); font-size: 10px; }
 .settings-direction-readonly strong { color: var(--ink); font-size: 15px; }
