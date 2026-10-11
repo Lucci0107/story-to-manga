@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app import db
 from app.main import app
@@ -68,6 +69,50 @@ def test_category_scope_defaults_include_layout_style_and_qa() -> None:
     ]
     style = default_knowledge_scope("style")
     assert {"storyboard", "page_layout", "quality_check"}.issubset(style)
+
+
+@pytest.mark.parametrize("scope", ["storyboard", "page_layout"])
+def test_layout_rules_are_retrieved_when_story_has_no_design_terms(tmp_path: Path, scope: str) -> None:
+    client = client_for(tmp_path)
+    document = create_knowledge(client, "コマ割り資料", "layout", """# コマ割り資料
+
+Version 1。作成日の記録。
+
+## 概要
+
+資料の配布形式について。
+
+更新履歴について。
+
+元画像のファイル名について。
+
+## 読む順番
+
+段優先では右上、左上、右下、左下。列優先は境界と吹き出しで読む順番を明確にする。
+
+## 感情と余白
+
+感情と時間関係に合わせてコマの面積と余白を設計する。形状と特殊演出には理由を付ける。
+""")
+    project = create_project(client)
+    user_id = db.get_user_by_email("auto-knowledge@example.com")["id"]
+    context = retrieve_knowledge_context(project["id"], user_id, scope, "主人公は港へ向かった。")
+    assert "段優先では右上" in context["prompt_text"]
+    assert "感情と時間関係" in context["prompt_text"]
+    assert len(context["chunks"]) <= 4
+    assert len(context["prompt_text"]) <= 6_000
+    assert context["references"][0]["knowledge_document_id"] == document["id"]
+    assert context["references"][0]["knowledge_version_id"] == document["active_version_id"]
+
+
+def test_layout_task_hints_do_not_override_document_priority(tmp_path: Path) -> None:
+    client = client_for(tmp_path)
+    high_priority = create_knowledge(client, "優先する制作条件", "production_rules", "# 制作条件\n\n指定された言語を保持する。")
+    create_knowledge(client, "コマ割り資料", "layout", "# 読む順番\n\n段優先 列優先 感情 時間関係 面積 余白 吹き出し 特殊演出")
+    project = create_project(client)
+    user_id = db.get_user_by_email("auto-knowledge@example.com")["id"]
+    context = retrieve_knowledge_context(project["id"], user_id, "storyboard", "主人公は港へ向かった。", limit=1)
+    assert context["references"][0]["knowledge_document_id"] == high_priority["id"]
 
 
 def test_explicit_existing_selection_is_unchanged_by_recommendation(tmp_path: Path) -> None:

@@ -42,6 +42,13 @@ DEFAULT_PRIORITY_BY_CATEGORY = {
     "genre": 50,
 }
 
+# 原稿に設計用語がなくても、工程に必要な制作ルールを検索する。
+# 優先度・Scope・Versionの指定と、取得量の上限は変えない。
+TASK_QUERY_HINTS = {
+    "storyboard": "コマ割り 読む順番 段優先 列優先 感情 時間関係 面積 余白 吹き出し 特殊演出",
+    "page_layout": "コマ割り 読む順番 段優先 列優先 形状 境界 面積 余白 吹き出し インサート タチキリ",
+}
+
 
 def default_knowledge_scope(category: str) -> List[str]:
     """カテゴリに対応する、Project選択用のScope初期値を返す。"""
@@ -206,6 +213,7 @@ def retrieve_knowledge_context(
 
     if scope not in ALLOWED_KNOWLEDGE_SCOPES:
         scope = "all"
+    retrieval_query = f"{query} {TASK_QUERY_HINTS.get(scope, '')}".strip()
     selections = db.list_project_knowledge(project_id, user_id) or []
     candidates: List[tuple[int, int, int, Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = []
     enabled_count = 0
@@ -232,7 +240,7 @@ def retrieve_knowledge_context(
             candidates.append(
                 (
                     -int(selection.get("priority", 50)),
-                    -_relevance(chunk, query),
+                    -_relevance(chunk, retrieval_query),
                     int(chunk.get("chunk_order", 0)),
                     selection,
                     version,
