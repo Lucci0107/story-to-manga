@@ -15,7 +15,7 @@ from app.main import app
 from app.schemas import SettingsPayload, normalize_storyboard
 from app.services.architect import finalize_storyboard
 from app.services.cover_text import cover_text
-from app.services.export import render_page_png, export_pdf, export_zip
+from app.services.export import _fit_cover_text, render_page_png, export_pdf, export_zip
 from app.services.generation_design import design_data, design_hash
 from app.services.manga_documents import name_script_summary
 from app.services.storage import LocalFileStorage
@@ -121,3 +121,20 @@ def test_cover_defaults_and_input_limits():
     for key, size in (("cover_title", 160), ("cover_author", 160), ("back_cover_blurb", 600), ("back_cover_publication", 300)):
         with pytest.raises(ValueError):
             SettingsPayload(**{key: "あ" * (size + 1)})
+
+
+def test_cover_title_keeps_qualifier_and_blurb_does_not_orphan_punctuation():
+    draw = ImageDraw.Draw(Image.new("RGB", (900, 1200)))
+    title = "ある外科医の思考（本人視点）"
+    wrapped, font = _fit_cover_text(draw, title, 752, 194, 59, title=True)
+    assert wrapped.splitlines() == ["ある外科医の思考", "（本人視点）"]
+    assert font.size >= 40
+    blurb = "外科医としての歩みと、家族や人々との出会い。\n自分自身の経験をたどりながら、人生と仕事への思いを語る。"
+    wrapped, _ = _fit_cover_text(draw, blurb, 716, 236, 26)
+    assert wrapped.replace("\n", "") == blurb.replace("\n", "")
+    assert not any(line.startswith(("。", "、", "）")) or len(line) < 3 for line in wrapped.splitlines())
+    # 文字を消すのではなく、表紙専用の枠へ収めている。
+    fitted, fitted_font = _fit_cover_text(draw, "句読点まで省略せずに表示します。" * 30, 716, 236, 26)
+    assert fitted.replace("\n", "") == "句読点まで省略せずに表示します。" * 30
+    bounds = draw.multiline_textbbox((0, 0), fitted, font=fitted_font, spacing=1)
+    assert bounds[2] - bounds[0] <= 716 and bounds[3] - bounds[1] <= 236

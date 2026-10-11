@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import textwrap
 import zipfile
 from io import BytesIO
@@ -796,12 +797,49 @@ def _render_composition_png(
     return output.getvalue()
 
 
+def _fit_cover_text(draw: ImageDraw.ImageDraw, text: str, width: int, height: int, size: int, *, title: bool = False) -> tuple[str, ImageFont.ImageFont]:
+    """表紙の副題をまとめ、句読点・閉じ括弧だけの行を避ける。"""
+    closing = "、。，．？！!?：；:;）)]｝}〕〉》」』】"
+    opening = "（([｛{〔〈《「『【"
+    if title and "\n" not in text:
+        match = re.fullmatch(r"(.+?)([（(][^（）()]+[）)])", text)
+        if match and draw.textlength(text, font=_load_page_font(size)) > width:
+            text = match[1].rstrip() + "\n" + match[2]
+    for font_size in range(max(6, size), 5, -1):
+        font = _load_page_font(font_size)
+        lines = []
+        orphan = False
+        for paragraph in text.split("\n"):
+            current = ""
+            paragraph_lines = []
+            for char in paragraph:
+                if current and draw.textlength(current + char, font=font) > width:
+                    carry = ""
+                    if char in closing:
+                        carry, current = current[-1], current[:-1]
+                    while current and current[-1] in opening:
+                        carry, current = current[-1] + carry, current[:-1]
+                    if current:
+                        paragraph_lines.append(current)
+                    current = carry + char
+                else:
+                    current += char
+            paragraph_lines.append(current)
+            orphan |= len(paragraph_lines) > 1 and len(current.strip()) < 3
+            lines.extend(paragraph_lines)
+        wrapped = "\n".join(lines)
+        bounds = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=1)
+        if bounds[2] - bounds[0] <= width and bounds[3] - bounds[1] <= height and not orphan:
+            return wrapped, font
+    return wrapped, font
+
+
 def _draw_cover_block(draw: ImageDraw.ImageDraw, text: str, box: tuple[int, int, int, int], size: int, *, centered: bool = False, bold: bool = False) -> None:
     """日本語を実測で改行し、専用の余白に省略せず収める。"""
     if not text:
         return
     x, y, width, height = box
-    wrapped, font = _fit_pil_text(draw, text, width - 4, height - 4, 1, size)
+    wrapped, font = _fit_cover_text(draw, text, width - 4, height - 4, size, title=bold)
     bounds = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=1)
     tx = x + ((width - (bounds[2] - bounds[0])) / 2 if centered else 0) - bounds[0]
     ty = y + (height - (bounds[3] - bounds[1])) / 2 - bounds[1]
