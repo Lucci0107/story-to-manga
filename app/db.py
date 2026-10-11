@@ -1379,6 +1379,65 @@ def name_review_required(project_id: str) -> bool:
     return bool(row and row["name_review_required"])
 
 
+def cover_proposal_job(project_id: str, user_id: str, page_id: str, stale_seconds: int = 1800) -> Optional[dict]:
+    """表紙の提案処理だけを取得し、停止した処理を再試行可能にする。"""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
+    with connection() as conn:
+        conn.execute("""UPDATE generation_jobs SET status='failed', error=?, error_category='timeout', completed_at=?, updated_at=?
+            WHERE project_id=? AND job_type='cover_proposal' AND target_id=? AND status IN ('queued','processing')
+            AND COALESCE(updated_at,created_at) < ? AND EXISTS (SELECT 1 FROM projects WHERE id=? AND user_id=?)""",
+            ("表紙の提案処理が停止しました。保存済みの内容を確認し、再提案してください。", utc_now(), utc_now(),
+             project_id, page_id, cutoff, project_id, user_id))
+        row = conn.execute("""SELECT j.* FROM generation_jobs j JOIN projects p ON p.id=j.project_id
+            WHERE p.id=? AND p.user_id=? AND j.job_type='cover_proposal' AND j.target_id=? ORDER BY j.created_at DESC LIMIT 1""",
+            (project_id, user_id, page_id)).fetchone()
+    return dict(row) if row else None
+
+
+def apply_cover_proposal(project: dict, replacement: dict, document_id: str, name_document: dict,
+                         previous_confirmed_id: Optional[str]) -> Optional[dict]:
+    """確認された表紙だけを差し替える。本文の確認済み状態と旧版・旧画像を保持する。"""
+    project_id, user_id = project["id"], project["user_id"]
+    now = utc_now()
+    with connection() as conn:
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project_id, user_id))
+        row = conn.execute("SELECT updated_at,storyboard_json FROM projects WHERE id=? AND user_id=?", (project_id, user_id)).fetchone()
+        if not row or row["updated_at"] != project["updated_at"]:
+            raise ValueError("作品が更新されました。最新の内容を読み直してください。")
+        draft = conn.execute("SELECT id FROM manga_documents WHERE id=? AND project_id=? AND kind='cover_proposal' AND target_id=?",
+                             (document_id, project_id, replacement["id"])).fetchone()
+        if not draft:
+            raise ValueError("表紙の変更案が見つかりません。")
+        if conn.execute("SELECT id FROM generation_jobs WHERE project_id=? AND status IN ('queued','processing') LIMIT 1", (project_id,)).fetchone():
+            raise ValueError("生成処理中は表紙を変更できません。完了してから確定してください。")
+        pages = _loads(row["storyboard_json"], [])
+        target = next((p for p in pages if p.get("id") == replacement["id"]), None)
+        if not target or target.get("page_kind") not in {"cover", "back_cover"}:
+            raise ValueError("表紙または裏表紙を選んでください。")
+        pages = [replacement if p.get("id") == replacement["id"] else p for p in pages]
+        confirmed = previous_confirmed_id and conn.execute(
+            "SELECT id FROM manga_documents WHERE id=? AND project_id=? AND kind='name_script' AND approved_at IS NOT NULL",
+            (previous_confirmed_id, project_id)).fetchone()
+        old = conn.execute("SELECT id FROM manga_documents WHERE project_id=? AND kind='name_script' AND target_id='storyboard' AND content_hash=?",
+                           (project_id, name_document["content_hash"])).fetchone()
+        if old:
+            name_id = old["id"]
+        else:
+            number = int(conn.execute("SELECT COALESCE(MAX(version_number),0) AS n FROM manga_documents WHERE project_id=? AND kind='name_script' AND target_id='storyboard'", (project_id,)).fetchone()["n"]) + 1
+            name_id = str(uuid.uuid4())
+            conn.execute("""INSERT INTO manga_documents (id,project_id,kind,target_id,version_number,content_hash,snapshot_json,markdown,created_at)
+                VALUES (?,?,'name_script','storyboard',?,?,?,?,?)""",
+                (name_id, project_id, number, name_document["content_hash"], _json(name_document["snapshot"]), name_document["render"](number), now))
+        if confirmed:
+            conn.execute("UPDATE manga_documents SET provided_at=COALESCE(provided_at,?), approved_at=COALESCE(approved_at,?),approved_by=? WHERE id=?",
+                         (now, now, user_id, name_id))
+        conn.execute("UPDATE manga_documents SET approved_at=COALESCE(approved_at,?),approved_by=? WHERE id=?", (now, user_id, document_id))
+        conn.execute("UPDATE projects SET storyboard_json=?,quality_check_json=NULL,status='storyboard_ready',updated_at=? WHERE id=? AND user_id=?",
+                     (_json(pages), now, project_id, user_id))
+        conn.execute("UPDATE generation_approvals SET job_id='invalidated' WHERE project_id=? AND job_id IS NULL", (project_id,))
+    return get_project(project_id, user_id)
+
+
 def _manga_document_from_row(row: Mapping[str, Any]) -> dict:
     result = dict(row)
     result["snapshot"] = _loads(result.pop("snapshot_json"), {})
@@ -1405,13 +1464,20 @@ def get_manga_document(project_id: str, user_id: str, document_id: str) -> Optio
     return _manga_document_from_row(row) if row else None
 
 
-def save_manga_document(project: dict, kind: str, target_id: str, digest: str, snapshot: dict, render: Callable[[int], str]) -> dict:
+def save_manga_document(project: dict, kind: str, target_id: str, digest: str, snapshot: dict,
+                        render: Callable[[int], str], *, generation_job_id: Optional[str] = None) -> dict:
     """同じ設計を重複保存せず、改訂は旧版を保持して追加する。"""
     with connection() as conn:
         conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project["id"], project["user_id"]))
         row = conn.execute("SELECT updated_at FROM projects WHERE id=? AND user_id=?", (project["id"], project["user_id"])).fetchone()
         if not row or row["updated_at"] != project["updated_at"]:
             raise ValueError("作品が更新されました。最新の内容を読み直してください。")
+        if generation_job_id:
+            cursor = conn.execute("""UPDATE generation_jobs SET status='completed',error=NULL,error_category=NULL,completed_at=?,updated_at=?
+                WHERE id=? AND project_id=? AND job_type='cover_proposal' AND status='processing'""",
+                (utc_now(), utc_now(), generation_job_id, project["id"]))
+            if not cursor.rowcount:
+                raise ValueError("表紙の提案処理が中断されました。再提案してください。")
         previous = conn.execute("SELECT * FROM manga_documents WHERE project_id=? AND kind=? AND target_id=? AND content_hash=?", (project["id"], kind, target_id, digest)).fetchone()
         if previous:
             return _manga_document_from_row(previous)

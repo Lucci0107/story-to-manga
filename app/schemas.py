@@ -262,6 +262,16 @@ class ApprovalRequest(BaseModel):
     design_hash: str = Field(min_length=64, max_length=64)
 
 
+class CoverProposalRequest(BaseModel):
+    instruction: str = Field(default="", max_length=800)
+    force: bool = False
+
+
+class CoverProposalApplyRequest(BaseModel):
+    proposal_id: str = Field(min_length=1, max_length=80)
+    design_hash: str = Field(min_length=64, max_length=64)
+
+
 class GenerateRequest(BaseModel):
     """コマ生成リクエスト。panel_idsが空なら未生成の全コマを対象にする。"""
 

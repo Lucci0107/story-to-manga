@@ -29,6 +29,8 @@ from .config import BASE_DIR, ensure_data_dirs, get_settings
 from .observability import install_observer
 from .schemas import (
     ApprovalRequest,
+    CoverProposalRequest,
+    CoverProposalApplyRequest,
     ExportRequest,
     GenerateRequest,
     AIModelSettingsPayload,
@@ -55,6 +57,9 @@ from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provid
 from .services.page_types import is_content_page, page_label, requested_cover_kinds
 from .services.cover_text import COVER_TEXT_FIELDS, artwork_settings
 from .services.cover_layout import cover_artwork_panel
+from .services.cover_proposal import (
+    find_cover, proposal_context, proposal_input_hash, validate_proposal, changed_cover, render_proposal_markdown,
+)
 from .services.story_analysis import analysis_content_fingerprint, analysis_source_status
 from .services.storyboard_jobs import public_storyboard_job, storyboard_inputs_match, storyboard_project_inputs
 from .services.character_proposal import (
@@ -76,7 +81,7 @@ from .services.knowledge import (
 from .services.layout import reflow_page, repair_storyboard_page
 from .services.manga_documents import (
     name_script_summary, prepare_name_document, name_validation, name_snapshot, name_page_counts,
-    character_sheet_design, content_digest, render_sheet_markdown,
+    character_sheet_design, content_digest, render_sheet_markdown, render_name_markdown,
 )
 from .services.manga_contract import contract_metadata
 from .services.model_registry import (
@@ -2257,6 +2262,128 @@ async def api_generate_storyboard(
         "mode": provider.provider_name,
         "knowledge": knowledge_context,
     }
+
+
+def cover_proposal_knowledge(project: dict, page: dict, instruction: str) -> dict:
+    return retrieve_knowledge_context(project["id"], project["user_id"], "panel_prompt",
+                                      f"{page_label(page)} 一枚絵 主人公 構図 背景 {instruction}", limit=3)
+
+
+def cover_proposal_view(project: dict, page: dict) -> dict:
+    versions = db.manga_document_versions(project["id"], project["user_id"], "cover_proposal", page["id"])
+    document = db.get_manga_document(project["id"], project["user_id"], versions[0]["id"]) if versions else None
+    proposal = None
+    if document:
+        snapshot = document["snapshot"]
+        knowledge = cover_proposal_knowledge(project, page, snapshot["instruction"])
+        digest = proposal_input_hash(project, page["id"], project_ai_model_settings(project, project["user_id"]), knowledge)
+        proposal = {"id": document["id"], "design_hash": document["content_hash"],
+                    "design": snapshot["design"], "instruction": snapshot["instruction"],
+                    "knowledge_refs": snapshot.get("knowledge_refs") or [],
+                    "stale": snapshot["input_hash"] != digest, "applied": bool(document.get("approved_at"))}
+    job = db.cover_proposal_job(project["id"], project["user_id"], page["id"])
+    return {"proposal": proposal, "job": {key: job.get(key) for key in ("id", "status", "error")} if job else None}
+
+
+def process_cover_proposal(project_id: str, user_id: str, job_id: str) -> None:
+    if not db.start_generation_job(job_id):
+        return
+    try:
+        job = db.get_generation_job(job_id)
+        payload = json.loads(job.get("input_json") or "{}")
+        project = require_project(project_id, user_id)
+        page = find_cover(project, payload["page_id"])
+        models = project_ai_model_settings(project, user_id)
+        knowledge = cover_proposal_knowledge(project, page, payload["instruction"])
+        if proposal_input_hash(project, page["id"], models, knowledge) != payload["input_hash"]:
+            raise ValueError("作品が更新されました。最新の内容から再提案してください。")
+        context = proposal_context(project, page, payload["instruction"])
+        provider = get_ai_provider(models)
+        design = validate_proposal(provider.cover_proposal(context, knowledge), context)
+        record_provider_generation(project_id, user_id, provider, target_id=page["id"])
+        latest = require_project(project_id, user_id)
+        current_knowledge = cover_proposal_knowledge(latest, page, payload["instruction"])
+        if proposal_input_hash(latest, page["id"], project_ai_model_settings(latest, user_id), current_knowledge) != payload["input_hash"]:
+            raise ValueError("提案中に作品が更新されました。最新の内容から再提案してください。")
+        snapshot = {**payload, "design": design, "knowledge_refs": knowledge.get("references") or []}
+        db.save_manga_document(latest, "cover_proposal", page["id"], content_digest(snapshot), snapshot,
+                               lambda n: render_proposal_markdown(page, design, n), generation_job_id=job_id)
+    except Exception as exc:
+        # 原稿やモデルの生出力はログに残さない。
+        message = str(exc) if isinstance(exc, (AIProviderError, ValueError)) else "表紙の変更案を作れませんでした。再提案してください。"
+        db.update_generation_job(job_id, "failed", message)
+
+
+@app.get("/api/projects/{project_id}/pages/{page_id}/cover-proposal")
+def api_cover_proposal_status(project_id: str, page_id: str, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    try:
+        page = find_cover(project, page_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cover_proposal_view(project, page)
+
+
+@app.post("/api/projects/{project_id}/pages/{page_id}/cover-proposal")
+def api_propose_cover(project_id: str, page_id: str, payload: CoverProposalRequest,
+                      background_tasks: BackgroundTasks, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    try:
+        page = find_cover(project, page_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    instruction = payload.instruction.strip()
+    view = cover_proposal_view(project, page)
+    previous = view["proposal"]
+    if previous and not previous["stale"] and not previous["applied"] and previous["instruction"] == instruction and not payload.force:
+        return view
+    knowledge = cover_proposal_knowledge(project, page, instruction)
+    digest = proposal_input_hash(project, page_id, project_ai_model_settings(project, user["id"]), knowledge)
+    inputs = {"page_id": page_id, "instruction": instruction, "input_hash": digest}
+    job, created = db.create_async_generation_job(project_id, "cover_proposal", f"cover_proposal:{page_id}",
+                                                  target_id=page_id, input_payload=inputs)
+    if not job:
+        raise HTTPException(503, "表紙の提案処理を開始できませんでした。")
+    if not created and json.loads(job.get("input_json") or "{}") != inputs:
+        raise HTTPException(409, "この表紙の提案を作成中です。完了してから希望を変更してください。")
+    if created:
+        background_tasks.add_task(process_cover_proposal, project_id, user["id"], job["id"])
+    return JSONResponse({"proposal": previous, "job": {key: job.get(key) for key in ("id", "status", "error")}}, status_code=202)
+
+
+@app.post("/api/projects/{project_id}/pages/{page_id}/cover-proposal/apply")
+def api_apply_cover_proposal(project_id: str, page_id: str, payload: CoverProposalApplyRequest, user=Depends(current_user)):
+    from copy import deepcopy
+    project = require_project(project_id, user["id"])
+    document = db.get_manga_document(project_id, user["id"], payload.proposal_id)
+    if not document or document["kind"] != "cover_proposal" or document["target_id"] != page_id:
+        raise HTTPException(404, "表紙の変更案が見つかりません。")
+    if document["content_hash"] != payload.design_hash:
+        raise HTTPException(409, "変更案が更新されました。読み直してください。")
+    try:
+        page = find_cover(project, page_id)
+        draft = document["snapshot"]
+        knowledge = cover_proposal_knowledge(project, page, draft["instruction"])
+        context = proposal_context(project, page, draft["instruction"])
+        design = validate_proposal(draft["design"], context)
+        if document.get("approved_at"):
+            current = page["panels"][0]
+            if all(current.get(key) == value for key, value in design.items() if key != "reason"):
+                return {"project": project_view(project), "panel_id": current["id"]}
+            raise ValueError("この変更案は反映済みです。新しい変更案を作ってください。")
+        if proposal_input_hash(project, page_id, project_ai_model_settings(project, user["id"]), knowledge) != draft["input_hash"]:
+            raise ValueError("作品や制作条件が更新されました。最新の内容から再提案してください。")
+        replacement = changed_cover(project, page, design, draft.get("knowledge_refs") or [])
+        next_project = {**project, "storyboard": [replacement if p.get("id") == page_id else deepcopy(p) for p in project["storyboard"]]}
+        snapshot = name_snapshot(next_project)
+        old_summary = name_script_summary(project)
+        # 既に確認した本文を保持する場合だけ、今回確認した表紙の変更を新しい確定版にする。
+        confirmed_id = old_summary["version_id"] if old_summary["state"] == "confirmed" and not name_validation(next_project, snapshot)["errors"] else None
+        updated = db.apply_cover_proposal(project, replacement, document["id"],
+            {"snapshot": snapshot, "content_hash": content_digest(snapshot), "render": lambda n: render_name_markdown(snapshot, n)}, confirmed_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"project": project_view(updated), "panel_id": replacement["panels"][0]["id"]}
 
 
 @app.patch("/api/projects/{project_id}/panels/{panel_id}")

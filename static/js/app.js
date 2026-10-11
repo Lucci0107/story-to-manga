@@ -548,6 +548,10 @@
     let characterArchiveBusy = false;
     let knowledgeRequestId = 0;
     let qaKnowledgeWarningOpen = false;
+    const coverProposalCache = new Map();
+    const coverProposalRequests = new Set();
+    const coverProposalLoads = new Set();
+    let coverProposalPollTimer = null;
     let recommendationLoading = false;
     let recommendationAttempted = false;
     let pendingRecommendation = null;
@@ -893,7 +897,7 @@
       saveTimer = window.setTimeout(function () { saveProject(patch, null, false).catch(function () {}); }, 650);
     }
 
-    async function goToStep(step) {
+    async function goToStep(step, options) {
       if (!stepOrder.includes(step)) return;
       activeStep = step;
       await saveProject({ current_step: step }, null, false).catch(function () {});
@@ -901,7 +905,10 @@
       if (step === "analysis") restoreAnalysisJobState();
       if (step === "characters") restoreCharacterJobState();
       if (step === "storyboard") restoreStoryboardJobState();
-      if (step === "generate") restorePanelGenerationState();
+      if (step === "generate") {
+        if (options?.waitForGenerationState) await restorePanelGenerationState();
+        else restorePanelGenerationState();
+      }
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -3138,6 +3145,101 @@
       } finally { hideProcessingDialog(); }
     }
 
+    function coverProposalEditor(page) {
+      if (!isCoverPage(page)) return '';
+      const label = page.page_kind === 'back_cover' ? '裏表紙' : '表紙';
+      const data = coverProposalCache.get(page.id);
+      const proposal = data?.proposal;
+      const busy = coverProposalRequests.has(page.id) || ['queued', 'processing'].includes(data?.job?.status);
+      const fields = {description: '絵の内容', characters: '人物', shot_type: '構図', background: '背景', action: '配置・動作', expression: '表情', reason: '提案の理由'};
+      const details = proposal && !proposal.applied ? '<div class="callout"><h4>' + label + 'の変更案</h4>' + Object.entries(fields).map(function(entry) {
+        const value = proposal.design[entry[0]];
+        return '<p><strong>' + entry[1] + '：</strong>' + escapeHtml(Array.isArray(value) ? value.join('、') || '人物なし' : value || 'なし') + '</p>';
+      }).join('') + '<p>タイトルと作者名は現在の設定を使います。' + (state.name_script?.state === 'confirmed' ? '本文の確定状態を保持します。' : '本文が未確定のため、反映後に全編ネームの確認が必要です。') + '</p>' +
+        (proposal.stale ? '<p class="inline-warning">作品や制作条件が変わっています。最新の内容から再提案してください。</p>' : '') +
+        '<button type="button" class="primary-button compact-button" data-apply-cover-proposal' + (busy || proposal.stale ? ' disabled' : '') + '>この変更案を確定して画像生成の確認へ</button></div>' :
+        proposal?.applied ? '<div class="callout"><p>変更案を反映済みです。新しい絵は画像生成後に表示します。</p><button type="button" class="primary-button compact-button" data-generate-cover-only' + (busy ? ' disabled' : '') + '>この' + label + 'だけ画像生成の確認へ</button></div>' : '';
+      return '<section class="surface-panel panel-padding cover-text-editor" aria-label="' + label + 'をAIで変更"><h3>' + label + 'をAIで変更する</h3><p>希望を入力すると、登録した主要人物と原稿を参考に、人物・背景・構図をAIが提案します。空欄ならAIに任せられます。</p><label class="editor-label">変更の希望（任意）<textarea class="editor-textarea" rows="2" maxlength="800" data-cover-instruction placeholder="例：主人公を白衣姿で川辺に立たせ、大きなタイトルの余白を作って">' + escapeHtml(data?.instruction ?? proposal?.instruction ?? '') + '</textarea></label><div class="save-row"><button type="button" class="primary-button compact-button" data-propose-cover' + (busy ? ' disabled' : '') + '>' + (busy ? 'AIが変更案を作成中…' : proposal ? 'AIで変更案を作り直す' : 'AIで' + label + 'の変更案を作る') + '</button><button type="button" class="secondary-button compact-button" data-edit-cover-artwork>人物・構図を手動で編集</button></div><p class="field-help">変更案の作成にテキストAIの利用料がかかります。画像の生成は、内容を確認して「この内容で生成」を押したときに開始します。</p><div aria-live="polite">' +
+        (busy ? '<p>変更案を作成中です。画面を離れても処理と保存は続きます。</p>' : '') +
+        (data?.error || data?.job?.status === 'failed' ? '<p class="inline-warning">' + escapeHtml(data?.error || data.job.error) + '</p>' : '') + details + '</div></section>';
+    }
+
+    async function loadCoverProposal(pageId, refresh) {
+      const cached = coverProposalCache.get(pageId);
+      if (coverProposalLoads.has(pageId) || coverProposalRequests.has(pageId) || (!refresh && cached?.loadedFor === state.updated_at)) return;
+      coverProposalLoads.add(pageId);
+      try {
+        const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/pages/' + encodeURIComponent(pageId) + '/cover-proposal');
+        if (coverProposalRequests.has(pageId)) return;
+        coverProposalCache.set(pageId, {...data, instruction: cached?.instruction ?? data.proposal?.instruction ?? '', loadedFor: state.updated_at});
+        if (activeStep === 'preview' && state.storyboard?.[selectedPageIndex]?.id === pageId) {
+          clearTimeout(coverProposalPollTimer);
+          if (['queued', 'processing'].includes(data.job?.status)) coverProposalPollTimer = setTimeout(function() { loadCoverProposal(pageId, true); }, 5000);
+        }
+      } catch (error) {
+        coverProposalCache.set(pageId, {...cached, loadedFor: state.updated_at, error: error.message});
+      } finally {
+        coverProposalLoads.delete(pageId);
+        if (activeStep === 'preview' && state.storyboard?.[selectedPageIndex]?.id === pageId) render();
+      }
+    }
+
+    async function reviewCoverGeneration(pageId, panelId) {
+      if (state.name_script?.state !== 'confirmed') {
+        await goToStep('storyboard');
+        showToast('本文の全編ネームを確認して確定してください。表紙の変更は保存済みです。');
+        return;
+      }
+      const panel = (state.storyboard || []).find(function(p) { return p.id === pageId; })?.panels?.find(function(p) { return p.id === panelId; });
+      if (!panel) { showToast('表紙が見つかりません。再読み込みしてください。', 'error'); return; }
+      await goToStep('generate', {waitForGenerationState: true});
+      if (activeStep === 'generate') await reviewGeneration([panel.id], true, true);
+    }
+
+    function bindCoverProposal(page) {
+      if (!isCoverPage(page)) return;
+      content.querySelector('[data-cover-instruction]')?.addEventListener('input', function(event) {
+        const cached = coverProposalCache.get(page.id) || {};
+        coverProposalCache.set(page.id, {...cached, instruction: event.target.value});
+      });
+      content.querySelector('[data-propose-cover]')?.addEventListener('click', async function(event) {
+        const instruction = content.querySelector('[data-cover-instruction]')?.value || '';
+        const cached = coverProposalCache.get(page.id) || {};
+        event.currentTarget.disabled = true;
+        coverProposalRequests.add(page.id);
+        coverProposalCache.set(page.id, {...cached, instruction});
+        try {
+          const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/pages/' + encodeURIComponent(page.id) + '/cover-proposal', {method: 'POST', body: JSON.stringify({instruction, force: Boolean(cached.proposal)})});
+          coverProposalCache.set(page.id, {...data, instruction, loadedFor: state.updated_at});
+        } catch (error) { coverProposalCache.set(page.id, {...cached, instruction, error: error.message}); showToast(error.message, 'error'); }
+        finally {
+          coverProposalRequests.delete(page.id);
+          if (activeStep === 'preview') render();
+          loadCoverProposal(page.id, true);
+        }
+      });
+      content.querySelector('[data-apply-cover-proposal]')?.addEventListener('click', async function(event) {
+        const proposal = coverProposalCache.get(page.id)?.proposal;
+        if (!proposal || proposal.stale || coverProposalRequests.has(page.id)) return;
+        event.currentTarget.disabled = true;
+        coverProposalRequests.add(page.id);
+        try {
+          const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/pages/' + encodeURIComponent(page.id) + '/cover-proposal/apply', {method: 'POST', body: JSON.stringify({proposal_id: proposal.id, design_hash: proposal.design_hash})});
+          state = data.project;
+          coverProposalCache.delete(page.id);
+          showToast('表紙の変更案を保存しました。画像を生成する内容を確認してください。');
+          await reviewCoverGeneration(page.id, data.panel_id);
+        } catch (error) { showToast(error.message, 'error'); }
+        finally { coverProposalRequests.delete(page.id); if (activeStep === 'preview') render(); }
+      });
+      content.querySelector('[data-generate-cover-only]')?.addEventListener('click', function() { reviewCoverGeneration(page.id, page.panels[0].id); });
+      content.querySelector('[data-edit-cover-artwork]')?.addEventListener('click', async function() {
+        await goToStep('storyboard');
+        focusStoryboardPage(page.id);
+      });
+      loadCoverProposal(page.id, false);
+    }
+
     function renderPreview() {
       const pages = state.storyboard || [];
       if (selectedPageIndex >= pages.length) selectedPageIndex = Math.max(0, pages.length - 1);
@@ -3148,18 +3250,15 @@
       const previousLabel = isEnglish ? "← 前のページ" : "→ 前のページ";
       const nextLabel = isEnglish ? "次のページ →" : "次のページ ←";
       const navigation = '<div class="preview-navigation" data-reading-direction="' + escapeAttr(readingDirectionKey(state.settings)) + '"><button type="button" class="secondary-button compact-button" data-preview-prev' + (selectedPageIndex <= 0 ? " disabled" : "") + '>' + previousLabel + '</button><span aria-live="polite">' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + ' / ' + (selectedPageIndex + 1) + ' / ' + pages.length + '</span><button type="button" class="secondary-button compact-button" data-preview-next' + (selectedPageIndex >= pages.length - 1 ? " disabled" : "") + '>' + nextLabel + '</button></div>';
-      const coverEditor = isCoverPage(page) ? '<section class="surface-panel panel-padding cover-text-editor"><h3>表紙・裏表紙の文字を編集</h3><p>一枚絵の上にタイトルと作者名を重ねています。保存すると、両方のプレビューと書き出しに反映します。文字の変更に画像の再生成は不要です。</p><p class="field-help">絵の内容を変える場合は、ネームで表紙・裏表紙の人物や背景を編集し、コマ生成でその表紙だけを再生成してください。</p><button type="button" class="secondary-button compact-button" data-edit-cover-artwork>' + (page.page_kind === 'back_cover' ? '裏表紙' : '表紙') + 'の絵・構図を編集</button>' + (!state.settings?.cover_author ? '<p class="field-help">作者名が未入力です。表示する表記を入力してください。</p>' : '') + coverTextFields(state.settings || {}, 'data-cover-text-field') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-cover-text>表紙・裏表紙の文字を保存</button></div></section>' : '';
-      content.innerHTML = heading("完成ページを読む", "ページ単位で確認し、セリフの読みやすさと流れを見ます。") + (pages.length ? '<div class="preview-layout"><nav class="page-picker" dir="' + direction + '" aria-label="ページ選択">' + picker + '</nav><div>' + navigation + pageStage(page) + coverEditor + '</div></div>' + nextButton("export", "書き出しへ") : '<section class="surface-panel empty-panel"><h3>プレビューできるページがありません</h3><p>ネームを作成してからコマを生成してください。</p></section>');
-      content.querySelector('[data-edit-cover-artwork]')?.addEventListener('click', async function() {
-        await goToStep('storyboard');
-        focusStoryboardPage(page.id);
-      });
+      const coverEditor = isCoverPage(page) ? '<section class="surface-panel panel-padding cover-text-editor"><h3>表紙・裏表紙の文字を編集</h3><p>一枚絵の上にタイトルと作者名を重ねています。保存すると、両方のプレビューと書き出しに反映します。文字の変更に画像の再生成は不要です。</p>' + (!state.settings?.cover_author ? '<p class="field-help">作者名が未入力です。表示する表記を入力してください。</p>' : '') + coverTextFields(state.settings || {}, 'data-cover-text-field') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-cover-text>表紙・裏表紙の文字を保存</button></div></section>' : '';
+      content.innerHTML = heading("完成ページを読む", "ページ単位で確認し、セリフの読みやすさと流れを見ます。") + (pages.length ? '<div class="preview-layout"><nav class="page-picker" dir="' + direction + '" aria-label="ページ選択">' + picker + '</nav><div>' + navigation + coverProposalEditor(page) + pageStage(page) + coverEditor + '</div></div>' + nextButton("export", "書き出しへ") : '<section class="surface-panel empty-panel"><h3>プレビューできるページがありません</h3><p>ネームを作成してからコマを生成してください。</p></section>');
+      bindCoverProposal(page);
       content.querySelector('[data-save-cover-text]')?.addEventListener('click', async function(event) {
         const button = event.currentTarget;
         const next = {};
         content.querySelectorAll('[data-cover-text-field]').forEach(function(input) { next[input.dataset.coverTextField] = input.value; });
         button.disabled = true;
-        try { await saveProject({settings: next}, '表紙・裏表紙の文字を保存しました', true); }
+        try { coverProposalCache.clear(); await saveProject({settings: next}, '表紙・裏表紙の文字を保存しました', true); }
         catch (_error) { button.disabled = false; }
       });
       content.querySelectorAll("[data-page-index]").forEach(function (button) { button.addEventListener("click", function () { selectedPageIndex = Number(button.dataset.pageIndex); render(); }); });
