@@ -27,6 +27,7 @@ from .artwork_geometry import resolve_final_crop_window
 from .layout import ensure_page_layout, reflow_page
 from .page_types import is_content_page
 from .cover_text import cover_text
+from .cover_layout import cover_text_regions
 from .storage import (
     StorageError,
     StorageObjectNotFound,
@@ -797,16 +798,25 @@ def _render_composition_png(
     return output.getvalue()
 
 
+def _load_cover_font(size: int) -> ImageFont.ImageFont:
+    """書籍のタイトル・作者名には同梱した明朝体を使う。本文の書体は変えない。"""
+    try:
+        return ImageFont.truetype(str(FONT_DIR / "ipaexm.ttf"), size=size)
+    except (OSError, ValueError):
+        return _load_page_font(size)
+
+
 def _fit_cover_text(draw: ImageDraw.ImageDraw, text: str, width: int, height: int, size: int, *, title: bool = False) -> tuple[str, ImageFont.ImageFont]:
     """表紙の副題をまとめ、句読点・閉じ括弧だけの行を避ける。"""
     closing = "、。，．？！!?：；:;）)]｝}〕〉》」』】"
     opening = "（([｛{〔〈《「『【"
+    load_font = _load_cover_font if title else _load_page_font
     if title and "\n" not in text:
         match = re.fullmatch(r"(.+?)([（(][^（）()]+[）)])", text)
-        if match and draw.textlength(text, font=_load_page_font(size)) > width:
+        if match and draw.textlength(text, font=load_font(size)) > width:
             text = match[1].rstrip() + "\n" + match[2]
     for font_size in range(max(6, size), 5, -1):
-        font = _load_page_font(font_size)
+        font = load_font(font_size)
         lines = []
         orphan = False
         for paragraph in text.split("\n"):
@@ -835,7 +845,7 @@ def _fit_cover_text(draw: ImageDraw.ImageDraw, text: str, width: int, height: in
 
 
 def _draw_cover_block(draw: ImageDraw.ImageDraw, text: str, box: tuple[int, int, int, int], size: int, *, centered: bool = False, bold: bool = False) -> None:
-    """日本語を実測で改行し、専用の余白に省略せず収める。"""
+    """日本語を実測で改行し、絵の上でも読める縁取りを付ける。"""
     if not text:
         return
     x, y, width, height = box
@@ -843,43 +853,83 @@ def _draw_cover_block(draw: ImageDraw.ImageDraw, text: str, box: tuple[int, int,
     bounds = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=1)
     tx = x + ((width - (bounds[2] - bounds[0])) / 2 if centered else 0) - bounds[0]
     ty = y + (height - (bounds[3] - bounds[1])) / 2 - bounds[1]
-    draw.multiline_text((tx, ty), wrapped, font=font, fill=(30, 32, 29), spacing=1,
-                        align="center" if centered else "left", stroke_width=1 if bold else 0)
+    weight = max(1, round(font.size / 30)) if bold else 0
+    draw.multiline_text((tx, ty), wrapped, font=font, fill="white", spacing=1,
+                        align="center" if centered else "left", stroke_width=weight + max(1, round(font.size / 60)), stroke_fill="white")
+    draw.multiline_text((tx, ty), wrapped, font=font, fill=(25, 27, 24), spacing=1,
+                        align="center" if centered else "left", stroke_width=weight)
+
+
+def _cover_background(source: Image.Image, panel: dict, width: int, height: int) -> Image.Image:
+    """一枚絵を全面へ広げる。保護領域が収まらない旧画像は切らずに余白を補う。"""
+    source = source.convert("RGB")
+    direction = panel.get("panel_direction") or {}
+    regions = [direction[key] for key in ("head_safe_zone", "face_safe_zone", "important_hand_zone", "important_prop_zone") if isinstance(direction.get(key), dict)]
+    plan = resolve_final_crop_window(source.size, (width, height), protected_regions=regions)
+    if plan.get("valid"):
+        window = plan["window"]
+        left, top = round(window["x"] * source.width), round(window["y"] * source.height)
+        right = round((window["x"] + window["width"]) * source.width)
+        bottom = round((window["y"] + window["height"]) * source.height)
+        return source.crop((left, top, right, bottom)).resize((width, height), Image.Resampling.LANCZOS)
+    art = ImageOps.contain(source, (width, height), Image.Resampling.LANCZOS)
+    x, y = (width - art.width) // 2, (height - art.height) // 2
+    image = Image.new("RGB", (width, height), "white")
+    # 枠や別の絵を足さず、元絵の端の背景色を伸ばして顔・手を保持する。
+    if x:
+        image.paste(art.crop((0, 0, 1, art.height)).resize((x, art.height)), (0, y))
+        image.paste(art.crop((art.width - 1, 0, art.width, art.height)).resize((width - x - art.width, art.height)), (x + art.width, y))
+    if y:
+        image.paste(art.crop((0, 0, art.width, 1)).resize((art.width, y)), (x, 0))
+        image.paste(art.crop((0, art.height - 1, art.width, art.height)).resize((art.width, height - y - art.height)), (x, y + art.height))
+    image.paste(art, (x, y))
+    return image
+
+
+def _soften_cover_text_background(image: Image.Image, text: dict, back: bool) -> Image.Image:
+    """文字を読みやすくする薄いグラデーション。絵を区画へ分割しない。"""
+    veil = Image.new("RGBA", image.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(veil)
+    top_end = .245 if back else .355
+    for y in range(image.height):
+        position = y / image.height
+        opacity = max(0, 1 - position / top_end) ** 1.5 * .92 if text["title"] or text["subtitle"] else 0
+        if text["author"] or (back and text["publication"]):
+            opacity = max(opacity, max(0, (position - .86) / .14) * .8)
+        if back and text["blurb"] and .58 < position < .90:
+            opacity = max(opacity, min(1, (position - .58) / .06, (.90 - position) / .06) * .86)
+        if opacity:
+            draw.line((0, y, image.width, y), fill=(255, 255, 255, round(opacity * 255)))
+    return Image.alpha_composite(image.convert("RGBA"), veil).convert("RGB")
 
 
 def _render_cover_png(project: Dict[str, Any], page: Dict[str, Any], storage: StorageService, width: int, height: int) -> bytes:
-    """元絵を全体表示し、表紙類のタイトル・クレジットを別領域に合成する。"""
+    """全面の一枚絵へタイトル・作者名を重ね、Preview/PDF/ZIPで共有する。"""
     text = cover_text(project)
     back = page.get("page_kind") == "back_cover"
-    image = Image.new("RGB", (width, height), (245, 243, 235))
-    draw = ImageDraw.Draw(image)
     def box(x: float, y: float, w: float, h: float) -> tuple[int, int, int, int]:
         return round(x * width), round(y * height), round(w * width), round(h * height)
-    _draw_cover_block(draw, text["title"], box(.08, .05, .84, .085 if back else .165), round(width * (.037 if back else .066)), centered=True, bold=True)
-    if text["subtitle"]:
-        _draw_cover_block(draw, text["subtitle"], box(.08, .14 if back else .22, .84, .05), round(width * .027), centered=True)
-    art_y = .21 if back and text["subtitle"] else .17 if back else .29 if text["subtitle"] else .25
-    art_bottom = (.61 if text["blurb"] else .835) if back else .85
-    art_h = art_bottom - art_y
-    x, y, art_w, art_h_px = box(.06, art_y, .88, art_h)
     panels = page.get("panels") or []
     if len(panels) == 1:
         source = _load_panel_source(project, panels[0], storage)
         if source is None:
-            source = _pil_panel_image(project, panels[0], art_w, art_h_px, storage)
+            source = _pil_panel_image(project, panels[0], width, height, storage)
+        image = _cover_background(source, panels[0], width, height)
     else:
         prepared = prepare_page_for_render(page, project.get("settings") or {})
         composition = dict(composition_for_page(prepared))
         composition["overlays"] = [item for item in composition.get("overlays", []) if item.get("type") != "title"]
-        source = Image.open(BytesIO(_render_composition_png(project, prepared, storage, composition, width, height)))
-    art = ImageOps.contain(source.convert("RGB"), (art_w, art_h_px), Image.Resampling.LANCZOS)
-    image.paste(art, (x + (art_w - art.width) // 2, y + (art_h_px - art.height) // 2))
+        image = Image.open(BytesIO(_render_composition_png(project, prepared, storage, composition, width, height))).convert("RGB")
+    image = _soften_cover_text_background(image, text, back)
+    draw = ImageDraw.Draw(image)
+    regions = cover_text_regions(str(page.get("page_kind")))
+    _draw_cover_block(draw, text["title"], box(*regions["title"]), round(width * (.063 if back else .11)), centered=True, bold=True)
+    _draw_cover_block(draw, text["subtitle"], box(*regions["subtitle"]), round(width * .030), centered=True)
     if back:
-        _draw_cover_block(draw, text["blurb"], box(.10, .635, .80, .20), round(width * .029))
-        _draw_cover_block(draw, text["publication"], box(.10, .925, .80, .05), round(width * .020), centered=True)
+        _draw_cover_block(draw, text["blurb"], box(*regions["blurb"]), round(width * .029))
+        _draw_cover_block(draw, text["publication"], box(*regions["publication"]), round(width * .020), centered=True)
     # 発行元・価格・ISBN・権利者はユーザーの入力がある場合だけ記載する。
-    draw.line((round(width * .40), round(height * .865), round(width * .60), round(height * .865)), fill=(94, 96, 88), width=max(1, round(width / 450)))
-    _draw_cover_block(draw, text["author"], box(.10, .88, .80, .04 if back else .065), round(width * .033), centered=True)
+    _draw_cover_block(draw, text["author"], box(*regions["author"]), round(width * .043), centered=True, bold=True)
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()

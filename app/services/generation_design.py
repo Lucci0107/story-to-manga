@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from .cover_text import artwork_settings
+from .cover_layout import COVER_ARTWORK_POLICY
 from .architect import rendering_profile, tone_parameters, event_issues
 from .reading_order import canonicalize_stored_settings
 from .page_types import is_content_page
@@ -45,6 +46,7 @@ def design_data(
         "character_reference_policy": "registered_life_stages_and_supporting_cast_v2",
         "project_id": project["id"],
         "page": stable(page),
+        **({"cover_artwork_policy": COVER_ARTWORK_POLICY} if not is_content_page(page) else {}),
         "target_id": panel["id"],
         "characters": stable(project.get("characters") or []),
         "source_cast": source_cast(project),

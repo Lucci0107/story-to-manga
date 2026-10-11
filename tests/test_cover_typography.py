@@ -72,7 +72,7 @@ def test_cover_text_save_keeps_artwork_and_confirmation_and_design(covers, monke
 
 
 @pytest.mark.parametrize("kind", ["cover", "back_cover"])
-def test_cover_source_is_not_cropped_and_text_has_reserved_space(covers, kind):
+def test_cover_artwork_fills_page_and_text_is_overlaid(covers, kind):
     _, project, storage = covers
     page = next(page for page in project["storyboard"] if page["page_kind"] == kind)
     source = Image.new("RGB", (400, 500), "green")
@@ -90,10 +90,24 @@ def test_cover_source_is_not_cropped_and_text_has_reserved_space(covers, kind):
     after = Image.open(BytesIO(render_page_png(project, page, storage)))
     colors = after.getcolors(after.width * after.height)
     assert all(any(color == expected and count > 1000 for count, color in colors) for expected in ((255, 0, 0), (0, 128, 0), (0, 0, 255)))
+    # 文字のない中央では絵が四辺まで広がり、クリーム色の枠は残らない。
+    assert after.getpixel((0, 600)) == (255, 0, 0)
+    assert after.getpixel((899, 600)) == (0, 0, 255)
+    assert after.getpixel((450, 600)) == (0, 128, 0)
     assert ImageChops.difference(before.crop((0, 1040, 900, 1180)), after.crop((0, 1040, 900, 1180))).getbbox()
     ink = [pixel for pixel in after.crop((70, 60, 830, 180)).getdata() if max(pixel) < 100]
     assert len(ink) > 1000  # 本文見出しより大きな専用タイトル
     assert project["storyboard"] == original["storyboard"]
+
+
+def test_cover_preserves_protected_subject_when_full_page_crop_cannot_fit():
+    from app.services.export import _cover_background
+    source = Image.new("RGB", (600, 1200), "green")
+    ImageDraw.Draw(source).rectangle((0, 0, 599, 49), fill="red")
+    panel = {"panel_direction": {"head_safe_zone": {"x": 0, "y": 0, "width": 1, "height": 1}}}
+    image = _cover_background(source, panel, 900, 1200)
+    assert image.getpixel((450, 10)) == (255, 0, 0)
+    assert image.getpixel((450, 1190)) == (0, 128, 0)
 
 
 def test_cover_preview_zip_and_pdf_use_identical_render_and_complete_metadata(covers):

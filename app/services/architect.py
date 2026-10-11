@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import copy
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from .manga_contract import contract_metadata, image_contract_prompt
@@ -366,14 +367,21 @@ def add_requested_covers(pages: list, analysis: dict, settings: dict) -> list:
         if page_id in used_ids or panel_id in used_ids:
             suffix = uuid.uuid4().hex[:8]
             page_id, panel_id = f"{page_id}-{suffix}", f"{panel_id}-{suffix}"
-        panel = {key: copy.deepcopy(template[key]) for key in ("characters", "background", "shot_type", "expression") if key in template}
+        # 表紙は本文冒頭の小物アップを流用せず、本文に繰り返し現れる人物を軸にする。
+        names = Counter(name for page in content for entry in page.get("panels") or [] for name in dict.fromkeys(entry.get("characters") or []))
+        main_name = names.most_common(1)[0][0] if names else None
+        if kind == "cover" and main_name:
+            template = next(entry for page in content for entry in page.get("panels") or [] if main_name in (entry.get("characters") or []))
+        panel = {key: copy.deepcopy(template[key]) for key in ("background", "expression") if key in template}
         panel.update(
             id=panel_id, order=1,
-            description=("表紙。" + str(analysis.get("title") or "")) if kind == "cover" else "裏表紙。本文にある風景やモチーフで静かな余韻を表す。表紙と同じ描画スタイルを使い、新しい出来事・人物・文章は追加しない。",
-            action="人物紹介" if kind == "cover" else "本文の風景とモチーフを配置する",
+            description=("表紙。一枚絵で作品を象徴する。" + str(analysis.get("title") or "")) if kind == "cover" else "裏表紙。本文にある風景やモチーフで静かな余韻を表す一枚絵。表紙と同じ描画スタイルを使い、新しい出来事・人物・文章は追加しない。",
+            characters=[main_name] if kind == "cover" and main_name else [],
+            shot_type="人物の半身と背景を見せる表紙の構図" if kind == "cover" and main_name else "風景を広く見せる表紙の構図",
+            action="主要人物を中央下寄りに配置し、上部にタイトル、下部に作者名を重ねる静かな背景を残す" if kind == "cover" else "本文の風景とモチーフを一つの連続した背景として描く",
             dialogue=[], dialogue_details=[], narration=[], sfx=[], event_ids=[], event_boundary={},
             generation_prompt="", image_url=None, generation_status="not_started", revision=0,
-            scene_type="illustration", panel_shape="rectangle", importance="high",
+            scene_type="cover_illustration" if kind == "cover" else "back_cover_illustration", panel_shape="rectangle", importance="high",
         )
         page = {
             "id": page_id, "page_number": 0, "page_kind": kind,

@@ -13,6 +13,9 @@ from app import db
 from app.main import app, get_ai_provider
 from app.schemas import SettingsPayload, normalize_storyboard
 from app.services.architect import add_requested_covers, finalize_storyboard
+from app.services.ai_pipeline import compose_panel_prompt, image_generation_prompt
+from app.services.artwork_geometry import artwork_aspect_ratio, artwork_generation_size
+from app.services.cover_layout import cover_artwork_panel
 from app.services.export import export_pdf, export_zip
 from app.services.knowledge import quality_check
 from app.services.manga_documents import name_page_counts, name_script_summary, name_snapshot
@@ -94,6 +97,45 @@ def test_add_covers_preserves_existing_story_and_artwork():
         SettingsPayload(back_cover_mode="unknown")
 
 
+def test_new_cover_uses_repeated_main_character_instead_of_opening_closeup():
+    pages = body_pages(3)
+    pages[0]["panels"][0].update(shot_type="携帯電話のクローズアップ", background="暗い室内")
+    for page in pages[1:]:
+        page["panels"][0].update(characters=["主人公"], background="川沿いの町", shot_type="手元の寄り")
+    before = deepcopy(pages)
+    result = add_requested_covers(pages, {"title": "帰り道"}, {"title_mode": "cover", "back_cover_mode": "generate"})
+    front, back = result[0]["panels"][0], result[-1]["panels"][0]
+    assert front["characters"] == ["主人公"] and front["background"] == "川沿いの町"
+    assert "半身" in front["shot_type"] and "携帯電話" not in front["shot_type"]
+    assert front["scene_type"] == "cover_illustration"
+    assert back["characters"] == [] and back["scene_type"] == "back_cover_illustration"
+    assert result[1:-1] == before
+
+
+@pytest.mark.parametrize("kind", ["cover", "back_cover"])
+def test_cover_generation_uses_full_page_ratio_and_preserves_saved_direction(kind):
+    panel = {"id": "old-cover", "characters": ["主人公"], "description": "川辺に立つ", "scene_type": "illustration",
+             "geometry": {"width": .9, "height": .8}, "panel_direction": {"generation_canvas": {"source_size": [1536, 1024]}}}
+    before = deepcopy(panel)
+    prepared = cover_artwork_panel({"page_kind": kind}, panel)
+    assert artwork_aspect_ratio(prepared) == .75
+    w, h = map(int, artwork_generation_size(prepared, "gpt-image-2.5-flare").split("x"))
+    assert abs(w / h - .75) < .01
+    people = [{"name": "主人公", "appearance": "短い髪", "clothing": "白い上着"}]
+    prompt = image_generation_prompt(compose_panel_prompt(prepared, people, {}), prepared, people, {}, {"prompt_text": "線の表現を保持する"})
+    assert "Full-page, full-bleed" in prompt and "縦長3:4" in prompt
+    assert "白い上着" in prompt and "線の表現を保持する" in prompt
+    assert "上部" in prompt and "作者名" in prompt
+    assert "Panel geometry" not in prompt and "1536" not in prompt
+    assert prompt.count("Full-page, full-bleed") == 1
+    legacy = compose_panel_prompt(panel, people, {})
+    assert "Panel geometry:" in legacy
+    corrected = image_generation_prompt(legacy, prepared, people, {}, {})
+    assert "Panel geometry:" not in corrected and "Full-page, full-bleed" in corrected
+    assert panel == before
+    assert cover_artwork_panel({"page_kind": "content"}, panel) is panel
+
+
 def test_existing_project_adds_only_covers_and_generates_only_back_cover(workspace, monkeypatch):
     client, project = workspace
     base = f"/api/projects/{project['id']}"
@@ -133,6 +175,8 @@ def test_existing_project_adds_only_covers_and_generates_only_back_cover(workspa
     assert generated.status_code == 200, generated.text
     refreshed = client.get(base).json()["project"]
     assert refreshed["storyboard"][-1]["panels"][0]["generation_status"] == "completed"
+    assert refreshed["storyboard"][-1]["panels"][0]["generation_metadata"]
+    assert refreshed["storyboard"][-1]["panels"][0]["geometry"] == saved["storyboard"][-1]["panels"][0]["geometry"]
     assert all(p["generation_status"] == "not_started" for page in refreshed["storyboard"][:-1] for p in page["panels"])
     assert refreshed["name_script"]["state"] == "confirmed"
 

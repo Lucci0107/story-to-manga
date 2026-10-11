@@ -1227,7 +1227,7 @@
       return '<section class="surface-panel panel-padding cover-settings"><h3>表紙・裏表紙の有無</h3><p>表紙・裏表紙は、本文の目標ページ数に含めません。本文120ページに両方を付ける場合は、合計122ページになります。</p><div class="settings-grid">' +
         selectField('title_mode', '表紙・タイトル', settings.title_mode || 'none', [{value:'none',label:'表紙なし'},{value:'first_page',label:'表紙なし・本文1ページ目にタイトル'},{value:'cover',label:'あり（独立した表紙）'}]) +
         selectField('back_cover_mode', '裏表紙', settings.back_cover_mode || 'none', [{value:'none',label:'なし'},{value:'generate',label:'あり（独立した裏表紙）'}]) +
-        '</div><p class="field-help">保存した選択に合わせて、ネームに独立した表紙・裏表紙を追加します。画像生成は、全編ネームと各ページの設計を確認した後に行います。</p><h3>表紙・裏表紙に入れる文字</h3><p>タイトルと作者名は両方に表示します。文字は生成済みの絵と合成し、プレビュー・PDF・ページ画像ZIPに反映します。</p>' + coverTextFields(settings, 'data-settings-field') + '<p class="field-help">文字だけの変更ではAIを呼び出さず、絵と確定済みのネームを保持します。</p></section>';
+        '</div><p class="field-help">表紙・裏表紙は、ページ全体を使う一枚絵です。上部にタイトル、下部に作者名を重ねます。新しい表紙では主要人物と背景を使った専用の構図を提案し、ネームで変更できます。画像生成は、全編ネームと各ページの設計を確認した後に行います。</p><h3>表紙・裏表紙に入れる文字</h3><p>タイトルと作者名は両方の絵に重ね、プレビュー・PDF・ページ画像ZIPに反映します。</p>' + coverTextFields(settings, 'data-settings-field') + '<p class="field-help">文字だけの変更ではAIを呼び出さず、絵と確定済みのネームを保持します。</p></section>';
     }
 
     function captureSettingsDraft() {
@@ -3148,8 +3148,12 @@
       const previousLabel = isEnglish ? "← 前のページ" : "→ 前のページ";
       const nextLabel = isEnglish ? "次のページ →" : "次のページ ←";
       const navigation = '<div class="preview-navigation" data-reading-direction="' + escapeAttr(readingDirectionKey(state.settings)) + '"><button type="button" class="secondary-button compact-button" data-preview-prev' + (selectedPageIndex <= 0 ? " disabled" : "") + '>' + previousLabel + '</button><span aria-live="polite">' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + ' / ' + (selectedPageIndex + 1) + ' / ' + pages.length + '</span><button type="button" class="secondary-button compact-button" data-preview-next' + (selectedPageIndex >= pages.length - 1 ? " disabled" : "") + '>' + nextLabel + '</button></div>';
-      const coverEditor = isCoverPage(page) ? '<section class="surface-panel panel-padding cover-text-editor"><h3>表紙・裏表紙の文字を編集</h3><p>保存すると、両方のプレビューと書き出しに反映します。画像の再生成は不要です。</p>' + (!state.settings?.cover_author ? '<p class="field-help">作者名が未入力です。表示する表記を入力してください。</p>' : '') + coverTextFields(state.settings || {}, 'data-cover-text-field') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-cover-text>表紙・裏表紙の文字を保存</button></div></section>' : '';
+      const coverEditor = isCoverPage(page) ? '<section class="surface-panel panel-padding cover-text-editor"><h3>表紙・裏表紙の文字を編集</h3><p>一枚絵の上にタイトルと作者名を重ねています。保存すると、両方のプレビューと書き出しに反映します。文字の変更に画像の再生成は不要です。</p><p class="field-help">絵の内容を変える場合は、ネームで表紙・裏表紙の人物や背景を編集し、コマ生成でその表紙だけを再生成してください。</p><button type="button" class="secondary-button compact-button" data-edit-cover-artwork>' + (page.page_kind === 'back_cover' ? '裏表紙' : '表紙') + 'の絵・構図を編集</button>' + (!state.settings?.cover_author ? '<p class="field-help">作者名が未入力です。表示する表記を入力してください。</p>' : '') + coverTextFields(state.settings || {}, 'data-cover-text-field') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-save-cover-text>表紙・裏表紙の文字を保存</button></div></section>' : '';
       content.innerHTML = heading("完成ページを読む", "ページ単位で確認し、セリフの読みやすさと流れを見ます。") + (pages.length ? '<div class="preview-layout"><nav class="page-picker" dir="' + direction + '" aria-label="ページ選択">' + picker + '</nav><div>' + navigation + pageStage(page) + coverEditor + '</div></div>' + nextButton("export", "書き出しへ") : '<section class="surface-panel empty-panel"><h3>プレビューできるページがありません</h3><p>ネームを作成してからコマを生成してください。</p></section>');
+      content.querySelector('[data-edit-cover-artwork]')?.addEventListener('click', async function() {
+        await goToStep('storyboard');
+        focusStoryboardPage(page.id);
+      });
       content.querySelector('[data-save-cover-text]')?.addEventListener('click', async function(event) {
         const button = event.currentTarget;
         const next = {};

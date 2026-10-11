@@ -638,6 +638,23 @@ def compose_panel_prompt(
     style_profile = resolve_visual_style(settings)
     rendering = rendering_profile(settings)
     mode = "白黒" if settings.get("color_mode") == "bw" else "カラー"
+    from .cover_layout import COVER_SCENE_TYPES
+    if panel.get("scene_type") in COVER_SCENE_TYPES:
+        back = panel["scene_type"] == "back_cover_illustration"
+        return (
+            f"{'裏表紙' if back else '表紙'}専用の縦長3:4の一枚絵。Full-page, full-bleed book cover illustration. "
+            "背景と絵をページの四辺まで連続させる。コマ枠、外枠、額縁、余白の帯、複数コマやコラージュは描かない。"
+            f"{mode}。描画方式: {rendering.get('name') or style_profile['artwork_tone']}。"
+            + compile_architect(settings, panel)
+            + f"内容: {panel.get('description', '')}。ショット: {panel.get('shot_type', '')}。"
+            f"舞台: {panel.get('background', '')}。行動: {panel.get('action', '')}。表情: {panel.get('expression', '')}。"
+            f"登場人物: {' / '.join(identities)}。"
+            + ("本文にある風景・モチーフで静かな余韻を表す。下部64〜84%は紹介文を重ねられる静かな背景にする。" if back else
+               "主要人物や中心モチーフを中央から下部へ配置する。顔・頭頂・重要な小物は上部35%のタイトル領域から離す。")
+            + "上部はタイトル、下部は作者名を後から重ねるため、静かで明るい背景として絵を連続させる。白い文字帯や文字枠を描かない。"
+            "文字、タイトル、作者名、吹き出し、ページ番号は画像に描かず、後工程で合成する。"
+            + in_world_text_prompt(panel)
+        )
     geometry = panel.get("geometry") if isinstance(panel.get("geometry"), dict) else {}
     panel_shape = str(geometry.get("shape") or panel.get("panel_shape") or "rectangle")
     target_ratio = artwork_aspect_ratio(panel)
@@ -689,10 +706,11 @@ def compose_panel_prompt(
 def compose_prompts(
     storyboard: List[Dict[str, Any]], characters: List[Dict[str, Any]], settings: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
+    from .cover_layout import cover_artwork_panel
     for page in storyboard:
         for panel_index, panel in enumerate(page.get("panels", [])):
             panel["order"] = panel_index + 1
-            panel["generation_prompt"] = compose_panel_prompt(panel, characters, settings)
+            panel["generation_prompt"] = compose_panel_prompt(cover_artwork_panel(page, panel), characters, settings)
             panel["prompt_source"] = "generated"
     return storyboard
 
@@ -710,6 +728,10 @@ def image_generation_prompt(
     if panel.get("prompt_source", "generated") != "user":
         # OpenAIProviderの同一性補足は、以下の最新の確定情報へ置き換える。
         base_prompt = base_prompt.split("\nContinuity anchor:", 1)[0].strip()
+        from .cover_layout import COVER_SCENE_TYPES
+        if panel.get("scene_type") in COVER_SCENE_TYPES and "Panel geometry:" in base_prompt:
+            # 旧版の本文用プロンプトを表紙へ再注入しない。
+            base_prompt = ""
         if base_prompt and confirmed_prompt.startswith(base_prompt):
             base_prompt = ""
     prompt = append_knowledge_prompt(base_prompt, knowledge_context)
@@ -1910,9 +1932,11 @@ class OpenAIProvider(DemoAIProvider):
     ) -> str:
         """構造化されたコマ情報から画像生成用Promptを作る。"""
 
+        from .cover_layout import COVER_SCENE_TYPES
+        subject = "一枚の表紙・裏表紙" if panel.get("scene_type") in COVER_SCENE_TYPES else "一つのコマ"
         system = (
             "あなたは漫画用画像生成Promptの編集者です。参照情報をもとに、"
-            "一つのコマの視覚情報だけを英語と日本語の簡潔な混在表現で作ってください。"
+            f"{subject}の視覚情報だけを英語と日本語の簡潔な混在表現で作ってください。"
             "人物の外見・衣装・固有特徴を省略せず、ショット、構図、背景、光、"
             "色モード、一般化された漫画スタイル、連続性制約を含めてください。"
             "セリフや文字、吹き出しは画像に描かないでください。"

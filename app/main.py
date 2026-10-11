@@ -54,6 +54,7 @@ from .services.architect import recommend_architect, add_requested_covers
 from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provider, compose_prompts, image_generation_prompt
 from .services.page_types import is_content_page, page_label, requested_cover_kinds
 from .services.cover_text import COVER_TEXT_FIELDS, artwork_settings
+from .services.cover_layout import cover_artwork_panel
 from .services.story_analysis import analysis_content_fingerprint, analysis_source_status
 from .services.storyboard_jobs import public_storyboard_job, storyboard_inputs_match, storyboard_project_inputs
 from .services.character_proposal import (
@@ -695,11 +696,12 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             from .services.model_registry import model_for_task
 
             latest_panel["generation_image_model"] = model_for_task(model_settings, "image")
+            artwork_panel = cover_artwork_panel(_latest_page, latest_panel)
             provider = get_ai_provider(model_settings)
             prompt_source = latest_panel.get("prompt_source", "generated")
             if getattr(provider, "uses_external_api", False) and prompt_source != "user":
                 base_prompt = provider.panel_prompt(
-                    latest_panel,
+                    artwork_panel,
                     panel_characters(latest, latest_panel),
                     latest.get("settings") or {},
                     knowledge_context,
@@ -709,14 +711,14 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
                 base_prompt = str(latest_panel.get("generation_prompt", ""))
                 if not base_prompt.strip():
                     base_prompt = provider.panel_prompt(
-                        latest_panel,
+                        artwork_panel,
                         panel_characters(latest, latest_panel),
                         latest.get("settings") or {},
                         knowledge_context,
                     )
                     record_provider_generation(project_id, user_id, provider, target_id=latest_panel["id"])
             latest_panel["generation_prompt"] = image_generation_prompt(
-                base_prompt, latest_panel, panel_characters(latest, latest_panel),
+                base_prompt, artwork_panel, panel_characters(latest, latest_panel),
                 latest.get("settings") or {}, knowledge_context,
             )
             latest_panel["knowledge_refs"] = knowledge_context.get("references", [])
@@ -729,9 +731,10 @@ def process_generation_jobs(project_id: str, user_id: str, job_ids: List[str]) -
             name = name_script_summary(current_project)
             if name["required"] and name["state"] != "confirmed":
                 raise ArtworkGenerationError("全編ネームが変更されました。最新の版を確定してください。")
-            storage_key = save_panel_artwork(
-                latest["id"], latest_panel, latest["settings"], model_settings
-            )
+            artwork_panel["generation_prompt"] = latest_panel["generation_prompt"]
+            storage_key = save_panel_artwork(latest["id"], artwork_panel, latest["settings"], model_settings)
+            if artwork_panel is not latest_panel:
+                latest_panel["generation_metadata"] = artwork_panel.get("generation_metadata")
             image_metadata = latest_panel.get("generation_metadata")
             if isinstance(image_metadata, dict):
                 image_event = dict(image_metadata)
