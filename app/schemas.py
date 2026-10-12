@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .services.composition import COMPOSITION_VERSION, SEMANTIC_COMPOSITION_VERSION, CURRENT_COMPOSITION_VERSION
 from .services.layout import ensure_storyboard_layout, normalize_importance
 from .services.page_types import MAX_CONTENT_PAGES, COVER_PAGE_KINDS
+from .services.character_sheet import RATIOS as CHARACTER_SHEET_RATIOS
 from .services.reading_order import (
     ALLOWED_LANGUAGES,
     LEGACY_DIRECTION_ALIASES,
@@ -223,6 +224,13 @@ class ProjectPatch(BaseModel):
     characters: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=MAX_STORED_CHARACTERS)
     storyboard: Optional[List[Dict[str, Any]]] = None
     status: Optional[str] = None
+
+    @field_validator("characters")
+    @classmethod
+    def valid_sheet_ratios(cls, value: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+        if value is not None and any(item.get("sheet_ratio") not in (None, "", *CHARACTER_SHEET_RATIOS) for item in value):
+            raise ValueError("人物シートの比率は3:4・4:3・3:2から選んでください。")
+        return value
 
     @field_validator("current_step")
     @classmethod
@@ -571,7 +579,7 @@ def normalize_characters(value: Any, *, limit: int = MAX_CHARACTERS) -> List[Dic
         for key, length in (("aliases", CHARACTER_NAME_MAX_LENGTH), ("source_quotes", CHARACTER_TEXT_MAX_LENGTH)):
             entries = item.get(key, [])
             character[key] = [entry[:length] for entry in entries[:16] if isinstance(entry, str)] if isinstance(entries, list) else []
-        character["sheet_ratio"] = item.get("sheet_ratio") if item.get("sheet_ratio") in {"3:4", "3:2"} else "3:4"
+        character["sheet_ratio"] = item.get("sheet_ratio") if item.get("sheet_ratio") in CHARACTER_SHEET_RATIOS else "3:4"
         normalized.append(character)
     return normalized
 

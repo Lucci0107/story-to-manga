@@ -174,7 +174,7 @@ def test_documents_enforce_project_ownership(workspace):
     other = TestClient(app)
     other.post("/register", data={"email": "another-manga@example.com", "password": "local-test-password"})
     base = f"/api/projects/{project['id']}"
-    for path in ("/name-script", f"/manga-documents/{name['id']}/download", "/characters/葵/style-sheet", "/characters/葵/style-sheet.md"):
+    for path in ("/name-script", f"/manga-documents/{name['id']}/download", "/characters/葵/style-sheet", "/characters/葵/style-sheet.md", "/characters/葵/style-sheet.svg"):
         assert other.get(base + path).status_code == 404
     assert other.post(base + "/name-script").status_code == 404
     assert other.post(base + "/name-script/confirmation", json={"design_hash": name["content_hash"]}).status_code == 404
@@ -300,18 +300,18 @@ def test_sheet_all_characters_unknown_fields_ratios_and_history(workspace):
     sheet = client.get(base + "/characters/灯/style-sheet").json()["sheet"]
     assert sheet["sequence_index"] == sheet["total_characters"] == 3
     assert len(sheet["profile_fields"]) == 8
-    assert [s["count"] for s in sheet["sections"]] == [8, 4, 8, 8, 6, 8, 5]
+    assert [s["count"] for s in sheet["sections"]] == [1, 4, 3, 8, 6, 10, 14, 4, 1]
     assert next(f for f in sheet["profile_fields"] if f["label"] == "身長・サイズ") == {"label": "身長・サイズ", "value": "未設定", "source": "unknown"}
     first = client.get(base + "/characters/灯/style-sheet.md")
     assert first.status_code == 200 and "人物画像の生成・実画像監査は未実施" in first.text
-    assert "正面 / 斜め前 / 真横 / 背面" in first.text and "3:4" in first.text
+    assert "正面 / 斜め45度 / 側面90度 / 背面180度" in first.text and "3:4" in first.text
     client.get(base + "/characters/灯/style-sheet.md")
     assert len(client.get(base + "/characters/灯/style-sheet").json()["versions"]) == 1
     characters = deepcopy(project["characters"])
     characters[-1].update(sheet_ratio="3:2", palette_notes="黒と青", identity_notes="左耳の装飾と短い黒髪を保持")
     assert client.patch(base, json={"characters": characters}).status_code == 200
     second = client.get(base + "/characters/灯/style-sheet.md")
-    assert "3:2" in second.text and "黒と青" in second.text and "3列" in second.text
+    assert "3:2" in second.text and "黒と青" in second.text and "LAYOUT_3_2" in second.text
     saved = client.get(base + "/characters/灯/style-sheet").json()
     versions = saved["versions"]
     assert saved["document"]["version_number"] == 2
@@ -376,3 +376,28 @@ def test_contract_reaches_image_and_storyboard_prompts(workspace):
     assert "位置だけで自動変形しない" in storyboard_contract_prompt()
     sheet = character_sheet_design(project, project["characters"][0])
     assert sheet["architect_source"]["knowledge_version"] == "2.16.0"
+
+
+def test_sheet_ratio_roundtrip_svg_and_reject_unknown_ratio(workspace):
+    client, project = workspace
+    base = f"/api/projects/{project['id']}"
+    original_storyboard = deepcopy(project["storyboard"])
+    for ratio in ("3:4", "4:3", "3:2"):
+        characters = deepcopy(project["characters"])
+        characters[0]["sheet_ratio"] = ratio
+        saved = client.patch(base, json={"characters": characters})
+        assert saved.status_code == 200
+        sheet = client.get(base + "/characters/葵/style-sheet").json()["sheet"]
+        assert sheet["ratio"] == ratio == sheet["fixed_layout"]["ratio"]
+        svg = client.get(base + "/characters/葵/style-sheet.svg")
+        assert svg.status_code == 200 and "image/svg+xml" in svg.headers["content-type"]
+        assert svg.text.count('data-slot=') == 51
+        assert 'no-store' in svg.headers["cache-control"]
+        assert "attachment" in client.get(base + "/characters/葵/style-sheet.svg?download=true").headers["content-disposition"]
+        assert client.get(base + "/characters/missing/style-sheet.svg").status_code == 404
+    characters[0]["sheet_ratio"] = "16:9"
+    assert client.patch(base, json={"characters": characters}).status_code == 422
+    saved = db.get_project(project["id"], project["user_id"])
+    assert saved["storyboard"] == original_storyboard
+    assert saved["characters"][0]["sheet_ratio"] == "3:2"
+    assert db.manga_document_versions(project["id"], project["user_id"], "character_sheet", "葵") == []

@@ -872,3 +872,8 @@ details[open] > summary { border-color: var(--accent-deep); }
   .candidate-confirmation-actions { max-width: 100%; justify-content: flex-start; }
   .candidate-confirmation-actions button { width: 100%; }
 }
+
+.sheet-layout-preview { display: block; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.sheet-layout-preview img { display: block; width: 100%; height: auto; }
+.sheet-layout-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.character-sheet-design details { margin: 12px 0; }

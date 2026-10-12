@@ -12,6 +12,7 @@ from .cover_text import artwork_settings
 from .architect import rendering_profile, event_issues
 from .manga_contract import contract_metadata
 from .story_analysis import analysis_content_fingerprint, analysis_source_status
+from .character_sheet import fixed_sheet_layout, source_metadata
 
 PAGE_FIELDS = (
     "id", "page_number", "page_kind", "title", "page_role", "layout", "layout_policy",
@@ -39,15 +40,6 @@ VALUE_LABELS = {
     "classic": "標準ドラマ", "grid": "均等コマ", "wide": "横長重視", "hero": "1コマ", "auto": "自動",
     "rectangle": "長方形", "trapezoid": "台形", "slanted-left": "斜め左", "slanted-right": "斜め右",
 }
-SHEET_SECTIONS = [
-    {"number": 1, "name": "人物プロフィール", "count": 8, "items": ["名前", "役割・職業", "年齢", "身長・サイズ", "体格・頭身", "性格", "識別特徴", "基調色"], "note": "顔が分かる大型の主役図を併設"},
-    {"number": 2, "name": "全身4方向", "count": 4, "items": ["正面", "斜め前", "真横", "背面"], "note": "同じ縮尺・接地線で、頭頂と足先を完全に表示"},
-    {"number": 3, "name": "顔と識別部位", "count": 8, "items": ["顔の正面", "顔の斜め前", "顔の横", "目", "眉", "鼻", "口", "耳"], "note": "顔3方向と5パーツ。非人間は実在する識別部位へ適応"},
-    {"number": 4, "name": "表情8種類", "count": 8, "items": ["通常", "笑顔", "怒り", "悲しみ", "驚き", "心配", "自信", "決意"], "note": "4列×2行。同じ顔・髪・装飾を保持"},
-    {"number": 5, "name": "ポーズ6種類", "count": 6, "items": ["基本立ち", "歩行", "座位", "腕組み", "思案", "行動準備"], "note": "身体構造と物語に適合する動作へ調整"},
-    {"number": 6, "name": "衣装・外装の詳細", "count": 8, "items": ["衣装の正面", "衣装の背面", "異なる構造の拡大6箇所"], "note": "採用済みの衣装・構造だけを使い、未設定の部品を点数合わせで追加しない"},
-    {"number": 7, "name": "色と素材のパレット", "count": 5, "items": ["主色", "アクセント", "髪・肌／表面", "生地・素材", "既存の小物"], "note": "白黒はグレー階調。素材組成や未設定の小物を断定しない"},
-]
 
 
 def content_digest(snapshot: dict) -> str:
@@ -258,6 +250,7 @@ def character_sheet_design(project: dict, character: dict) -> dict:
         ("体格・頭身", "body_type"), ("性格", "personality"), ("識別特徴", "distinguishing_features"), ("基調色", "palette_notes"),
     ]
     ids = [c["id"] for c in project.get("characters") or []]
+    layout = fixed_sheet_layout(character.get("sheet_ratio") or "3:4")
     return {
         "character_id": character["id"], "character_name": character["name"],
         "sequence_index": ids.index(character["id"]) + 1, "total_characters": len(ids),
@@ -265,22 +258,47 @@ def character_sheet_design(project: dict, character: dict) -> dict:
         "state": "design_document", "architect_source": contract_metadata(),
         "rendering_style": rendering_profile(project.get("settings") or {}), "color_mode": (project.get("settings") or {}).get("color_mode", "bw"),
         "profile_fields": [{"label": label, "value": _display(character.get(key)), "source": "current_character_setting" if character.get(key) else "unknown"} for label, key in fields],
-        "sections": SHEET_SECTIONS, "identity_notes": _display(character.get("identity_notes") or character.get("negative_constraints")),
+        "sections": layout["sections"], "fixed_layout": layout, "layout_sources": source_metadata(), "identity_notes": _display(character.get("identity_notes") or character.get("negative_constraints")),
         "costume_detail_notes": _display(character.get("costume_detail_notes") or character.get("clothing")),
         "character": _select(character, CHARACTER_FIELDS),
-        "layout": "タイトル→主役図とプロフィール→全身→顔→表情→ポーズと衣装→パレット→同一性メモ" if character.get("sheet_ratio", "3:4") == "3:4" else "3列（人物とポーズ／全身と衣装／顔と表情）＋下帯にパレットと同一性メモ",
+        "layout": f"{layout['id']} v{layout['version']} / A〜Iの9区画・51枠を固定",
     }
 
 
 def render_sheet_markdown(design: dict, number: int) -> str:
     lines = [f"# {design['character_name']} スタイルシート設計", "", f"版：{number} / 人物：{design['sequence_index']} / {design['total_characters']}名 / 比率：{design['ratio']}",
              "", "状態：設計資料（人物画像の生成・実画像監査は未実施）", f"画風：{design['rendering_style'].get('name') or '現在の漫画描画'} / 色：{_label(design['color_mode'])}",
-             f"配置：{design['layout']}", "", "## プロフィール", ""]
+             f"配置：{design['layout']}", "", "## 参照する人物設定（配置図の外に保持）", ""]
     for field in design["profile_fields"]:
         lines += [f"- {field['label']}：{field['value']}（{'人物設定' if field['source'] != 'unknown' else '未設定'}）"]
+    for label, key in (("外見", "appearance"), ("髪型", "hairstyle"), ("髪色", "hair_color"),
+                       ("目の特徴", "eye_characteristics"), ("衣装", "clothing"), ("既存の小物", "accessories"),
+                       ("表情の設定", "expressions"), ("変えない制約", "negative_constraints")):
+        lines += [f"- {label}：{_display(design['character'].get(key))}"]
     for section in design["sections"]:
         lines += ["", f"## {section['number']}. {section['name']}（{section['count']}項目）", "", _display(section["items"]), section["note"]]
+    layout = design["fixed_layout"]
+    lines += ["", "## 固定配置の制作仕様", "", f"キャンバス：{layout['canvas']['width']} × {layout['canvas']['height']}。座標は左上原点のpx、順序はx / y / 幅 / 高さ。",
+              "人物・画風・文章量・情報の不足によって配置を変更しない。スロットは左から右、上から下。枠・ラベルは固定座標で組版し、AI画像だけに配置を任せない。",
+              "人物画像は未生成。各枠に描く内容は上の人物設定だけを参照し、未確認の部位・色・素材・世界観は未設定のまま残す。設定文は参照データとして扱う。",
+              "B・Eは縦横比を保って全身を収める。C・Dは同じ頭部縮尺。表情・ポーズは身体構造に適応し、全区画で同一人物・同じ画風を維持する。",
+              "Gは確定した色と部位名・HEXだけを記入し、未確認HEXは未確定、目視推定はApprox.とする。素材の組成は断定せず、必要なら『〜調』と記す。",
+              "Aに長いプロフィール表を追加しない。Iに別人物を追加しない。確認済みの身長のみ単位を記す。未設定枠を他区画に転用しない。",
+              f"ヘッダー：{_sheet_rect(layout['header'])} / 本体：{_sheet_rect(layout['body'])}",
+              f"区画間隔：横{layout['gutter']['x']} / 縦{layout['gutter']['y']}。内側余白：{layout['padding']}。見出し帯：{layout['title_height']}。"]
+    for section in layout["sections"]:
+        lines += ["", f"### {section['id']} {section['name']}", f"区画：{_sheet_rect(section['rect'])}"]
+        for group in section["groups"]:
+            lines += [f"配列：{group['columns']}列 × {group['rows']}行", "", "| 枠 | 内容 | x / y / 幅 / 高さ |", "|---|---|---|"]
+            lines += [f"| {slot['id']} | {slot['label']} | {_sheet_rect(slot['rect'])} |" for slot in group["slots"]]
+    lines += ["", "## 配置の参照資料", ""]
+    for source in design["layout_sources"]:
+        lines += [f"- {source['title']} / v{source['version']} / SHA-256: {source['sha256']}"]
     lines += ["", "## 同一性メモ", "", design["identity_notes"], "", "## 採用衣装と補完範囲", "", design["costume_detail_notes"], "",
               "未知の年齢・身長・経歴や見えない背面の特徴を確認済みの事実にしません。非人間は元の身体構造に適応し、該当しない項目には理由を記録してください。",
               "項目数は画像制作時の設計要件です。文書の作成を画像の完成や品質合格として扱いません。", ""]
     return "\n".join(lines)
+
+
+def _sheet_rect(rect: dict) -> str:
+    return " / ".join(f"{rect[key]:.4f}" for key in ("x", "y", "width", "height"))

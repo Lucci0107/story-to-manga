@@ -57,6 +57,7 @@ from .services.ai_pipeline import AIProviderError, DemoAIProvider, get_ai_provid
 from .services.page_types import is_content_page, page_label, requested_cover_kinds
 from .services.cover_text import COVER_TEXT_FIELDS, artwork_settings
 from .services.cover_layout import cover_artwork_panel
+from .services.character_sheet import render_sheet_svg
 from .services.cover_proposal import (
     find_cover, proposal_context, proposal_input_hash, validate_proposal, changed_cover, render_proposal_markdown,
 )
@@ -2536,6 +2537,16 @@ async def api_download_character_sheet(project_id: str, character_id: str, user=
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return manga_document_download(project, document)
+
+
+@app.get("/api/projects/{project_id}/characters/{character_id}/style-sheet.svg")
+async def api_character_sheet_layout(project_id: str, character_id: str, download: bool = False, user=Depends(current_user)):
+    project = require_project(project_id, user["id"])
+    design = character_sheet_design(project, require_character(project, character_id))
+    headers = {"Cache-Control": "private, no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"}
+    if download:
+        headers["Content-Disposition"] = 'attachment; filename="character-sheet-layout.svg"'
+    return Response(render_sheet_svg(design), media_type="image/svg+xml", headers=headers)
 
 
 @app.get("/api/projects/{project_id}/pages/{page_id}/composition.png")
