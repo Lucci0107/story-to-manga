@@ -2702,7 +2702,7 @@
         const host=content.querySelector('[data-approval-cards]'); if (!host) return;
         host.innerHTML=designs.map(function(design,index) {
           const item=selected[index];
-          return '<section class="surface-panel panel-padding approval-card"><h3>'+ escapeHtml(pageLabel(design.page_design || item.page)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+pageStage(design.page_design || item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(generationCharacterLabels(design))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p>'+generationFutureEvents(design)+generationCharacterHelp(design, item.page.id)+'<p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
+          return '<section class="surface-panel panel-padding approval-card"><h3>'+ escapeHtml(pageLabel(design.page_design || item.page)) +' / コマ '+escapeHtml(item.panel.order)+'</h3><span class="settings-badge">'+(design.errors.length ? '設計を修正してください' : '確認待ち')+'</span>'+generationDesignPreview(design, item.page)+'<p>'+escapeHtml(design.description)+'</p><p>人物：'+escapeHtml(generationCharacterLabels(design))+'</p><p>セリフ：'+escapeHtml(design.dialogue.join(' / '))+'</p><p>ナレーション：'+escapeHtml(design.narration.join(' / '))+'</p><p>描画：'+escapeHtml(design.rendering_style.name || '既存の漫画描画')+' / '+escapeHtml(design.settings.color_mode)+' / '+escapeHtml(languageLabel(design.settings))+' / '+escapeHtml(readingDirectionLabel(design.settings))+'</p><p>モデル：'+escapeHtml(design.models?.image_model || '既定')+' / 頭身：'+escapeHtml(design.rendering_style.body_ratio || design.settings.character_proportion || '方式に合わせる')+' / トーン：'+escapeHtml(architectCatalog?.tones?.[design.script_tone.primary] || design.script_tone.primary)+' / 照明：'+escapeHtml(design.rendering_style.lighting || design.settings.mood_lighting || '方式に合わせる')+'</p><p>今回の出来事：'+escapeHtml((design.event_boundary.allowed_events || []).join(' / '))+'</p>'+generationFutureEvents(design)+generationCharacterHelp(design, item.page.id)+'<p role="alert">'+escapeHtml(design.errors.join(' / '))+'</p><button type="button" class="primary-button compact-button" data-approve-target="'+index+'"'+(design.errors.length ? ' disabled' : '')+'>この内容で生成</button></section>';
         }).join('');
         const invalidCount = designs.filter(function (design) { return design.errors.length; }).length;
         const batchHost = content.querySelector('[data-batch-approval]');
@@ -2950,6 +2950,24 @@
         ? '<p>このページの「配置を再計算」を押してください。解消しない場合は「レイアウト」を変更して再確認してください。</p>'
         : '<button type="button" class="secondary-button compact-button" data-open-layout-page="' + escapeAttr(page.id) + '">このページをネームで修正</button>';
       return '<section class="page-layout-recovery" role="alert"><strong>' + escapeHtml(pageLabel(page)) + ' / コマ' + escapeHtml(orders) + 'の文字配置を修正してください</strong><p>文字が枠に収まらないか、人物と重なっています。この状態では書き出せません。</p><p>配置の再計算では文章と元画像を保持し、AIによる再生成は行いません。修正後の配置を確認してから生成してください。</p>' + action + '</section>';
+    }
+
+    function generationDesignPreview(design, page) {
+      const plan = design.cover_plan;
+      if (!plan) return pageStage(design.page_design || page);
+      const text = plan.text || {};
+      const back = page.page_kind === 'back_cover';
+      function region(key, label) {
+        if (!text[key]) return '';
+        const box = plan.text_regions[key];
+        return '<div class="cover-plan-text cover-plan-' + key + '" style="left:' + percentValue(box[0], 0) + '%;top:' + percentValue(box[1], 0) + '%;width:' + percentValue(box[2], 1) + '%;height:' + percentValue(box[3], .1) + '%;"><small>' + label + '</small><span>' + escapeHtml(text[key]).replace(/\n/g, '<br>') + '</span></div>';
+      }
+      const scene = '<div class="cover-plan-scene"><small>新しく描く一枚絵</small><strong>' + escapeHtml((design.characters || []).join('、') || '風景・モチーフ') + '</strong><span>' + escapeHtml(plan.shot_type || '全面のイラスト') + '</span></div>';
+      const details = [['shot_type', '構図'], ['background', '背景'], ['action', '配置・動作'], ['expression', '表情・人物の描き方']].map(function(entry) {
+        return '<dt>' + entry[1] + '</dt><dd>' + escapeHtml(plan[entry[0]] || '指定なし') + '</dd>';
+      }).join('');
+      return '<section class="cover-generation-plan" aria-label="今回生成する表紙の設計"><h4>今回生成する一枚絵の設計</h4><p>画像はまだ生成していません。下の人物・背景・構図で新しい絵を作り、タイトルと作者名を重ねます。</p><div class="cover-plan-grid"><div class="cover-plan-sheet" role="img" aria-label="一枚絵と表紙文字の配置図。完成画像ではありません">' + region('title', 'タイトル') + region('subtitle', '副題') + scene + (back ? region('blurb', '紹介文') + region('publication', '発行情報') : '') + region('author', '作者') + '</div><dl class="cover-plan-specs">' + details + '</dl></div>' +
+        (design.previous_artwork ? '<details class="cover-previous-artwork"><summary>変更前の画像を確認</summary><p>保存済みの画像です。「この内容で生成」が完了すると新しい絵に更新します。</p>' + pageStage(page) + '</details>' : '') + '</section>';
     }
 
     function pageStage(page) {

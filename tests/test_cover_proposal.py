@@ -1,6 +1,9 @@
 """表紙のAI提案・確認・対象だけの再生成。実APIは呼ばない。"""
 
 from copy import deepcopy
+import base64
+from io import BytesIO
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +14,10 @@ from app.schemas import SettingsPayload, normalize_characters, normalize_storybo
 from app.services.ai_pipeline import DemoAIProvider, OpenAIProvider
 from app.services.architect import finalize_storyboard
 from app.services.cover_proposal import proposal_context, proposal_schema, validate_proposal, demo_proposal
+from app.services.generation_design import generation_layout_issues
+from app.services.layout import reflow_page
+from app.services.cover_layout import cover_artwork_panel
+from app.services.panel_direction import plan_panel_direction
 
 
 @pytest.fixture
@@ -230,3 +237,104 @@ def test_openai_proposal_is_bounded_validated_and_treats_references_as_data(work
     assert calls[0][2]["task_key"] == "panel_prompt"
     with pytest.raises(ValueError):
         validate_proposal({**expected, "image_url": "https://invalid.example"}, context)
+
+
+@pytest.mark.parametrize("kind", ["cover", "back_cover"])
+@pytest.mark.parametrize("version", [3, 4])
+def test_saved_cover_with_failed_body_direction_can_be_reviewed_and_generated(workspace, monkeypatch, kind, version):
+    """本番と同じ水墨方式・中央人物・既存画像で、確認/キュー/Workerを通す。"""
+    client, project = workspace
+    settings = {**project["settings"], "composition_version": version,
+                "rendering_style_id": "MASTER:STYLE-047/PRESET-26", "color_mode": "bw"}
+    pages = deepcopy(project["storyboard"])
+    page = next(p for p in pages if p["page_kind"] == kind)
+    page["composition_version"] = version
+    panel = page["panels"][0]
+    original_image = f"/media/{project['id']}/{panel['id']}-r5.png"
+    panel.update(description="葵を画面中央のやや下に据えた川辺の一枚絵", characters=["葵"],
+                 shot_type="川辺を背景に主人公を正面から捉えるミディアムショット",
+                 background="川辺と灯台", action="中央の主人公が川辺に立つ", expression="穏やか",
+                 character_position="center", subject_position="center", generation_prompt="",
+                 generation_status="not_started", image_url=original_image, revision=0)
+    page = reflow_page(page, settings)
+    page["panels"][0]["panel_direction"] = plan_panel_direction(page["panels"][0], settings)
+    page["panels"][0]["panel_direction"].update(status="needs_revision", fingerprint="old-body-layout")
+    for _ in range(2):
+        page = reflow_page(page, settings)
+    assert page["panels"][0]["panel_direction"]["status"] == "needs_revision"
+    pages = [page if p["id"] == page["id"] else p for p in pages]
+    project = db.update_project(project["id"], project["user_id"], settings=settings, storyboard=pages)
+    base = f"/api/projects/{project['id']}"
+    confirm_name(client, base)
+    before = db.get_project(project["id"], project["user_id"])
+    # 公開設計は実際の生成と同じ全面比率。変更前の画像は別項目に分ける。
+    target = base + f"/panels/{panel['id']}"
+    view = client.get(target + "/design").json()
+    assert view["errors"] == [], view
+    assert view["previous_artwork"]["image_url"] == original_image
+    prepared = view["page_design"]["panels"][0]
+    assert "image_url" not in prepared and prepared["panel_direction"] is None
+    assert prepared["geometry"] == {"x": 0, "y": 0, "width": 1, "height": 1, "shape": "rectangle"}
+    assert view["cover_plan"]["background"] == "川辺と灯台"
+    # 原画の生成APIまでモックし、保存した新しい構図が送信されることを確認する。
+    from PIL import Image
+    from app.services import artwork
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("IMAGE_PROVIDER", "openai")
+    provider = OpenAIProvider()
+    text_calls, image_calls = [], []
+    def prompt_response(system, user, **kwargs):
+        payload = json.loads(user.split("\n\n<knowledge_reference>", 1)[0])
+        text_calls.append(payload)
+        return {"prompt": "主人公の葵が川辺と灯台の前に立つ、白黒の一枚絵。"}
+    monkeypatch.setattr(provider, "_json_call", prompt_response)
+    monkeypatch.setattr(main, "get_ai_provider", lambda *args: provider)
+    output = BytesIO()
+    Image.new("RGB", (32, 32), "white").save(output, format="PNG")
+    def image_response(url, **kwargs):
+        image_calls.append(kwargs["payload"])
+        return {"data": [{"b64_json": base64.b64encode(output.getvalue()).decode()}]}
+    monkeypatch.setattr(artwork, "request_json", image_response)
+    image_urls = []
+    for revision in (6, 7):
+        view = client.get(target + "/design").json()
+        assert client.post(target + "/approval", json={"design_hash": view["design_hash"]}).status_code == 200
+        response = client.post(base + "/generate", json={"panel_ids": [panel["id"]], "force": True})
+        assert response.status_code == 200, response.text
+        after = db.get_project(project["id"], project["user_id"])
+        current = next(p for p in after["storyboard"] if p["id"] == page["id"])["panels"][0]
+        assert current["generation_status"] == "completed", current["generation_error"]
+        assert current["revision"] == revision
+        image_urls.append(current["image_url"])
+        assert client.get(target + "/design").json()["name_script"]["state"] == "confirmed"
+        assert [p for p in after["storyboard"] if p["id"] != page["id"]] == [p for p in before["storyboard"] if p["id"] != page["id"]]
+        assert after["characters"] == before["characters"]
+    assert len(text_calls) == len(image_calls) == 2
+    assert image_urls[0] != image_urls[1]  # 再生成は過去の原画を上書きしない。
+    for payload in text_calls:
+        assert payload["panel"]["geometry"]["width"] == payload["panel"]["geometry"]["height"] == 1
+        assert payload["panel"]["background"] == "川辺と灯台"
+        assert payload["panel"]["characters"] == ["葵"]
+    for payload in image_calls:
+        assert "川辺と灯台" in payload["prompt"] and "葵" in payload["prompt"]
+        assert "Full-page, full-bleed" in payload["prompt"] and "Panel geometry:" not in payload["prompt"]
+        w, h = map(int, payload["size"].split("x"))
+        assert abs(w / h - .75) < .01
+
+
+def test_cover_exemption_does_not_bypass_body_geometry_or_cover_structure():
+    settings = {"composition_version": 4}
+    panel = {"panel_direction": {"status": "needs_revision"}, "image_url": "/existing.png"}
+    cover = {"page_kind": "cover", "panels": [panel]}
+    assert generation_layout_issues(cover, panel, settings) == []
+    assert generation_layout_issues({**cover, "page_kind": "content"}, panel, settings)
+    assert generation_layout_issues({**cover, "panels": [panel, {"id": "extra"}]}, panel, settings)
+
+
+def test_cover_context_does_not_reuse_previous_panel_shape_reasons():
+    panel = {"shape_reason": "古い携帯電話のコマ", "breakout_reason": "携帯電話", "semantic_reason": "携帯電話",
+             "protected_zones": [{"x": 0, "y": 0, "width": 1, "height": 1}]}
+    prepared = cover_artwork_panel({"page_kind": "cover"}, panel)
+    assert all(prepared[key] == "" for key in ("shape_reason", "breakout_reason", "semantic_reason"))
+    assert prepared["protected_zones"] == []
+    assert panel["shape_reason"] == "古い携帯電話のコマ"

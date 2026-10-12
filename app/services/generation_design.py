@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from .cover_text import artwork_settings
-from .cover_layout import COVER_ARTWORK_POLICY
+from .cover_text import artwork_settings, cover_text
+from .cover_layout import COVER_ARTWORK_POLICY, cover_artwork_panel, cover_text_regions
 from .architect import rendering_profile, tone_parameters, event_issues
 from .reading_order import canonicalize_stored_settings
 from .page_types import is_content_page
@@ -47,6 +47,7 @@ def design_data(
         "project_id": project["id"],
         "page": stable(page),
         **({"cover_artwork_policy": COVER_ARTWORK_POLICY} if not is_content_page(page) else {}),
+        **({"cover_generation_plan": stable(cover_artwork_panel(page, panel))} if not is_content_page(page) else {}),
         "target_id": panel["id"],
         "characters": stable(project.get("characters") or []),
         "source_cast": source_cast(project),
@@ -67,14 +68,15 @@ def design_hash(data: dict) -> str:
     ).hexdigest()
 
 
-def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
-    settings = project.get("settings") or {}
-    errors = event_issues(page)
-    from .manga_documents import name_script_summary
-    if project.get("id") and project.get("user_id"):
-        name = name_script_summary(project)
-        if name["required"] and name["state"] != "confirmed":
-            errors.append("ネーム画面で全編Markdownを出力・確認し、現在の版を確定してください。")
+def generation_layout_issues(page: dict, panel: dict, settings: dict) -> list[str]:
+    """確認・キュー・実行で同じ配置条件を使う。表紙は本文の空間計画から独立する。"""
+    if not is_content_page(page):
+        if len(page.get("panels") or []) != 1:
+            return ["表紙・裏表紙は一枚絵の1コマにしてください。ネームでコマ数を修正してください。"]
+        # 全面3:4の絵と固定のタイトル・著者領域を別々に描画する。
+        # 保存済みの本文用PanelDirectionは、実際の表紙生成には使用しない。
+        return []
+    errors = []
     from .panel_direction import direction_is_ready
     from .composition import composition_quality_issues
     from .composition_fallback import panel_spatial_complexity, COMPLEXITY_INFEASIBLE
@@ -107,6 +109,17 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
             )
         ):
             errors.append(issue["detail"])
+    return list(dict.fromkeys(errors))
+
+
+def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
+    settings = project.get("settings") or {}
+    errors = event_issues(page) + generation_layout_issues(page, panel, settings)
+    from .manga_documents import name_script_summary
+    if project.get("id") and project.get("user_id"):
+        name = name_script_summary(project)
+        if name["required"] and name["state"] != "confirmed":
+            errors.append("ネーム画面で全編Markdownを出力・確認し、現在の版を確定してください。")
     profile = rendering_profile(settings)
     if panel.get("prompt_source") == "user":
         prompt = str(panel.get("generation_prompt") or "").casefold()
@@ -177,11 +190,32 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
     page_design = json.loads(json.dumps(page))
     for entry in page_design.get("panels", []):
         entry.pop("generation_prompt", None)
+    cover_plan = None
+    if not is_content_page(page):
+        prepared = cover_artwork_panel(page, panel)
+        # 新しい設計に以前の画像を混ぜない。変更前の原画は保存したまま別項目で返す。
+        prepared.pop("generation_prompt", None)
+        prepared.pop("image_url", None)
+        page_design["panels"] = [prepared]
+        page_design["composition"] = {"size": [900, 1200], "policy": COVER_ARTWORK_POLICY}
+        cover_plan = {
+            "policy": COVER_ARTWORK_POLICY,
+            "text": cover_text(project),
+            "text_regions": cover_text_regions(str(page.get("page_kind"))),
+            "geometry": prepared["geometry"],
+            "shot_type": prepared.get("shot_type", ""),
+            "background": prepared.get("background", ""),
+            "action": prepared.get("action", ""),
+            "expression": prepared.get("expression", ""),
+        }
     cast = source_cast(project)
     references = [character_reference(name, project.get("characters") or [], cast)
                   for name in panel.get("characters") or []]
     return {
         "page_design": page_design,
+        "cover_plan": cover_plan,
+        "previous_artwork": ({"image_url": panel.get("image_url"), "revision": panel.get("revision", 0)}
+                             if cover_plan and panel.get("image_url") else None),
         "design_hash": digest,
         "state": "DESIGN_DRAFT" if errors else "DESIGN_READY",
         "errors": errors,
@@ -198,7 +232,7 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
         "unresolved_characters": unresolved_characters(panel, project.get("characters") or [], cast),
         "dialogue": panel.get("dialogue", []),
         "narration": panel.get("narration", []),
-        "composition": page.get("composition"),
+        "composition": page_design.get("composition"),
         "rendering_style": rendering_profile(project.get("settings") or {}),
         "script_tone": tone_parameters(project.get("settings") or {}),
         "settings": project.get("settings"),

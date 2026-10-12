@@ -241,6 +241,24 @@ h1, h2, h3 { line-height: 1.12; letter-spacing: -.035em; }
 .settings-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .settings-section-heading h2 { margin-bottom: 0; }
 .settings-badge { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 5px 8px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.cover-generation-plan { margin: 20px 0; }
+.cover-plan-grid { display: grid; grid-template-columns: minmax(220px, 340px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.cover-plan-sheet { position: relative; width: 100%; aspect-ratio: 3 / 4; background: var(--surface, #fff); border: 1px solid var(--line); }
+.cover-plan-text { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px; background: #f8e8e1; text-align: center; overflow-wrap: anywhere; }
+.cover-plan-text small, .cover-plan-scene small { font-size: 10px; color: var(--muted); }
+.cover-plan-title span { font-weight: 700; font-size: 21px; line-height: 1.25; }
+.cover-plan-subtitle, .cover-plan-author, .cover-plan-publication { font-size: 11px; }
+.cover-plan-blurb { font-size: 10px; overflow: auto; }
+.cover-plan-scene { position: absolute; left: 8%; top: 37%; width: 84%; height: 24%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; background: #e4eee9; text-align: center; overflow-wrap: anywhere; }
+.cover-plan-scene span { font-size: 11px; line-height: 1.5; }
+.cover-plan-specs { margin: 0; }
+.cover-plan-specs dt { font-weight: 700; margin-top: 12px; }
+.cover-plan-specs dt:first-child { margin-top: 0; }
+.cover-plan-specs dd { margin: 4px 0 16px; line-height: 1.8; overflow-wrap: anywhere; }
+.cover-previous-artwork { margin-top: 20px; }
+.cover-previous-artwork summary { display: list-item; cursor: pointer; padding: 12px; border: 1px solid var(--line); border-radius: 8px; font-weight: 700; }
+.cover-previous-artwork .preview-frame-wrap { max-width: 420px; margin-top: 12px; }
+@media (max-width: 760px) { .cover-plan-grid { grid-template-columns: 1fr; } .cover-plan-sheet { max-width: 340px; } }
 .ai-model-intro { margin-bottom: 20px; }
 .ai-model-form { display: grid; gap: 18px; }
 .ai-model-preset-row { display: grid; grid-template-columns: minmax(180px, .45fr) 1fr; align-items: end; gap: 18px; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
