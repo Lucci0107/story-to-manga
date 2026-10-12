@@ -2509,8 +2509,8 @@
         const referenceLabel = (panel.knowledge_refs || []).map(function (ref) { return (ref.title || "Knowledge") + " v" + (ref.version_number || "?"); }).join(", ");
         const generationModel = panel.generation_metadata?.actual_model ? " / 実行モデル: " + escapeHtml(panel.generation_metadata.actual_model) + (panel.generation_metadata.fallback ? "（Astraからフォールバック）" : "") : "";
         const geometry = item.page.composition?.panels?.find(function (entry) { return String(entry.panel_id) === String(panel.id); }) || panel.geometry || {};
-        const geometryLabel = geometry.shape ? " / " + escapeHtml(geometry.shape) + " / " + (Number(geometry.width || 0) * 900 / Math.max(Number(geometry.height || 1) * 1200, 1)).toFixed(2) + ":1" : "";
-        const direction = panel.panel_direction;
+        const geometryLabel = isCoverPage(item.page) ? ' / 一枚絵 / 3:4' : geometry.shape ? " / " + escapeHtml(geometry.shape) + " / " + (Number(geometry.width || 0) * 900 / Math.max(Number(geometry.height || 1) * 1200, 1)).toFixed(2) + ":1" : "";
+        const direction = isCoverPage(item.page) ? null : panel.panel_direction;
         const directionLabel = direction ? " / 構図: " + (direction.status === "ready" ? "生成前に設計済み" : "要修正（文字領域不足）") + " / 演出: " + escapeHtml(direction.visual_style?.display_name || "") : "";
         const metadata = escapeHtml(pageLabel(item.page)) + ' / ' + escapeHtml(panel.shot_type || "ショット未設定") + geometryLabel + ' / Revision ' + escapeHtml(panel.revision || 0) + generationModel + (referenceLabel ? " / " + escapeHtml(referenceLabel) : "");
         const failure = status === "failed" && panel.generation_error ? '<p class="generation-panel-error" role="status">停止理由：' + escapeHtml(panel.generation_error) + '</p>' : "";
