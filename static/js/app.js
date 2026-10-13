@@ -2,7 +2,6 @@
 (function () {
   "use strict";
 
-  const root = document.documentElement;
   const toastRegion = document.getElementById("toast-region");
 
   function escapeHtml(value) {
@@ -124,22 +123,6 @@
   });
   processingDialogElements.action?.addEventListener("click", function () {
     if (processingDialogAction) processingDialogAction();
-  });
-
-  function applyTheme(theme) {
-    root.dataset.theme = theme;
-    window.localStorage.setItem("story-manga-theme", theme);
-    document.querySelectorAll("[data-theme-toggle]").forEach(function (button) {
-      button.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
-    });
-  }
-
-  const savedTheme = window.localStorage.getItem("story-manga-theme");
-  applyTheme(savedTheme === "dark" ? "dark" : "light");
-  document.querySelectorAll("[data-theme-toggle]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      applyTheme(root.dataset.theme === "dark" ? "light" : "dark");
-    });
   });
 
   const registerToggle = document.querySelector("[data-auth-register]");
