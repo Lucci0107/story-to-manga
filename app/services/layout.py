@@ -28,6 +28,7 @@ from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, apply_shared_geometry, 
 from .reading_order import LANGUAGE_EN, canonicalize_stored_settings
 from .text_composition import separate_text_from_unverified_artwork
 from .visual_style import apply_text_direction, resolve_visual_style
+from .page_contract import A4_COMPOSITION_VERSION, A4_PAGE_SIZE
 from .panel_direction import plan_panel_direction, direction_is_ready
 from .composition_fallback import (
     COMPLEXITY_INFEASIBLE,
@@ -60,7 +61,7 @@ def _requested_composition_version(page: Mapping[str, Any], settings: Mapping[st
         except (TypeError, ValueError):
             continue
         if version >= SEMANTIC_COMPOSITION_VERSION:
-            return min(version, DYNAMIC_COMPOSITION_VERSION)
+            return min(version, A4_COMPOSITION_VERSION)
         if version == 2:
             return 2
     return 2
@@ -338,8 +339,9 @@ def _physical_boxes_for_row(
     height: float,
     uniform: bool,
     gap: float = PANEL_GAP,
+    side_margin: float = PAGE_SIDE_MARGIN,
 ) -> Dict[int, Dict[str, float]]:
-    available_width = 1 - PAGE_SIDE_MARGIN * 2 - gap * max(0, len(indices) - 1)
+    available_width = 1 - side_margin * 2 - gap * max(0, len(indices) - 1)
     if uniform:
         raw_weights = [1.0] * len(indices)
     else:
@@ -351,7 +353,7 @@ def _physical_boxes_for_row(
     widths = [available_width * weight / total_weight for weight in raw_weights]
     physical_order = list(indices) if language == LANGUAGE_EN else list(reversed(indices))
     width_by_index = dict(zip(indices, widths))
-    x = PAGE_SIDE_MARGIN
+    x = side_margin
     result: Dict[int, Dict[str, float]] = {}
     for physical_column, panel_index in enumerate(physical_order, start=1):
         width = width_by_index[panel_index]
@@ -689,6 +691,10 @@ def reflow_page(
             panel["id"] = f"layout-panel-{panel_index}"
     next_page["panels"] = panels
     composition_version = _requested_composition_version(next_page, settings) if enable_composition else 2
+    a4_mode = composition_version >= A4_COMPOSITION_VERSION
+    if a4_mode:
+        next_page["composition_version"] = composition_version
+    side_margin = .03 if a4_mode else PAGE_SIDE_MARGIN
     if composition_version < DYNAMIC_COMPOSITION_VERSION:
         next_page.pop("dynamic_layout", None)
     semantic_mode = composition_version >= SEMANTIC_COMPOSITION_VERSION
@@ -743,7 +749,7 @@ def reflow_page(
             if semantic_mode and dominant_index is not None and len(panels) <= 3:
                 # 少コマページで主役が半ページを超えないよう、面積差を保ったまま上限を置く。
                 row_weights[row_index] = min(row_weights[row_index], max(other_weights) * 1.15)
-    top_margin = 0.075 if semantic_mode and int(page.get("page_number", 1) or 1) == 1 and page.get("title") else PAGE_TOP_MARGIN
+    top_margin = 0.075 if semantic_mode and int(page.get("page_number", 1) or 1) == 1 and page.get("title") else .03 if a4_mode else PAGE_TOP_MARGIN
     total_height = 1 - top_margin - PAGE_BOTTOM_MARGIN - panel_gap * max(0, len(rows) - 1)
     weight_total = sum(row_weights) or 1.0
     row_heights = [total_height * weight / weight_total for weight in row_weights]
@@ -774,7 +780,7 @@ def reflow_page(
     planned_boxes, shared_edges = {}, []
     box_y = top_margin
     for row_number, (indices, height) in enumerate(zip(rows, row_heights), 1):
-        for key, value in _physical_boxes_for_row(indices, panels, str(language), box_y, height, template == TEMPLATE_FOUR_PANEL, gap=panel_gap).items():
+        for key, value in _physical_boxes_for_row(indices, panels, str(language), box_y, height, template == TEMPLATE_FOUR_PANEL, gap=panel_gap, side_margin=side_margin).items():
             planned_boxes[key] = {**value, "row": row_number, "panel_id": panels[key]["id"]}
         box_y += height + panel_gap
     if dynamic_mode and layout_family == 'vertical-anchor' and dominant_index is None and len(panels) in (4, 5, 6):
@@ -784,13 +790,13 @@ def reflow_page(
         anchor = planned_boxes[0]
         full_height = sum(row_heights[:2])+panel_gap
         anchor_width = .50
-        anchor.update(x=PAGE_SIDE_MARGIN if language == LANGUAGE_EN else 1-PAGE_SIDE_MARGIN-anchor_width,
+        anchor.update(x=side_margin if language == LANGUAGE_EN else 1-side_margin-anchor_width,
                       width=anchor_width, height=full_height, column=1 if language == LANGUAGE_EN else 2, row=1)
-        stack_width = 1-2*PAGE_SIDE_MARGIN-anchor_width-panel_gap
+        stack_width = 1-2*side_margin-anchor_width-panel_gap
         h = (full_height-panel_gap*(end-2))/(end-1)
         if h >= MIN_PANEL_HEIGHT_RATIO:
             for key in range(1, end):
-                planned_boxes[key].update(x=1-PAGE_SIDE_MARGIN-stack_width if language == LANGUAGE_EN else PAGE_SIDE_MARGIN,
+                planned_boxes[key].update(x=1-side_margin-stack_width if language == LANGUAGE_EN else side_margin,
                                           width=stack_width, y=top_margin+(key-1)*(h+panel_gap), height=h,
                                           column=2 if language == LANGUAGE_EN else 1, row=key+1)
             for key in range(end, len(panels)):
@@ -799,11 +805,14 @@ def reflow_page(
             # 最低寸法が満たせない場合は元の非均等段組を使う。
             planned_boxes = original_boxes
             layout_family = 'conversation-asymmetric'
-    full_bleed = bool(dynamic_mode and len(panels) == 1 and family == 'climax' and page.get('special_emphasis')
+    full_bleed = bool(dynamic_mode and not a4_mode and len(panels) == 1 and family == 'climax' and page.get('special_emphasis')
                       and panels[0].get('panel_shape') == 'large-bleed' and panels[0].get('shape_reason'))
     if full_bleed:
         planned_boxes[0].update(x=0., y=0., width=1., height=.96, full_bleed_effect=True)
     if dynamic_mode:
+        if a4_mode:
+            for box in planned_boxes.values():
+                box["page_size"] = list(A4_PAGE_SIZE)
         planned_boxes, shared_edges = apply_shared_geometry(planned_boxes, panels, layout_family, str(language), int(next_page.get('page_number', 1) or 1), panel_gap, content_driven=layout_policy == "content_driven")
     geometries: List[Dict[str, Any]] = []
     angled_used = 0
@@ -817,11 +826,13 @@ def reflow_page(
             row_height,
             template == TEMPLATE_FOUR_PANEL,
             gap=panel_gap,
+            side_margin=side_margin,
         )
         for panel_index in indices:
             box = planned_boxes[panel_index] if dynamic_mode else boxes[panel_index]
             importance = normalize_importance(panels[panel_index])
             geometry = {
+                **({"page_size": list(A4_PAGE_SIZE)} if a4_mode else {}),
                 "panel_id": str(panels[panel_index].get("id", "")),
                 **box,
                 "row": box.get("row", row_index),
@@ -968,7 +979,7 @@ def reflow_page(
             for geometry in geometries:
                 geometry["shape_reason"] = str(source_by_id[geometry["panel_id"]].get("shape_reason") or "") if geometry.get("shape") != "rectangle" else ""
         next_page['dynamic_layout'] = {'shared_gutter_version': 2, 'family': layout_family, 'shared_edges': shared_edges,
-                                     'outer_bounds': dict(left=PAGE_SIDE_MARGIN, right=1-PAGE_SIDE_MARGIN, top=top_margin, bottom=1-PAGE_BOTTOM_MARGIN)}
+                                     'outer_bounds': dict(left=side_margin, right=1-side_margin, top=top_margin, bottom=1-PAGE_BOTTOM_MARGIN)}
     signature = _page_signature(next_page, settings)
     next_page["layout_version"] = LAYOUT_VERSION
     next_page["layout_geometry"] = {
@@ -1065,11 +1076,30 @@ def ensure_storyboard_layout(
         # DB読込・migrationでは保存済みv1/v2/v3をそのまま返す。ここで再flowすると、
         # 旧形式のsignature差異だけで既存ArtworkやCompositionが消えるため。
         return [deepcopy(dict(page)) for page in storyboard if isinstance(page, Mapping)]
-    return [
+    result = [
         ensure_page_layout(page, canonical_settings, enable_composition=enable_composition)
         for page in storyboard
         if isinstance(page, Mapping)
     ]
+    # 新規の未生成ページだけで反復を比較する。固定形式・意図ある反復・旧作品は保つ。
+    saved_ids = {str(p.get("id")) for p in storyboard if isinstance(p, Mapping) and p.get("composition")}
+    previous = []
+    for index, page in enumerate(result):
+        signature = (page.get("composition") or {}).get("layout_signature")
+        if signature and page.get("page_kind") not in {"cover", "back_cover"}:
+            can_revise = (page.get("layout") not in {"four_panel", "4koma", "grid", "hero"}
+                          and not page.get("reuse_reason")
+                          and str(page.get("id")) not in saved_ids
+                          and not any(p.get("image_url") for p in page.get("panels", [])))
+            if can_revise and len(previous) >= 2 and previous[-1] == previous[-2] == signature:
+                for family in ("vertical-anchor", "diagonal-middle", "conversation-asymmetric"):
+                    candidate = reflow_page({**page, "layout_family": family}, canonical_settings, _allow_fallback=False)
+                    if candidate["composition"].get("layout_signature") != signature and not composition_quality_issues(candidate):
+                        result[index] = page = candidate
+                        signature = candidate["composition"]["layout_signature"]
+                        break
+            previous.append(signature)
+    return result
 
 
 def repair_storyboard_page(
@@ -1089,7 +1119,7 @@ def repair_storyboard_page(
         if not isinstance(page, Mapping):
             continue
         if str(page.get("id")) == str(page_id):
-            if composition_version in (SEMANTIC_COMPOSITION_VERSION, DYNAMIC_COMPOSITION_VERSION):
+            if composition_version in (SEMANTIC_COMPOSITION_VERSION, DYNAMIC_COMPOSITION_VERSION, A4_COMPOSITION_VERSION):
                 page = {**page, "composition_version": composition_version}
             repaired = reflow_page(page, canonical_settings)
             if int(repaired.get("composition_version", 0) or 0) >= SEMANTIC_COMPOSITION_VERSION and composition_quality_issues(repaired):

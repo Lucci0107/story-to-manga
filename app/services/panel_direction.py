@@ -4,7 +4,8 @@ from copy import deepcopy
 import hashlib
 import json
 
-from .composition import PAGE_SAFE_MARGIN, PAGE_SIZE
+from .composition import PAGE_SAFE_MARGIN
+from .page_contract import geometry_page_size
 from .text_composition import body_font, wrap_text
 from .visual_style import resolve_visual_style, text_direction
 from .in_world_text import resolve_in_world_text
@@ -37,6 +38,8 @@ def direction_fingerprint(panel, settings):
             values[key] = panel.get(key)
     geometry = panel.get("geometry") or {}
     values["geometry"] = {key: geometry.get(key) for key in ("x", "y", "width", "height", "shape", "polygon_points")}
+    if geometry.get("page_size"):
+        values["geometry"]["page_size"] = geometry["page_size"]
     canonical = canonicalize_stored_settings(settings)
     values["settings"] = {"visual_style": canonical.get("visual_style", "cinematic"),
                           "color_mode": canonical.get("color_mode", "bw"), "language": canonical["language"]}
@@ -47,7 +50,8 @@ def plan_panel_direction(panel, settings):
     """実測文字量から予約領域を作り、残りに人物を配置する。収まらなければ未確定。"""
     geometry = panel["geometry"]
     profile = resolve_visual_style(settings)
-    width, height = geometry["width"] * PAGE_SIZE[0], geometry["height"] * PAGE_SIZE[1]
+    page_width, page_height = geometry_page_size(geometry)
+    width, height = geometry["width"] * page_width, geometry["height"] * page_height
     language = settings.get("language", "ja")
     position = str(panel.get("character_position") or panel.get("subject_position") or "")
     character_right = "right" in position or "右" in position or not position and language == "en"

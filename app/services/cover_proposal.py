@@ -10,6 +10,7 @@ from .cover_layout import cover_artwork_panel
 from .layout import reflow_page
 from .manga_documents import content_digest, name_snapshot
 from .page_types import COVER_PAGE_KINDS, is_content_page, page_label
+from .page_contract import page_size
 from .story_analysis import analysis_content_fingerprint
 
 
@@ -54,6 +55,7 @@ def proposal_context(project: dict, page: dict, instruction: str) -> dict:
     source = str(project.get("original_text") or "")
     return {
         "title": project.get("title"), "kind": page["page_kind"], "instruction": instruction,
+        "canvas_size": list(page_size(page)),
         "analysis": {k: str((project.get("analysis") or {}).get(k) or "")[:1600] for k in ("summary", "theme")},
         "source_reference": source if len(source) <= 6000 else source[:2500] + "\n…中略…\n" + source[-2500:],
         "characters": [{k: str(c.get(k) or "")[:500 if k == "name" else 300] for k in

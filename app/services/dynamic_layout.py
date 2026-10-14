@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .page_contract import geometry_page_size
+
 import math
 from copy import deepcopy
 from typing import Any, Mapping, Sequence
@@ -73,16 +75,24 @@ def choose_family(
 ) -> str:
     if str(page.get("layout")) in {"four_panel", "4koma"}:
         return "four-panel"
+    requested = page.get("layout_family")
+    requested_family = requested in {"conversation-asymmetric", "vertical-anchor", "diagonal-middle"}
+    if int(page.get("composition_version") or 0) >= 5 and requested_family:
+        return requested
     if family == "psychological":
         return "psychological"
     if dominant is not None and dominant == count - 1:
         return "climax-bottom"
     if dominant == 0:
         return "dominant-top"
-    requested = page.get("layout_family")
-    if requested in {"conversation-asymmetric", "vertical-anchor", "diagonal-middle"}:
+    if requested_family:
         return requested
     if page.get("layout_policy") == "content_driven":
+        if int(page.get("composition_version") or 0) >= 5:
+            if any(p.get("panel_shape") == "tall" for p in page.get("panels", [])):
+                return "vertical-anchor"
+            if family == "action":
+                return "diagonal-middle"
         return "conversation-asymmetric"
     number = int(page.get("page_number", 1) or 1)
     choices = ("conversation-asymmetric", "vertical-anchor", "diagonal-middle")
@@ -179,7 +189,8 @@ def gutter_angle(edge: Mapping[str, Any]) -> float:
     axis = 0 if edge["axis"] == "vertical" else 1
     drift = line[0][axis] - line[1][axis]
     span = line[1][1 - axis] - line[0][1 - axis]
-    return math.degrees(math.atan2(drift * (3 / 4 if axis == 0 else 4 / 3), span))
+    aspect = edge.get("page_aspect_ratio", 3 / 4)
+    return math.degrees(math.atan2(drift * (aspect if axis == 0 else 1 / aspect), span))
 
 
 def materialize_gutters(
@@ -281,6 +292,11 @@ def scale_gutter_band(
 
 def apply_shared_geometry(boxes, panels, family, language, number, gap, *, content_driven=False):
     edges = detect_shared_gutters(boxes, gap)
+    page_width, page_height = geometry_page_size(next(iter(boxes.values()), {}))
+    aspect = page_width / page_height
+    for edge in edges:
+        if aspect != 3 / 4:
+            edge["page_aspect_ratio"] = aspect
     groups = {}
     source_by_id = {box["panel_id"]: panels[key] for key, box in boxes.items()}
     for edge in edges:
@@ -315,7 +331,7 @@ def apply_shared_geometry(boxes, panels, family, language, number, gap, *, conte
         angle_limit = (
             span
             * math.tan(math.radians(12))
-            / (3 / 4 if dimension == "width" else 4 / 3)
+            / (aspect if dimension == "width" else 1 / aspect)
             / 2
         )
         amount = min(
@@ -353,6 +369,11 @@ def normalize_legacy_gutters(composition: Mapping[str, Any]) -> dict:
     gaps = [float((g.get("gutter") or {}).get("width", 0.014)) for g in panels]
     gap = sorted(gaps)[len(gaps) // 2]
     edges = detect_shared_gutters(boxes, gap)
+    page_width, page_height = geometry_page_size(next(iter(boxes.values()), {}))
+    aspect = page_width / page_height
+    for edge in edges:
+        if aspect != 3 / 4:
+            edge["page_aspect_ratio"] = aspect
     groups = {}
     by_id = {g["panel_id"]: g for g in panels}
     for e in edges:
@@ -393,7 +414,7 @@ def normalize_legacy_gutters(composition: Mapping[str, Any]) -> dict:
             )
             limit = min(
                 min(box[dim] for box in boxes.values()) * 0.10,
-                span * math.tan(math.radians(12)) / (3 / 4 if axis == 0 else 4 / 3) / 2,
+                span * math.tan(math.radians(12)) / (aspect if axis == 0 else 1 / aspect) / 2,
             )
             amount = max(-limit, min(limit, amount))
             for e in group:
@@ -519,7 +540,8 @@ def geometry_metrics(composition: Mapping[str, Any]) -> dict[str, Any]:
             result["gutter_width_variance"], round(abs(distances[0] - distances[1]), 6)
         )
         span = max(line[1][1 - coordinate] - line[0][1 - coordinate], 1e-9)
-        ratio = 3 / 4 if coordinate == 0 else 4 / 3
+        aspect = edge.get("page_aspect_ratio", 3 / 4)
+        ratio = aspect if coordinate == 0 else 1 / aspect
         angles = [
             math.degrees(math.atan((v[0] - v[1]) * ratio / span)) for v in (av, bv)
         ]

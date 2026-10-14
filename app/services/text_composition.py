@@ -8,8 +8,8 @@ from typing import Any, Mapping
 
 from PIL import ImageFont
 
-PAGE_WIDTH = 900
-PAGE_HEIGHT = 1200
+from .page_contract import geometry_page_size
+
 BODY_FONT_SIZE = 17
 LINE_HEIGHT = 23
 PADDING = 10
@@ -60,8 +60,9 @@ def separate_text_from_unverified_artwork(panel: Mapping[str, Any], geometry: Ma
                 for index, text in enumerate(panel.get(key, []) or []) if str(text).strip()]
     if not elements:
         return None
-    width = max(1, float(geometry["width"]) * PAGE_WIDTH)
-    height = max(1, float(geometry["height"]) * PAGE_HEIGHT)
+    page_width, page_height = geometry_page_size(geometry)
+    width = max(1, float(geometry["width"]) * page_width)
+    height = max(1, float(geometry["height"]) * page_height)
     usable_width = width - 2 * PADDING
     items = []
     cursor = PADDING

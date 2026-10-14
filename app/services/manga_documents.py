@@ -10,7 +10,7 @@ from .. import db
 from .page_types import MAX_CONTENT_PAGES, is_content_page, page_label, requested_cover_kinds
 from .cover_text import artwork_settings
 from .architect import rendering_profile, event_issues
-from .manga_contract import contract_metadata
+from .manga_contract import contract_metadata, rendering_modifiers
 from .story_analysis import analysis_content_fingerprint, analysis_source_status
 from .character_sheet import fixed_sheet_layout, source_metadata
 
@@ -18,7 +18,7 @@ PAGE_FIELDS = (
     "id", "page_number", "page_kind", "title", "page_role", "layout", "layout_policy",
     "location_time", "panel_count_reason", "layout_reason", "start_state", "page_end_state",
     "allowed_events", "forbidden_until_later", "first_reveal", "carry_over", "architect_source",
-    "source_analysis_fingerprint",
+    "source_analysis_fingerprint", "creative_direction", "reuse_reason",
 )
 PANEL_FIELDS = (
     "id", "order", "description", "shot_type", "characters", "action", "expression", "background",
@@ -66,6 +66,10 @@ def name_snapshot(project: dict) -> dict:
     refs = {}
     for page in project.get("storyboard") or []:
         entry = _select(page, PAGE_FIELDS)
+        composition = page.get("composition") or {}
+        for key in ("canvas_contract", "page_number_design", "panel_layout_reference", "layout_signature", "rendering_modifiers"):
+            if key in composition:
+                entry[key] = composition[key]
         geometries = {g.get("panel_id"): g for g in (page.get("composition") or {}).get("panels", [])}
         panels = []
         for panel in page.get("panels") or []:
@@ -151,6 +155,22 @@ def name_validation(project: dict, snapshot: dict) -> dict:
                     warnings.append(label + "の話者が未設定です。")
                 if detail.get("source") == "source_quote" and text not in project.get("original_text", ""):
                     errors.append(label + "の「原作の発言」が原文と一致しません。出所または文字列を修正してください。")
+                excerpt = detail.get("source_excerpt")
+                if excerpt and excerpt not in project.get("original_text", ""):
+                    errors.append(label + "の再構成の元説明が原文と一致しません。")
+                if (snapshot["settings"].get("source_kind") == "documentary"
+                        and snapshot["settings"].get("reconstruction_policy") == "review_proposals"
+                        and detail.get("source") == "adaptation" and not excerpt):
+                    errors.append(label + "の再構成案に原文の元説明を付けてください。")
+        if (page.get("creative_direction", {}).get("dialogue_mode") == "conversation_led"
+                and sum(bool(p.get("narration")) for p in page["panels"]) >= 2
+                and not any(p.get("dialogue") for p in page["panels"])
+                and len({name for p in page["panels"] for name in p.get("characters", [])}) >= 2):
+            warnings.append(page_label(page) + "は会話中心の方針に対してナレーションだけです。原作の制約・沈黙の意図、受け答えにできる場面を確認してください。")
+    for first, second, third in zip(pages, pages[1:], pages[2:]):
+        signature = third.get("layout_signature")
+        if signature and first.get("layout_signature") == second.get("layout_signature") == signature and not third.get("reuse_reason"):
+            warnings.append(page_label(third) + "まで同じコマ配置が3ページ続きます。反復の理由や別の面積配分を確認してください。")
     if len(ids) != len(set(ids)):
         errors.append("ページ・コマのIDが重複しています。")
     return {"errors": list(dict.fromkeys(errors)), "warnings": list(dict.fromkeys(warnings)), "page_counts": counts}
@@ -187,12 +207,29 @@ def render_name_markdown(snapshot: dict, number: int) -> str:
             lines += [f"- 選択したKnowledge：{_display(ref.get('title'))} / 版 {_display(ref.get('version_number'))} / 版ID {_display(ref.get('version_id'))}"]
     for page in snapshot["pages"]:
         label = page_label(page)
-        lines += ["", f"## {label}", "", f"目的：{_display(page.get('page_role') or page.get('title'))}",
+        lines += ["", f"## {label}", ""]
+        if page.get("canvas_contract"):
+            lines += ["", "版面：A4縦（210×297mm）。書き出し2480×3508pxは組版寸法で、原画の解像度とは別です。",
+                      "外周：本文3%、表裏表紙は白帯なし・重要要素5%内側。コマ枠は細い単線。"]
+        if page.get("creative_direction"):
+            direction = page["creative_direction"]
+            labels = {"conversation_led": "会話中心", "narration_led": "ナレーション中心", "silent": "サイレント",
+                      "dynamic": "コマ演出強め", "restrained": "落ち着いた演出", "source_only": "原文を保持", "review_proposals": "再構成案を確認"}
+            lines += ["演出方針：" + " / ".join(labels.get(direction.get(k), "未設定") for k in ("dialogue_mode", "panel_direction", "reconstruction_policy"))]
+        if page.get("rendering_modifiers"):
+            lines += ["線・形・陰影の基本条件：" + " / ".join(page["rendering_modifiers"]["terms"])]
+        if page.get("reuse_reason"):
+            lines += ["同じ配置を使う理由：" + page["reuse_reason"]]
+        lines += ["", f"目的：{_display(page.get('page_role') or page.get('title'))}",
                   f"場所・時間：{_display(page.get('location_time'))}", f"コマ数：{len(page['panels'])} / 選定理由：{_display(page.get('panel_count_reason'), '要確認')}",
                   f"配置・テンポ：{_label(page.get('layout'))} / {_display(page.get('layout_reason'), '内容と読順を確認')}",
                   f"開始状態：{_display(page.get('start_state'))}", f"今回の出来事：{_display(page.get('allowed_events'), 'なし')}",
                   f"後まで描かない出来事：{_display(page.get('forbidden_until_later'), 'なし')}",
                   f"ページ末・次への接続：{_display(page.get('page_end_state'))} / {_display(page.get('carry_over'), 'なし')}"]
+        if page.get("page_number_design", {}).get("required"):
+            lines += [f"ページ番号：『{page['page_number_design']['text']}』を下中央（x=50%、y=95.5%）、コマ外の白地へ1か所表示。アプリで合成。"]
+        if page.get("panel_layout_reference"):
+            lines += ["コマ割り参照：漫画コマ割りスタイルシート v1.0.0。段・列のまとまりと全コマの読順を照合。"]
         for panel in page["panels"]:
             g = panel["geometry"]
             lines += ["", f"### {panel.get('order')}コマ目", "", f"内容：{_display(panel.get('description'))}",
@@ -210,6 +247,8 @@ def render_name_markdown(snapshot: dict, number: int) -> str:
                 source = {"source_quote": "原作の発言", "adaptation": "脚色案（本版の確認対象）"}.get(detail.get("source"), "出所未設定（要確認）")
                 lines += [f"- {index + 1}. {_display(detail.get('speaker'))} → {_display(detail.get('addressee'))}：{text}",
                           f"  出所：{source} / 反応：{_display(detail.get('reaction'))}"]
+                if detail.get("source_excerpt"):
+                    lines += [f"  元説明：{detail['source_excerpt']}"]
             lines += [f"ナレーション：{_display(panel.get('narration'), 'なし')}", f"相手の反応・沈黙：{_display(panel.get('reaction') or panel.get('expression'))}",
                       f"擬音・効果：{_display(panel.get('sfx'), 'なし')}", f"場面内の正確な文字：{_display(panel.get('in_world_exact_text'), 'なし')}"]
     lines += ["", "## 修正・版履歴・事前確認", "", "アプリのネーム画面でページ・コマを編集して保存し、全編を再出力してください。旧版は版履歴に保持します。",
@@ -250,11 +289,12 @@ def character_sheet_design(project: dict, character: dict) -> dict:
         ("体格・頭身", "body_type"), ("性格", "personality"), ("識別特徴", "distinguishing_features"), ("基調色", "palette_notes"),
     ]
     ids = [c["id"] for c in project.get("characters") or []]
-    layout = fixed_sheet_layout(character.get("sheet_ratio") or "3:4")
+    layout = fixed_sheet_layout(character.get("sheet_ratio") or "70:99")
     return {
         "character_id": character["id"], "character_name": character["name"],
         "sequence_index": ids.index(character["id"]) + 1, "total_characters": len(ids),
-        "ratio": character.get("sheet_ratio") or "3:4", "detail_level": "detailed",
+        "ratio": character.get("sheet_ratio") or "70:99", "detail_level": "detailed",
+        "rendering_modifiers": rendering_modifiers(project.get("settings") or {}),
         "state": "design_document", "architect_source": contract_metadata(),
         "rendering_style": rendering_profile(project.get("settings") or {}), "color_mode": (project.get("settings") or {}).get("color_mode", "bw"),
         "profile_fields": [{"label": label, "value": _display(character.get(key)), "source": "current_character_setting" if character.get(key) else "unknown"} for label, key in fields],

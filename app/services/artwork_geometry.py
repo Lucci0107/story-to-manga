@@ -6,7 +6,7 @@ import math
 from typing import Any, Mapping
 
 from ..config import DEFAULT_IMAGE_MODEL
-from .composition import PAGE_SIZE
+from .page_contract import geometry_page_size
 from .model_registry import capability
 
 
@@ -23,8 +23,9 @@ def artwork_aspect_ratio(panel: Mapping[str, Any]) -> float:
     viewport = geometry.get("artwork_viewport")
     viewport = viewport if isinstance(viewport, dict) else {}
     try:
-        width = float(geometry.get("width", 0)) * PAGE_SIZE[0] * float(viewport.get("width", 1))
-        height = float(geometry.get("height", 0)) * PAGE_SIZE[1] * float(viewport.get("height", 1))
+        page_width, page_height = geometry_page_size(geometry)
+        width = float(geometry.get("width", 0)) * page_width * float(viewport.get("width", 1))
+        height = float(geometry.get("height", 0)) * page_height * float(viewport.get("height", 1))
         if not all(math.isfinite(value) and value > 0 for value in (width, height)):
             return 1.0
         return width / height

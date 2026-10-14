@@ -64,7 +64,7 @@ def test_whole_name_download_confirmation_and_dedup(workspace):
     assert "非公開の生成指示" not in markdown
     assert "言語・読順：日本語 / 右 → 左" in markdown
     assert "枠：長方形" in markdown
-    assert "指示 6.33.0 / 設計資料 2.16.0" in markdown
+    assert "指示 6.45.0 / 設計資料 2.28.0" in markdown
     status = client.get(base + "/name-script").json()["name_script"]
     assert status["state"] == "confirmed" and status["version_number"] == 1
     assert "markdown" not in status["versions"][0] and "snapshot" not in status["versions"][0]
@@ -304,7 +304,7 @@ def test_sheet_all_characters_unknown_fields_ratios_and_history(workspace):
     assert next(f for f in sheet["profile_fields"] if f["label"] == "身長・サイズ") == {"label": "身長・サイズ", "value": "未設定", "source": "unknown"}
     first = client.get(base + "/characters/灯/style-sheet.md")
     assert first.status_code == 200 and "人物画像の生成・実画像監査は未実施" in first.text
-    assert "正面 / 斜め45度 / 側面90度 / 背面180度" in first.text and "3:4" in first.text
+    assert "正面 / 斜め45度 / 側面90度 / 背面180度" in first.text and "70:99" in first.text
     client.get(base + "/characters/灯/style-sheet.md")
     assert len(client.get(base + "/characters/灯/style-sheet").json()["versions"]) == 1
     characters = deepcopy(project["characters"])
@@ -375,7 +375,7 @@ def test_contract_reaches_image_and_storyboard_prompts(workspace):
     assert "source_quote" in storyboard_contract_prompt()
     assert "位置だけで自動変形しない" in storyboard_contract_prompt()
     sheet = character_sheet_design(project, project["characters"][0])
-    assert sheet["architect_source"]["knowledge_version"] == "2.16.0"
+    assert sheet["architect_source"]["knowledge_version"] == "2.28.0"
 
 
 def test_sheet_ratio_roundtrip_svg_and_reject_unknown_ratio(workspace):

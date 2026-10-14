@@ -7,13 +7,15 @@ from .dynamic_layout import DYNAMIC_COMPOSITION_VERSION, geometry_metrics, polyg
 import re
 from copy import deepcopy
 from typing import Any, Dict, List, Mapping, Sequence
+from .page_contract import A4_COMPOSITION_VERSION, A4_PAGE_SIZE, canvas_contract, page_number_design
+from .manga_contract import PANEL_LAYOUT_REFERENCE, rendering_modifiers
 
 
 # v2は既存Projectの保存形式として維持する。v3は新規Projectで使う意味的な
 # ポリシー付きCompositionで、既存v2を暗黙に書き換えない。
 COMPOSITION_VERSION = 2
 SEMANTIC_COMPOSITION_VERSION = 3
-CURRENT_COMPOSITION_VERSION = DYNAMIC_COMPOSITION_VERSION
+CURRENT_COMPOSITION_VERSION = A4_COMPOSITION_VERSION
 LEGACY_COMPOSITION_VERSION = 1
 PAGE_SIZE = (900, 1200)
 PAGE_SAFE_MARGIN = 0.04
@@ -937,10 +939,25 @@ def build_page_composition(
 
         composition = _build_v3_page_composition(page, geometries, settings)
         if composition_version >= DYNAMIC_COMPOSITION_VERSION:
-            composition['composition_version'] = DYNAMIC_COMPOSITION_VERSION
+            composition['composition_version'] = composition_version
             composition.update(deepcopy(page.get('dynamic_layout') or {}))
             composition['effect_budget']['angled_panels'] = sum(p.get('shape') == 'trapezoid' for p in composition['panels'])
         composition["style_profile"] = resolve_visual_style(settings or {})
+        if composition_version >= A4_COMPOSITION_VERSION:
+            composition.update(size=list(A4_PAGE_SIZE), safe_margin=.03,
+                               background={"color": "#ffffff"},
+                               canvas_contract=canvas_contract(page),
+                               page_number_design=page_number_design(page),
+                               panel_layout_reference=dict(PANEL_LAYOUT_REFERENCE))
+            composition["rendering_modifiers"] = rendering_modifiers(settings or {})
+            composition["layout_signature"] = [
+                [round(float(p[key]), 2) for key in ("x", "y", "width", "height")] + [p["shape"]]
+                for p in composition["panels"]
+            ]
+            composition["style_profile"]["panel_border"] = A4_PAGE_SIZE[0] * .00125
+            for overlay in composition["overlays"]:
+                if overlay.get("type") == "title":
+                    overlay.update(x=.03, y=.031, width=.94, height=.04)
         composition["page_direction"] = {
             "page_role": str(page.get("page_role") or composition["semantic_family"]),
             "dominant_panel": composition["dominant_panel_id"],

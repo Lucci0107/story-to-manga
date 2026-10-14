@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from html import escape
 from pathlib import Path
+from .page_contract import A4_EXPORT_SIZE
 
 LAYOUT_VERSION = "1.0.0"
-RATIOS = ("3:4", "4:3", "3:2")
-CANVASES = {"3:4": (1200, 1600), "4:3": (1600, 1200), "3:2": (1800, 1200)}
+RATIOS = ("70:99", "3:4", "4:3", "3:2")
+CANVASES = {"70:99": A4_EXPORT_SIZE, "3:4": (1200, 1600), "4:3": (1600, 1200), "3:2": (1800, 1200)}
 # x, y, 幅, 高さ。本体グリッド内の百分率であり、キャンバス全体ではない。
 RECTANGLES = {
     "3:4": ((0, 0, 32, 27), (32, 0, 68, 27), (0, 27, 36, 16), (36, 27, 64, 16), (0, 43, 62, 18), (0, 61, 62, 26), (62, 61, 38, 26), (62, 43, 38, 18), (0, 87, 100, 13)),
@@ -49,11 +50,11 @@ def _cells(rect: dict, columns: int, rows: int, labels: tuple, prefix: str) -> l
 
 def fixed_sheet_layout(ratio: str) -> dict:
     if ratio not in RATIOS:
-        raise ValueError("人物シートの比率は3:4・4:3・3:2から選んでください。")
+        raise ValueError("人物シートの比率はA4縦・3:4・4:3・3:2から選んでください。")
     width, height = CANVASES[ratio]
     padding, title_height = .005 * min(width, height), .018 * height
     sections = []
-    for (key, name, labels, note), (x, y, w, h) in zip(SECTIONS, RECTANGLES[ratio]):
+    for (key, name, labels, note), (x, y, w, h) in zip(SECTIONS, RECTANGLES["3:4" if ratio == "70:99" else ratio]):
         rect = _rect(.02 * width + .96 * width * x / 100 + .003 * width,
                      .07 * height + .91 * height * y / 100 + .003 * height,
                      .96 * width * w / 100 - .006 * width, .91 * height * h / 100 - .006 * height)
@@ -73,7 +74,7 @@ def fixed_sheet_layout(ratio: str) -> dict:
             groups = [{"id": key, "columns": columns, "rows": rows, "slots": _cells(inner, columns, rows, labels, key)}]
         sections.append({"id": key, "number": len(sections) + 1, "name": name, "count": len(labels),
                          "items": list(labels), "note": note, "nominal_rect": _rect(x, y, w, h), "rect": rect, "groups": groups})
-    return {"id": "LAYOUT_" + ratio.replace(":", "_"), "version": LAYOUT_VERSION, "ratio": ratio,
+    return {"id": "LAYOUT_A4_PORTRAIT" if ratio == "70:99" else "LAYOUT_" + ratio.replace(":", "_"), "version": LAYOUT_VERSION, "ratio": ratio,
             "canvas": {"width": width, "height": height}, "coordinate_basis": "canvas_pixels",
             "nominal_coordinate_basis": "body_grid_percent", "header": _rect(.02 * width, .02 * height, .96 * width, .04 * height),
             "body": _rect(.02 * width, .07 * height, .96 * width, .91 * height),

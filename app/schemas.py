@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .services.composition import COMPOSITION_VERSION, SEMANTIC_COMPOSITION_VERSION, CURRENT_COMPOSITION_VERSION
 from .services.layout import ensure_storyboard_layout, normalize_importance
 from .services.page_types import MAX_CONTENT_PAGES, COVER_PAGE_KINDS
+from .services.page_contract import A4_COMPOSITION_VERSION, A4_PAGE_SIZE, LEGACY_PAGE_SIZE
 from .services.character_sheet import RATIOS as CHARACTER_SHEET_RATIOS
 from .services.reading_order import (
     ALLOWED_LANGUAGES,
@@ -107,6 +108,9 @@ class SettingsPayload(BaseModel):
     layout_policy: Optional[Literal["content_driven", "expressive"]] = None
     source_kind: Literal["unspecified", "fiction", "documentary"] = "unspecified"
     style_adjustments: str = Field(default="", max_length=1000)
+    dialogue_mode: Optional[Literal["conversation_led", "narration_led", "silent"]] = None
+    panel_direction: Optional[Literal["dynamic", "restrained"]] = None
+    reconstruction_policy: Optional[Literal["review_proposals", "source_only"]] = None
 
     @model_validator(mode="after")
     def validate_architect(self) -> "SettingsPayload":
@@ -229,7 +233,7 @@ class ProjectPatch(BaseModel):
     @classmethod
     def valid_sheet_ratios(cls, value: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
         if value is not None and any(item.get("sheet_ratio") not in (None, "", *CHARACTER_SHEET_RATIOS) for item in value):
-            raise ValueError("人物シートの比率は3:4・4:3・3:2から選んでください。")
+            raise ValueError("人物シートの比率はA4縦・3:4・4:3・3:2から選んでください。")
         return value
 
     @field_validator("current_step")
@@ -579,7 +583,7 @@ def normalize_characters(value: Any, *, limit: int = MAX_CHARACTERS) -> List[Dic
         for key, length in (("aliases", CHARACTER_NAME_MAX_LENGTH), ("source_quotes", CHARACTER_TEXT_MAX_LENGTH)):
             entries = item.get(key, [])
             character[key] = [entry[:length] for entry in entries[:16] if isinstance(entry, str)] if isinstance(entries, list) else []
-        character["sheet_ratio"] = item.get("sheet_ratio") if item.get("sheet_ratio") in CHARACTER_SHEET_RATIOS else "3:4"
+        character["sheet_ratio"] = item.get("sheet_ratio") if item.get("sheet_ratio") in CHARACTER_SHEET_RATIOS else "70:99"
         normalized.append(character)
     return normalized
 
@@ -594,6 +598,7 @@ def normalize_dialogue_details(value: Any, count: int) -> List[Dict[str, Any]]:
             "addressee": str(item.get("addressee") or "")[:80],
             "source": item.get("source") if item.get("source") in {"source_quote", "adaptation", "unspecified"} else "unspecified",
             "reaction": str(item.get("reaction") or "")[:240],
+            **({"source_excerpt": str(item["source_excerpt"])[:1000]} if item.get("source_excerpt") else {}),
         })
     return result
 
@@ -779,7 +784,7 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
             if isinstance(key, str) and str(item).lstrip("-").isdigit()
         } if isinstance(value.get("effect_budget"), dict) else {},
         "dominant_panel_id": str(value.get("dominant_panel_id", ""))[:120] if value.get("dominant_panel_id") else None,
-        "size": [900, 1200],
+        "size": list(A4_PAGE_SIZE if version >= A4_COMPOSITION_VERSION else LEGACY_PAGE_SIZE),
         "safe_margin": _normalized_ratio(value.get("safe_margin"), 0.04),
         "background": {"color": str(raw_background.get("color", "#f5f3eb"))[:20]},
         "panels": [],
@@ -805,6 +810,8 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
                                                angle=_bounded_float(edge.get('angle'), 0, -90, 90), angle_family=str(edge.get('angle_family', 'vertical'))[:30],
                                                center_line=[[_normalized_ratio(v) for v in p] for p in line],
                                                panel_ids=[str(v)[:120] for v in ids], width=_normalized_ratio(edge.get('width'), .014)))
+            if version >= A4_COMPOSITION_VERSION:
+                result['shared_edges'][-1]['page_aspect_ratio'] = A4_PAGE_SIZE[0] / A4_PAGE_SIZE[1]
     raw_panels = value.get("panels", [])
     if isinstance(raw_panels, list):
         for raw in raw_panels[:24]:
@@ -849,6 +856,8 @@ def normalize_composition(value: Any) -> Optional[Dict[str, Any]]:
                 "artwork_coverage_target": _normalized_ratio(raw.get("artwork_coverage_target"), 0.95),
             }
             panel["bounding_box"] = {key: panel[key] for key in ("x", "y", "width", "height")}
+            if version >= A4_COMPOSITION_VERSION:
+                panel["page_size"] = list(A4_PAGE_SIZE)
             result["panels"].append(panel)
     for key, limit in (("breakouts", 4), ("overlays", 32)):
         source = value.get(key, [])
@@ -1014,6 +1023,7 @@ def normalize_storyboard(
                 "comedy": bool(item.get("comedy", False)),
                 "climax": bool(item.get("climax", False)),
                 "layout_family": str(item.get("layout_family") or "")[:40],
+                "reuse_reason": str(item.get("reuse_reason") or "")[:240],
                 "dominant_panel_id": str(item.get("dominant_panel_id") or "")[:120],
                 "composition_budget": item.get("composition_budget") if isinstance(item.get("composition_budget"), dict) else {},
                 "special_emphasis": bool(item.get("special_emphasis", False)),
@@ -1036,6 +1046,19 @@ def normalize_storyboard(
             normalized_page["layout_policy"] = item["layout_policy"]
         if item.get("name_review_required") is True:
             normalized_page["name_review_required"] = True
+        direction = item.get("creative_direction")
+        if isinstance(direction, dict):
+            choices = {
+                "dialogue_mode": ("conversation_led", "narration_led", "silent"),
+                "panel_direction": ("dynamic", "restrained"),
+                "reconstruction_policy": ("source_only", "review_proposals"),
+            }
+            sources = direction.get("sources") if isinstance(direction.get("sources"), dict) else {}
+            normalized_page["creative_direction"] = {
+                "revision": str(direction.get("revision") or "1.0.0")[:20], "scope": "storyboard",
+                **{key: direction[key] if direction.get(key) in values else values[0] for key, values in choices.items()},
+                "sources": {key: "user" if sources.get(key) == "user" else "default" for key in choices},
+            }
         if item.get("source_analysis_fingerprint"):
             normalized_page["source_analysis_fingerprint"] = str(item["source_analysis_fingerprint"])[:24]
         source = item.get("architect_source")

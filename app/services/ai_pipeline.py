@@ -65,7 +65,8 @@ from .settings_recommendation import (
     fallback_recommendation,
     normalize_settings_recommendation,
 )
-from .manga_contract import storyboard_contract_prompt, contract_metadata
+from .manga_contract import storyboard_contract_prompt, contract_metadata, creative_direction, rendering_modifiers
+from .page_contract import A4_PAGE_SIZE
 
 
 logger = logging.getLogger("story_to_manga.ai")
@@ -196,7 +197,8 @@ PANEL_SCHEMA: Dict[str, Any] = {
                     "speaker": {"type": "string"}, "addressee": {"type": "string"},
                     "source": {"type": "string", "enum": ["source_quote", "adaptation", "unspecified"]},
                     "reaction": {"type": "string"},
-                }, "required": ["speaker", "addressee", "source", "reaction"], "additionalProperties": False,
+                    "source_excerpt": {"type": "string"},
+                }, "required": ["speaker", "addressee", "source", "reaction", "source_excerpt"], "additionalProperties": False,
             },
         },
         "narration": {"type": "array", "items": {"type": "string"}},
@@ -261,6 +263,8 @@ STORYBOARD_SCHEMA: Dict[str, Any] = {
                     "page_role": {"type": "string"},
                     "panel_count_reason": {"type": "string"},
                     "layout_reason": {"type": "string"},
+                    "layout_family": {"type": "string", "enum": ["auto", "conversation-asymmetric", "vertical-anchor", "diagonal-middle"]},
+                    "reuse_reason": {"type": "string"},
                     "location_time": {"type": "string"},
                     "layout": {
                         "type": "string",
@@ -268,7 +272,7 @@ STORYBOARD_SCHEMA: Dict[str, Any] = {
                     },
                     "panels": {"type": "array", "items": PANEL_SCHEMA},
                 },
-                "required": ["page_number", "title", "page_role", "layout", "panels", "panel_count_reason", "layout_reason", "location_time"],
+                "required": ["page_number", "title", "page_role", "layout", "panels", "panel_count_reason", "layout_reason", "location_time", "layout_family", "reuse_reason"],
                 "additionalProperties": False,
             },
         }
@@ -641,8 +645,10 @@ def compose_panel_prompt(
     from .cover_layout import COVER_SCENE_TYPES
     if panel.get("scene_type") in COVER_SCENE_TYPES:
         back = panel["scene_type"] == "back_cover_illustration"
+        ratio_label = "A4縦（70:99）" if (panel.get("geometry") or {}).get("page_size") == list(A4_PAGE_SIZE) else "縦長3:4"
         return (
-            f"{'裏表紙' if back else '表紙'}専用の縦長3:4の一枚絵。Full-page, full-bleed book cover illustration. "
+            f"{'裏表紙' if back else '表紙'}専用の{ratio_label}の一枚絵。Full-page, full-bleed book cover illustration. "
+            "顔・文字を重ねる場所・重要な小物は各辺5%内側へ配置する。安全領域を白い外周帯にしない。"
             "背景と絵をページの四辺まで連続させる。コマ枠、外枠、額縁、余白の帯、複数コマやコラージュは描かない。"
             f"{mode}。描画方式: {rendering.get('name') or style_profile['artwork_tone']}。"
             + compile_architect(settings, panel)
@@ -827,6 +833,8 @@ def _storyboard_context(
     return {
         "analysis": {key: value for key, value in analysis.items() if key not in {"source_sections", "source_coverage", "major_events", "story_beats"}},
         "architect_source": contract_metadata(),
+        "creative_direction": creative_direction(settings),
+        "rendering_modifiers": rendering_modifiers(settings),
         "script_tone_parameters": tone_parameters(settings),
         "rendering_conditions": rendering_profile(settings),
         "event_plan": plan_event_boundaries([{} for _ in range(int(settings.get("target_page_count",8)))], analysis),
@@ -985,7 +993,7 @@ class OpenAIProvider(DemoAIProvider):
             "表紙または裏表紙の変更案を日本語で1案だけ作ってください。本文の冒頭をそのまま拡大せず、"
             "表紙には主要人物と作品の風景を使い、裏表紙には余韻のある風景や既存のモチーフを使います。"
             "登録人物の外見・服装を保持し、未確認の経歴や場所、登場人物、出来事を創作しません。"
-            "縦長3:4の全面の一枚絵で、コマ枠・コラージュ・ページ番号・吹き出しはありません。"
+            "入力の版面比率を保持した全面の一枚絵で、コマ枠・コラージュ・ページ番号・吹き出しはありません。"
             "タイトル用に上部30%、作者用に下部10%の余白を確保し、裏表紙は下部の紹介文にも"
             "余白を確保します。画像内に文字を描く指示は含めません。新しい人物設定や本文は作りません。",
             json.dumps(context, ensure_ascii=False) + _knowledge_reference(knowledge_context),
@@ -1726,8 +1734,12 @@ class OpenAIProvider(DemoAIProvider):
                     "page_number": page.get("page_number"),
                     "title": page.get("title"),
                     "ending": (page.get("panels") or [{}])[-1].get("description", ""),
+                    "layout_family": page.get("layout_family"),
+                    "layout_reason": page.get("layout_reason"),
+                    "reuse_reason": page.get("reuse_reason"),
+                    "layout_signature": (page.get("composition") or {}).get("layout_signature"),
                 }
-                for page in generated_pages[-2:]
+                for page in generated_pages[-3:]
             ]
             batch_context = {
                 **base_context,

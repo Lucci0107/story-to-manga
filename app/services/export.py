@@ -19,6 +19,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+from .page_contract import uses_a4, A4_EXPORT_SIZE, page_size, page_number_design
 from reportlab.lib.utils import ImageReader
 
 from .artwork import render_panel_image
@@ -412,9 +413,9 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
         composition = composition_for_page(page)
         c.setPageSize(A4)
         if not is_content_page(page) or int(composition.get("composition_version", 1) or 1) >= 2:
-            # Compositionは常に同じ3:4ラスターを使い、A4への再cropや縦横伸縮を避ける。
+            # プレビューと同じラスターを使い、保存版に応じて旧3:4またはA4の紙面へ配置する。
             rendered = render_page_png(project, page, storage)
-            output_height = width * PAGE_SIZE[1] / PAGE_SIZE[0]
+            output_height = height if uses_a4(page) else width * PAGE_SIZE[1] / PAGE_SIZE[0]
             c.setPageSize((width, output_height))
             c.drawImage(ImageReader(BytesIO(rendered)), 0, 0, width, output_height, preserveAspectRatio=False, mask="auto")
             _draw_pdf_accessible_text(c, project, page)
@@ -701,7 +702,7 @@ def _render_composition_png(
 ) -> bytes:
     """Composition v2の全レイヤーを一つのページ画像へ合成する。"""
 
-    image = Image.new("RGBA", (width, height), (245, 243, 235, 255))
+    image = Image.new("RGBA", (width, height), "white" if uses_a4(page) else (245, 243, 235, 255))
     panel_lookup = {str(panel.get("id")): panel for panel in page.get("panels", []) if isinstance(panel, Mapping)}
     geometry_lookup = {str(item.get("panel_id")): item for item in composition.get("panels", []) if isinstance(item, Mapping)}
     for geometry in sorted(geometry_lookup.values(), key=lambda item: (int(item.get("z_index", 1)), int(item.get("reading_order", 1)))):
@@ -792,7 +793,10 @@ def _render_composition_png(
     for overlay in composition.get("overlays", []):
         if isinstance(overlay, Mapping):
             _draw_rotated_overlay(image, overlay, width, height)
-    ImageDraw.Draw(image).text((width // 2, height - round(height * 0.025)), (str(page.get("page_number", "")) if is_content_page(page) else ""), fill=(45, 47, 44, 255), font=_load_page_font(max(12, round(width * 0.016))), anchor="mm")
+    number = page_number_design(page)
+    number_y = round(height * number["center"][1]) if uses_a4(page) else height - round(height * .025)
+    number_size = round(height * .01) if uses_a4(page) else round(width * .016)
+    ImageDraw.Draw(image).text((width // 2, number_y), number["text"], fill=(45, 47, 44, 255), font=_load_page_font(max(10, number_size)), anchor="mm")
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG", optimize=True)
     return output.getvalue()
@@ -922,7 +926,7 @@ def _render_cover_png(project: Dict[str, Any], page: Dict[str, Any], storage: St
         image = Image.open(BytesIO(_render_composition_png(project, prepared, storage, composition, width, height))).convert("RGB")
     image = _soften_cover_text_background(image, text, back)
     draw = ImageDraw.Draw(image)
-    regions = cover_text_regions(str(page.get("page_kind")))
+    regions = cover_text_regions(str(page.get("page_kind")), a4=uses_a4(page))
     _draw_cover_block(draw, text["title"], box(*regions["title"]), round(width * (.063 if back else .11)), centered=True, bold=True)
     _draw_cover_block(draw, text["subtitle"], box(*regions["subtitle"]), round(width * .030), centered=True)
     if back:
@@ -940,14 +944,16 @@ def render_page_png(
     page: Dict[str, Any],
     storage: StorageService,
     *,
-    width: int = 900,
-    height: int = 1200,
+    width: int | None = None,
+    height: int | None = None,
 ) -> bytes:
     """Preview/PDFと同じ保存済みgeometryからページ画像を生成する。"""
 
+    prepared = prepare_page_for_render(page, project.get("settings") or {}) if is_content_page(page) else page
+    default_width, default_height = A4_EXPORT_SIZE if uses_a4(prepared) else page_size(prepared)
+    width, height = width or default_width, height or default_height
     if not is_content_page(page):
         return _render_cover_png(project, page, storage, width, height)
-    prepared = prepare_page_for_render(page, project.get("settings") or {})
     composition = composition_for_page(prepared)
     if int(composition.get("composition_version", 1) or 1) >= 2:
         return _render_composition_png(project, prepared, storage, composition, width, height)

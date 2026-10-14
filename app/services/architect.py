@@ -8,7 +8,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
-from .manga_contract import contract_metadata, image_contract_prompt
+from .manga_contract import contract_metadata, image_contract_prompt, rendering_modifiers, creative_direction
 from .page_types import is_content_page, requested_cover_kinds
 
 STYLE_PROFILES = json.loads(
@@ -244,8 +244,6 @@ def rendering_profile(settings: dict) -> dict:
 
 def compile_architect(settings: dict, panel: dict | None = None) -> str:
     profile = rendering_profile(settings)
-    if not profile and not settings.get("script_tone_primary"):
-        return ""
     raw_boundary = (panel or {}).get("event_boundary")
     boundary = raw_boundary if isinstance(raw_boundary, dict) else {}
     # 全編の順序はネームに保持し、画像には今回許可された範囲だけを渡す。
@@ -259,6 +257,7 @@ def compile_architect(settings: dict, panel: dict | None = None) -> str:
         image_boundary["scope_rule"] = "このコマと許可された出来事だけを描く。後の出来事・次ページへの持ち越しは描かない。"
     data: dict[str, Any] = {
         "rendering_style": profile,
+        "rendering_modifiers": rendering_modifiers(settings),
         "script_tone": tone_parameters(settings),
         "visual_genre": settings.get("visual_genre"),
         "body_ratio": profile.get("body_ratio") or settings.get("character_proportion"),
@@ -404,6 +403,7 @@ def finalize_storyboard(pages: list, analysis: dict, settings: dict) -> list:
     for page in pages:
         page["page_kind"] = "content"
         page["architect_source"] = contract_metadata()
+        page["creative_direction"] = creative_direction(settings)
         page["name_review_required"] = True
         page["layout_policy"] = settings.get("layout_policy") or "content_driven"
         page["show_title"] = settings.get("title_mode", "first_page") == "first_page"

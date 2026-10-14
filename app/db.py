@@ -40,8 +40,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "target_audience": "一般読者",
     "pacing": "balanced",
     "dialogue_density": "medium",
-    # 新規Projectだけv3を既定にする。既存設定にない場合はv2を維持する。
-    "composition_version": 4,
+    # 新規ProjectだけA4版面を既定にする。既存作品の保存版は維持する。
+    "composition_version": 5,
     "layout_policy": "content_driven",
 }
 

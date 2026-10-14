@@ -11,6 +11,8 @@ from .reading_order import canonicalize_stored_settings
 from .page_types import is_content_page
 from .character_references import anonymous_characters, unresolved_characters, character_reference
 from .character_proposal import source_cast
+from .page_contract import page_size, uses_a4, canvas_contract, page_number_design
+from .manga_contract import rendering_modifiers
 
 VOLATILE = {
     "generation_status",
@@ -43,6 +45,8 @@ def design_data(
 
     return {
         "version": 1,
+        "rendering_modifiers": rendering_modifiers(project.get("settings") or {}),
+        **({"canvas_contract": canvas_contract(page), "page_number_design": page_number_design(page)} if uses_a4(page) else {}),
         "character_reference_policy": "registered_life_stages_and_supporting_cast_v2",
         "project_id": project["id"],
         "page": stable(page),
@@ -177,10 +181,11 @@ def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
                 errors.append("本文は1から順番に番号を付けてください。")
             break
     size = (page.get("composition") or {}).get("size")
+    expected_size = page_size(page)
     if size and (
-        len(size) != 2 or size[1] <= 0 or abs(size[0] / size[1] - 0.75) > 0.001
+        len(size) != 2 or size[1] <= 0 or abs(size[0] / size[1] - expected_size[0] / expected_size[1]) > 0.001
     ):
-        errors.append("ページ設計を3:4の縦長にしてください。")
+        errors.append("ページ設計を保存済みの版面比率に合わせてください。")
     return list(dict.fromkeys(errors))
 
 
@@ -197,11 +202,11 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
         prepared.pop("generation_prompt", None)
         prepared.pop("image_url", None)
         page_design["panels"] = [prepared]
-        page_design["composition"] = {"size": [900, 1200], "policy": COVER_ARTWORK_POLICY}
+        page_design["composition"] = {"size": list(page_size(page)), "policy": COVER_ARTWORK_POLICY}
         cover_plan = {
             "policy": COVER_ARTWORK_POLICY,
             "text": cover_text(project),
-            "text_regions": cover_text_regions(str(page.get("page_kind"))),
+            "text_regions": cover_text_regions(str(page.get("page_kind")), a4=uses_a4(page)),
             "geometry": prepared["geometry"],
             "shot_type": prepared.get("shot_type", ""),
             "background": prepared.get("background", ""),
@@ -213,6 +218,8 @@ def public_design(project: dict, page: dict, panel: dict, digest: str) -> dict:
                   for name in panel.get("characters") or []]
     return {
         "page_design": page_design,
+        "rendering_modifiers": rendering_modifiers(project.get("settings") or {}),
+        **({"canvas_contract": canvas_contract(page), "page_number_design": page_number_design(page)} if uses_a4(page) else {}),
         "cover_plan": cover_plan,
         "previous_artwork": ({"image_url": panel.get("image_url"), "revision": panel.get("revision", 0)}
                              if cover_plan and panel.get("image_url") else None),
