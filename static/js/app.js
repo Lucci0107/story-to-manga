@@ -1742,7 +1742,7 @@
         const history = versions.length ? '<details><summary>保存済み版（' + versions.length + '件）</summary><ul>' + versions.map(function(version) { return '<li><a class="secondary-button compact-button" href="' + base + '/manga-documents/' + encodeURIComponent(version.id) + '/download">版 ' + version.version_number + 'をダウンロード</a>' + (version.id === data.document?.id ? ' / 現在の設定' : '') + '</li>'; }).join('') + '</ul></details>' : '';
         host.innerHTML = '<section class="character-sheet-design"><h4>' + escapeHtml(sheet.character_name) + ' / ' + sheet.total_characters + '名中' + sheet.sequence_index + '人目</h4><p>詳細版・' + escapeHtml(sheet.ratio) + '。設計資料として保存します。人物画像の生成・目視確認は未実施です。</p>' +
           '<p>画風：' + escapeHtml(sheet.rendering_style?.name || '現在の漫画描画') + ' / ' + (sheet.color_mode === 'color' ? 'カラー' : '白黒') + '</p><p>' + escapeHtml(versionState) + '</p>' + history +
-          '<p><strong>' + escapeHtml(sheet.layout) + '</strong></p><p>人物や画風が変わっても、この比率の配置は変わりません。未設定の項目も枠を残します。</p><a class="sheet-layout-preview" href="' + layoutUrl + '" target="_blank" rel="noopener"><img src="' + layoutUrl + '" alt="' + escapeHtml(sheet.ratio) + 'の固定配置図（人物画像は未生成）" loading="lazy"></a><div class="sheet-layout-actions"><a class="secondary-button compact-button" href="' + layoutUrl + '" target="_blank" rel="noopener">配置図を大きく表示 ↗</a><a class="secondary-button compact-button" href="' + layoutUrl + '?download=true">配置図（SVG）をダウンロード</a></div><p class="field-help">配置図は枠の設計です。人物の絵はまだ入っていません。キャラクターシートの参照資料2件（v1.0.0）を適用しています。</p><details><summary>参照する人物設定</summary><dl class="sheet-profile">' + sheet.profile_fields.map(function(field) { return '<div><dt>' + escapeHtml(field.label) + '</dt><dd>' + escapeHtml(field.value) + '</dd></div>'; }).join('') + '</dl></details><details><summary>固定区画の内容（A〜I）</summary><ol class="sheet-section-list">' + sheet.sections.map(function(section) { return '<li><strong>' + escapeHtml(section.name) + '（' + section.count + '項目）</strong><p>' + escapeHtml(section.items.join(' / ')) + '</p><p>' + escapeHtml(section.note) + '</p></li>'; }).join('') + '</ol></details><p>配置：' + escapeHtml(sheet.layout) + '</p><p>同一性：' + escapeHtml(sheet.identity_notes) + '</p><a class="secondary-button compact-button" href="' + base + '/characters/' + encodeURIComponent(id) + '/style-sheet.md">保存済み設定のMarkdownをダウンロード</a><p class="field-help">編集中の設定は「キャラクターを保存」してから出力してください。出力するたびに同じ内容は再利用し、変更は旧版を残して保存します。出力後は「スタイルシート設計を確認」で保存版を確認できます。</p></section>';
+          '<p><strong>' + escapeHtml(sheet.layout) + '</strong></p><p>人物や画風が変わっても、この比率の配置は変わりません。未設定の項目も枠を残します。</p><a class="sheet-layout-preview" href="' + layoutUrl + '" target="_blank" rel="noopener"><img src="' + layoutUrl + '" alt="' + escapeHtml(sheet.ratio) + 'の固定配置図（人物画像は未生成）" loading="lazy"></a><div class="sheet-layout-actions"><a class="secondary-button compact-button" href="' + layoutUrl + '" target="_blank" rel="noopener">配置図を大きく表示 ↗</a><a class="secondary-button compact-button" href="' + layoutUrl + '?download=true">配置図（SVG）をダウンロード</a></div><p class="field-help">配置図は枠の設計です。人物の絵はまだ入っていません。キャラクターシートの参照資料2件（v1.0.2）を適用しています。</p><details><summary>参照する人物設定</summary><dl class="sheet-profile">' + sheet.profile_fields.map(function(field) { return '<div><dt>' + escapeHtml(field.label) + '</dt><dd>' + escapeHtml(field.value) + '</dd></div>'; }).join('') + '</dl></details><details><summary>固定区画の内容（A〜I）</summary><ol class="sheet-section-list">' + sheet.sections.map(function(section) { return '<li><strong>' + escapeHtml(section.name) + '（' + section.count + '項目）</strong><p>' + escapeHtml(section.items.join(' / ')) + '</p><p>' + escapeHtml(section.note) + '</p></li>'; }).join('') + '</ol></details><p>配置：' + escapeHtml(sheet.layout) + '</p><p>同一性：' + escapeHtml(sheet.identity_notes) + '</p><a class="secondary-button compact-button" href="' + base + '/characters/' + encodeURIComponent(id) + '/style-sheet.md">保存済み設定のMarkdownをダウンロード</a><p class="field-help">編集中の設定は「キャラクターを保存」してから出力してください。出力するたびに同じ内容は再利用し、変更は旧版を残して保存します。出力後は「スタイルシート設計を確認」で保存版を確認できます。</p></section>';
       } catch(error) { showToast(error.message, "error"); }
       finally { button.disabled = false; }
     }
@@ -1797,6 +1797,21 @@
       }
     }
 
+    const balloonChoices = [
+      ['normal', '通常の会話（楕円）', 'spoken', 'normal', 'oval', 'pointed'],
+      ['thought', '心の声（雲型・丸い点）', 'inner', 'normal', 'thought_cloud', 'round_dots'],
+      ['shout', '声に出す叫び（ギザギザ）', 'spoken', 'shout', 'jagged', 'pointed'],
+      ['inner_scream', '心の強い叫び（ウニフラッシュ）', 'inner', 'strong_scream', 'uni_flash', 'none'],
+      ['trembling', '震える声（波線）', 'spoken', 'trembling', 'wavy', 'pointed'],
+      ['whisper', '小声'], ['weak', '弱々しい声'], ['comedic_reaction', 'コミカルな反応'], ['announcement', 'アナウンス']
+    ];
+    function balloonFamily(panel, index) {
+      const detail = (panel.dialogue_details || [])[index] || {};
+      if (detail.voice_scope === 'inner') return ['shout', 'strong_scream'].includes(detail.delivery) ? 'inner_scream' : 'thought';
+      if (detail.voice_scope === 'spoken') return ['shout', 'strong_scream'].includes(detail.delivery) ? 'shout' : detail.delivery === 'trembling' ? 'trembling' : 'normal';
+      return (panel.dialogue_types || [])[index] || 'normal';
+    }
+
     function panelTemplate(pageId, panel, index) {
       const input = function (key, label, value, full) { return '<label class="editor-label ' + (full ? "full" : "") + '">' + escapeHtml(label) + '<textarea data-panel-field="' + key + '" rows="' + (full ? "3" : "2") + '">' + escapeHtml(Array.isArray(value) ? textAreaValue(value) : value || "") + '</textarea></label>'; };
       const scalar = function (key, label, value) { return '<label class="editor-label">' + escapeHtml(label) + '<input data-panel-field="' + key + '" value="' + escapeAttr(value || "") + '"></label>'; };
@@ -1806,8 +1821,10 @@
       const shape = '<label class="editor-label">枠形状<select data-panel-field="panel_shape">' + shapeOptions + '</select></label>' + scalar("shape_reason", "変形する場面の演出理由", panel.shape_reason);
       const dialogueDetails = (panel.dialogue || []).map(function(text, index) {
         const detail = (panel.dialogue_details || [])[index] || {};
+        const family = balloonFamily(panel, index);
+        const balloons = balloonChoices.map(function(option) { return '<option value="' + option[0] + '"' + (option[0] === family ? ' selected' : '') + '>' + option[1] + '</option>'; }).join('');
         const sources = [{value:"unspecified",label:"出所未設定"},{value:"source_quote",label:"原作の発言"},{value:"adaptation",label:"脚色案（本版の確認対象）"}].map(function(option) { return '<option value="' + option.value + '"' + (option.value === (detail.source || "unspecified") ? ' selected' : '') + '>' + option.label + '</option>'; }).join('');
-        return '<fieldset class="dialogue-detail-row" data-dialogue-detail="' + index + '"><legend>セリフ ' + (index + 1) + '：' + escapeHtml(text) + '</legend><label class="editor-label">話者<input data-dialogue-meta="speaker" value="' + escapeAttr(detail.speaker || '') + '"></label><label class="editor-label">宛先<input data-dialogue-meta="addressee" value="' + escapeAttr(detail.addressee || '') + '"></label><label class="editor-label">出所<select data-dialogue-meta="source">' + sources + '</select></label><label class="editor-label">相手の反応<input data-dialogue-meta="reaction" value="' + escapeAttr(detail.reaction || '') + '"></label><label class="editor-label full">再構成の元説明（原文）<textarea data-dialogue-meta="source_excerpt" rows="2">' + escapeHtml(detail.source_excerpt || '') + '</textarea></label></fieldset>';
+        return '<fieldset class="dialogue-detail-row" data-dialogue-detail="' + index + '"><legend>セリフ ' + (index + 1) + '：' + escapeHtml(text) + '</legend><label class="editor-label">話者<input data-dialogue-meta="speaker" value="' + escapeAttr(detail.speaker || '') + '"></label><label class="editor-label">声と吹き出し<select data-dialogue-meta="balloon_family">' + balloons + '</select></label><label class="editor-label">吹き出しの位置・向き<input data-dialogue-meta="balloon_placement" value="' + escapeAttr(detail.balloon?.placement || '') + '"></label><label class="editor-label">宛先<input data-dialogue-meta="addressee" value="' + escapeAttr(detail.addressee || '') + '"></label><label class="editor-label">出所<select data-dialogue-meta="source">' + sources + '</select></label><label class="editor-label">相手の反応<input data-dialogue-meta="reaction" value="' + escapeAttr(detail.reaction || '') + '"></label><label class="editor-label full">再構成の元説明（原文）<textarea data-dialogue-meta="source_excerpt" rows="2">' + escapeHtml(detail.source_excerpt || '') + '</textarea></label></fieldset>';
       }).join('');
       return '<article class="storyboard-panel" data-panel-id="' + escapeAttr(panel.id) + '"><span class="panel-index">' + String(panel.order || index + 1).padStart(2, "0") + '</span><div><div class="panel-editor-grid">' + input("description", "コマの意図", panel.description, true) + scalar("panel_role", "コマの役割", panel.panel_role) + importance + scalar("scene_type", "シーン種別", panel.scene_type) + scalar("shot_type", "カメラ", panel.shot_type) + scalar("action", "行動", panel.action) + scalar("expression", "表情", panel.expression) + scalar("background", "背景", panel.background) + scalar("location", "場所", panel.location) + scalar("spatial_relationship", "人物・物の位置関係", panel.spatial_relationship) + scalar("reaction", "相手の反応・沈黙", panel.reaction) + shape + scalar("characters", "登場人物（カンマ区切り）", (panel.characters || []).join(", ")) + input("dialogue", "セリフ（1行1つ）", panel.dialogue, false) + input("narration", "ナレーション", panel.narration, false) + input("sfx", "効果音", panel.sfx, false) + '</div>' + dialogueDetails + '<div class="panel-mini-actions"><button type="button" class="text-button" data-panel-move="up" data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">↑ コマを前へ</button><button type="button" class="text-button" data-panel-move="down" data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">↓ コマを後ろへ</button><button type="button" class="text-button danger-button" data-panel-delete data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">コマを削除</button><button type="button" class="primary-button compact-button" data-save-panel data-page-id="' + escapeAttr(pageId) + '" data-panel-id="' + escapeAttr(panel.id) + '">コマを保存</button></div></div></article>';
     }
@@ -2063,7 +2080,7 @@
         if (!window.confirm("このコマを削除しますか？")) return; const pages = structuredClone(state.storyboard); const page = pages.find(function (item) { return item.id === button.dataset.pageId; }); if (!page) return; page.panels = page.panels.filter(function (panel) { return panel.id !== button.dataset.panelId; }); page.panels.forEach(function (panel, i) { panel.order = i + 1; }); saveStoryboard(pages, "コマを削除しました");
       }); });
       content.querySelectorAll("[data-save-panel]").forEach(function (button) { button.addEventListener("click", function () {
-        const pages = structuredClone(state.storyboard); const page = pages.find(function (item) { return item.id === button.dataset.pageId; }); const panel = page?.panels?.find(function (item) { return item.id === button.dataset.panelId; }); const originalPage = state.storyboard.find(function (item) { return item.id === button.dataset.pageId; }); const originalPanel = originalPage?.panels?.find(function (item) { return item.id === button.dataset.panelId; }); const card = button.closest(".storyboard-panel"); if (!panel || !card) return; card.querySelectorAll("[data-panel-field]").forEach(function (input) { const key = input.dataset.panelField; if (["dialogue", "narration", "sfx"].includes(key)) panel[key] = listFromText(input.value); else if (key === "characters") panel[key] = input.value.split(",").map(function (name) { return name.trim(); }).filter(Boolean); else panel[key] = input.value; }); panel.dialogue_details = (panel.dialogue || []).map(function(_text,index) { const row=card.querySelector('[data-dialogue-detail="' + index + '"]'); const detail={...((panel.dialogue_details || [])[index] || {source:"unspecified"})}; row?.querySelectorAll('[data-dialogue-meta]').forEach(function(input) { detail[input.dataset.dialogueMeta]=input.value; }); return detail; }); const visualKeys = ["description", "shot_type", "characters", "action", "expression", "background", "location", "spatial_relationship", "reaction"]; const visualChanged = visualKeys.some(function (key) { return JSON.stringify(panel[key] || "") !== JSON.stringify(originalPanel?.[key] || ""); }); if (visualChanged) { panel.generation_prompt = ""; panel.generation_status = "not_started"; panel.generation_error = null; } saveStoryboard(pages, "コマを保存しました");
+        const pages = structuredClone(state.storyboard); const page = pages.find(function (item) { return item.id === button.dataset.pageId; }); const panel = page?.panels?.find(function (item) { return item.id === button.dataset.panelId; }); const originalPage = state.storyboard.find(function (item) { return item.id === button.dataset.pageId; }); const originalPanel = originalPage?.panels?.find(function (item) { return item.id === button.dataset.panelId; }); const card = button.closest(".storyboard-panel"); if (!panel || !card) return; card.querySelectorAll("[data-panel-field]").forEach(function (input) { const key = input.dataset.panelField; if (["dialogue", "narration", "sfx"].includes(key)) panel[key] = listFromText(input.value); else if (key === "characters") panel[key] = input.value.split(",").map(function (name) { return name.trim(); }).filter(Boolean); else panel[key] = input.value; }); panel.dialogue_details = (panel.dialogue || []).map(function(_text,index) { const row=card.querySelector('[data-dialogue-detail="' + index + '"]'); const detail={...((panel.dialogue_details || [])[index] || {source:"unspecified"})}; row?.querySelectorAll('[data-dialogue-meta]').forEach(function(input) { detail[input.dataset.dialogueMeta]=input.value; }); const family = detail.balloon_family; const choice = balloonChoices.find(function(item) { return item[0] === family; }); if (choice) { panel.dialogue_types = panel.dialogue_types || []; panel.dialogue_types[index] = family; if (choice[2]) { detail.voice_scope = choice[2]; detail.delivery = choice[3]; detail.balloon = {type: choice[4], tail_type: choice[5], owner_character_id: detail.speaker || '', placement: detail.balloon_placement || '', reason: choice[1]}; } else { delete detail.voice_scope; delete detail.delivery; delete detail.balloon; } } delete detail.balloon_family; delete detail.balloon_placement; return detail; }); const visualKeys = ["description", "shot_type", "characters", "action", "expression", "background", "location", "spatial_relationship", "reaction"]; const visualChanged = visualKeys.some(function (key) { return JSON.stringify(panel[key] || "") !== JSON.stringify(originalPanel?.[key] || ""); }); if (visualChanged) { panel.generation_prompt = ""; panel.generation_status = "not_started"; panel.generation_error = null; } saveStoryboard(pages, "コマを保存しました");
       }); });
     }
 
@@ -3068,6 +3085,46 @@
       } catch (error) { showToast(error.message, "error"); }
     }
 
+    function qualityReviewMarkup() {
+      const pages = state.storyboard || [];
+      return '<section class="surface-panel panel-padding quality-adoption"><h3>画像を見て採用する</h3><p>指摘が残っていても、確認したページを採用して進められます。採用判断は制作状態チェックと別に保存します。</p><div class="quality-page-choices">' + pages.map(function(page) {
+        const ready = page.panels?.length && page.panels.every(function(panel) { return panel.generation_status === 'completed' && panel.image_url; });
+        return '<button type="button" class="secondary-button compact-button" data-review-quality-page="' + escapeAttr(page.id) + '"' + (ready ? '' : ' disabled') + '>ページ ' + escapeHtml(page.page_number) + (ready ? 'の画像を確認' : '（生成待ち）') + '</button>';
+      }).join('') + '</div><div data-quality-review role="status" aria-live="polite"></div></section>';
+    }
+
+    async function openQualityReview(pageId, button) {
+      const host = content.querySelector('[data-quality-review]');
+      if (!host) return;
+      host.dataset.pageId = pageId;
+      host.innerHTML = '<p>保存画像を確認しています…</p>';
+      button.disabled = true;
+      try {
+        const review = await api('/api/projects/' + encodeURIComponent(state.id) + '/quality-review/' + encodeURIComponent(pageId));
+        if (!host.isConnected || host.dataset.pageId !== pageId) return;
+        const findings = review.remaining_findings || [];
+        const accepted = Boolean(review.acceptance);
+        host.innerHTML = '<p><strong>' + (accepted ? 'ユーザー確認で採用済み' : 'ページ ' + escapeHtml(review.page_number) + 'の確認') + '</strong></p><p>' + escapeHtml(review.audit_note) + '</p><a href="' + escapeAttr(review.image_url) + '" target="_blank" rel="noopener"><img class="quality-review-image" src="' + escapeAttr(review.image_url) + '" alt="採用対象のページ ' + escapeAttr(review.page_number) + '"></a>' + (findings.length ? '<details><summary>残っている制作状態の指摘（作品全体・' + findings.length + '件）</summary><ul>' + findings.map(function(item) { return '<li>' + escapeHtml(item.label) + '：' + escapeHtml(item.detail) + '</li>'; }).join('') + '</ul></details>' : '') + '<div class="save-row"><button type="button" class="primary-button compact-button" data-accept-quality' + (accepted ? '' : ' disabled') + '>' + (accepted ? 'プレビューへ進む' : 'この画像を採用して次へ') + '</button><button type="button" class="secondary-button compact-button" data-quality-edit>設計を調整する</button></div><p class="field-help">画像や設計を変更すると、このページの採用は無効になります。採用操作では画像を生成しません。</p>';
+        const image = host.querySelector('img');
+        const acceptButton = host.querySelector('[data-accept-quality]');
+        image.addEventListener('load', function() { acceptButton.disabled = false; });
+        image.addEventListener('error', function() { acceptButton.disabled = true; showToast('画像を読み込めません。ページの確認ボタンから再表示してください', 'error'); });
+        if (image.complete && image.naturalWidth) acceptButton.disabled = false;
+        acceptButton.addEventListener('click', async function() {
+          if (accepted) { goToStep('preview'); return; }
+          acceptButton.disabled = true;
+          try {
+            const data = await api('/api/projects/' + encodeURIComponent(state.id) + '/quality-review/' + encodeURIComponent(pageId) + '/accept', {method: 'POST', body: JSON.stringify({decision: 'USER_ACCEPTED', design_hash: review.design_hash, image_sha256: review.image_sha256})});
+            state = data.project;
+            showToast('ユーザー確認で採用しました。品質の指摘は記録に残しています');
+            goToStep('preview');
+          } catch(error) { showToast(error.message, 'error'); acceptButton.disabled = false; }
+        });
+        host.querySelector('[data-quality-edit]').addEventListener('click', function() { goToStep('storyboard'); });
+      } catch(error) { host.textContent = error.message; showToast(error.message, 'error'); }
+      finally { if (button.isConnected) button.disabled = false; }
+    }
+
     function renderQA() {
       const result = state.quality_check;
       const compositionQuality = result?.composition_quality;
@@ -3095,7 +3152,8 @@
       const noSelection = (state.knowledge || []).length === 0;
       const warningMarkup = qaKnowledgeWarningOpen && noSelection ? '<section class="surface-panel panel-padding qa-knowledge-warning" role="alert"><h3>このProjectにはKnowledgeが設定されていません。</h3><p>共通Knowledgeを適用してQAを実行しますか？</p><div class="save-row"><button type="button" class="primary-button compact-button" data-apply-recommended-knowledge>推奨Knowledgeを適用</button><button type="button" class="secondary-button compact-button" data-open-knowledge-settings>Knowledge設定を開く</button><button type="button" class="text-button" data-continue-without-knowledge>Knowledgeなしで続行</button></div></section>' : '';
       const recommendationNotice = noSelection && !qaKnowledgeWarningOpen ? '<div class="knowledge-workspace-note"><strong>推奨Knowledgeを確認できます</strong><span>品質確認の前に適用できます。既存作品へ自動では追加しません。</span></div>' : '';
-      content.innerHTML = heading("Knowledge-aware QA", "書き出し前に制作状態と、どのKnowledge Versionを参照したかを確認します。") + knowledgeSummary + warningMarkup + recommendationNotice + '<div class="qa-toolbar"><div class="knowledge-workspace-note"><strong>確認対象</strong><span>原作の意図を変える判定ではなく、編集を続けるための状態チェックです。</span></div><button type="button" class="primary-button compact-button" data-run-quality-check>品質を確認する</button></div>' + resultMarkup + nextButton("preview", "Previewを見る");
+      content.innerHTML = heading("Knowledge-aware QA", "書き出し前に制作状態と、どのKnowledge Versionを参照したかを確認します。") + knowledgeSummary + warningMarkup + recommendationNotice + '<div class="qa-toolbar"><div class="knowledge-workspace-note"><strong>確認対象</strong><span>原作の意図を変える判定ではなく、編集を続けるための状態チェックです。</span></div><button type="button" class="primary-button compact-button" data-run-quality-check>品質を確認する</button></div>' + resultMarkup + qualityReviewMarkup() + nextButton("preview", "Previewを見る");
+      content.querySelectorAll("[data-review-quality-page]").forEach(function(button) { button.addEventListener("click", function() { openQualityReview(button.dataset.reviewQualityPage, button); }); });
       content.querySelector("[data-run-quality-check]")?.addEventListener("click", function () { runQualityCheck(false); });
       content.querySelector("[data-open-knowledge-settings]")?.addEventListener("click", function () { qaKnowledgeWarningOpen = false; goToStep("knowledge"); });
       content.querySelector("[data-continue-without-knowledge]")?.addEventListener("click", function () { qaKnowledgeWarningOpen = false; runQualityCheck(true); });

@@ -928,3 +928,9 @@ input, textarea, select { accent-color: var(--accent); }
 @media (prefers-reduced-transparency: reduce) {
   .workspace-topbar { background: var(--paper); backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
+
+/* 画像を見たうえでの品質採用 */
+.quality-adoption { margin-top: 24px; }
+.quality-page-choices { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.quality-review-image { display: block; width: min(100%, 680px); height: auto; margin: 16px auto; border: 1px solid var(--border-color, #ddd); }
+.quality-adoption details { margin-block: 16px; }

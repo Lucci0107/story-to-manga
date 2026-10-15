@@ -69,12 +69,12 @@ def test_old_page_is_kept_until_explicit_a4_repair(tmp_path):
     assert page == project["storyboard"][0]
 
 
-def test_a4_sheet_has_same_51_slots_without_stretching():
+def test_a4_sheet_has_same_50_slots_without_stretching():
     layout = fixed_sheet_layout("70:99")
     assert layout["id"] == "LAYOUT_A4_PORTRAIT"
     assert (layout["canvas"]["width"],layout["canvas"]["height"]) == A4_EXPORT_SIZE
     assert [s["nominal_rect"] for s in layout["sections"]] == [s["nominal_rect"] for s in fixed_sheet_layout("3:4")["sections"]]
-    assert sum(s["count"] for s in layout["sections"]) == 51
+    assert sum(s["count"] for s in layout["sections"]) == 50
     for section in layout["sections"]:
         for group in section["groups"]:
             for slot in group["slots"]:

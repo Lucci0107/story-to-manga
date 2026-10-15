@@ -270,6 +270,12 @@ class SettingsRecommendationRequest(BaseModel):
     force: bool = False
 
 
+class QualityAcceptanceRequest(BaseModel):
+    decision: Literal["USER_ACCEPTED"]
+    design_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    image_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class ApprovalRequest(BaseModel):
     design_hash: str = Field(min_length=64, max_length=64)
 
@@ -292,7 +298,19 @@ class GenerateRequest(BaseModel):
     force: bool = False
 
 
+class BalloonDetail(BaseModel):
+    type: Literal["oval", "thought_cloud", "jagged", "uni_flash", "wavy"] = "oval"
+    tail_type: Literal["pointed", "round_dots", "none"] = "pointed"
+    owner_character_id: str = Field(default="", max_length=80)
+    placement: str = Field(default="", max_length=240)
+    reason: str = Field(default="", max_length=240)
+
+
 class DialogueDetail(BaseModel):
+    source_excerpt: str = Field(default="", max_length=1000)
+    voice_scope: Optional[Literal["spoken", "inner"]] = None
+    delivery: Optional[Literal["normal", "shout", "strong_scream", "trembling"]] = None
+    balloon: Optional[BalloonDetail] = None
     speaker: str = Field(default="", max_length=80)
     addressee: str = Field(default="", max_length=80)
     source: Literal["source_quote", "adaptation", "unspecified"] = "unspecified"
@@ -589,6 +607,7 @@ def normalize_characters(value: Any, *, limit: int = MAX_CHARACTERS) -> List[Dic
 
 
 def normalize_dialogue_details(value: Any, count: int) -> List[Dict[str, Any]]:
+    from .services.dialogue_balloon import balloon_spec
     details = value if isinstance(value, list) else []
     result = []
     for index in range(count):
@@ -599,6 +618,8 @@ def normalize_dialogue_details(value: Any, count: int) -> List[Dict[str, Any]]:
             "source": item.get("source") if item.get("source") in {"source_quote", "adaptation", "unspecified"} else "unspecified",
             "reaction": str(item.get("reaction") or "")[:240],
             **({"source_excerpt": str(item["source_excerpt"])[:1000]} if item.get("source_excerpt") else {}),
+            **({k: v for k, v in balloon_spec(item, "normal").items() if k != "dialogue_id"}
+               if item.get("voice_scope") in {"spoken", "inner"} and item.get("delivery") in {"normal", "shout", "strong_scream", "trembling"} else {}),
         })
     return result
 

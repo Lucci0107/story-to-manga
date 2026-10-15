@@ -43,6 +43,7 @@ from .schemas import (
     ProjectKnowledgePatch,
     PanelPatch,
     ProjectPatch,
+    QualityAcceptanceRequest,
     SettingsRecommendationRequest,
     StorageCleanupExecuteRequest,
     normalize_analysis,
@@ -67,6 +68,7 @@ from .services.character_proposal import (
     active_characters, build_character_proposal, character_input_fingerprint, existing_character, panel_characters,
     proposal_is_stale, proposal_view, protected_character_ids, validate_selection,
 )
+from .services.quality_acceptance import page_review, matching_acceptance
 from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artwork
 from .services.extraction import StoryExtractionError, extract_uploaded_file
 from .services.export import CompositionReadabilityError, export_pdf, export_zip, render_page_png
@@ -1854,6 +1856,50 @@ async def api_update_project_knowledge(
     return {"project": project_view(project), "knowledge": selections or []}
 
 
+def current_page_review(project_id: str, page_id: str, user_id: str):
+    project = require_project(project_id, user_id)
+    page = next((p for p in project.get("storyboard", []) if p.get("id") == page_id), None)
+    if page is None:
+        raise HTTPException(status_code=404, detail="ページが見つかりません")
+    try:
+        review, image = page_review(project, page, get_storage())
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="保存先の設定を確認してください") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return project, review, image
+
+
+@app.get("/api/projects/{project_id}/quality-review/{page_id}")
+def api_quality_review(project_id: str, page_id: str, user=Depends(current_user)):
+    _project, review, _image = current_page_review(project_id, page_id, user["id"])
+    record = matching_acceptance(review, db.list_quality_acceptances(project_id, user["id"]))
+    review["acceptance"] = record
+    review["quality_ok"] = bool(record)
+    review["image_url"] = f"/api/projects/{project_id}/quality-review/{page_id}/image.png?design_hash={review['design_hash']}&image_sha256={review['image_sha256']}"
+    return review
+
+
+@app.get("/api/projects/{project_id}/quality-review/{page_id}/image.png")
+def api_quality_review_image(project_id: str, page_id: str, design_hash: str, image_sha256: str, user=Depends(current_user)):
+    _project, review, image = current_page_review(project_id, page_id, user["id"])
+    if (design_hash, image_sha256) != (review["design_hash"], review["image_sha256"]):
+        raise HTTPException(status_code=409, detail="画像が変更されました。表示を更新してください。")
+    return Response(image, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
+@app.post("/api/projects/{project_id}/quality-review/{page_id}/accept")
+def api_accept_quality(project_id: str, page_id: str, payload: QualityAcceptanceRequest, user=Depends(current_user)):
+    project, review, _image = current_page_review(project_id, page_id, user["id"])
+    if (payload.design_hash, payload.image_sha256) != (review["design_hash"], review["image_sha256"]):
+        raise HTTPException(status_code=409, detail="画像または設計が変更されました。現在の画像を確認してください。")
+    try:
+        record = db.save_quality_acceptance(project, user["id"], review)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"acceptance": record, "quality_ok": True, "project": project_view(project)}
+
+
 @app.post("/api/projects/{project_id}/quality-check")
 async def api_quality_check(project_id: str, user=Depends(current_user)):
     project = require_project(project_id, user["id"])
@@ -2824,6 +2870,18 @@ async def api_export(project_id: str, payload: ExportRequest, user=Depends(curre
         raise HTTPException(status_code=507, detail=exc.as_dict()) from exc
     except StorageError as exc:
         raise HTTPException(status_code=503, detail="保存領域の状態を確認できないため、書き出しを開始できません") from exc
+    records = db.list_quality_acceptances(project_id, user["id"])
+    accepted_pages = []
+    for page in project.get("storyboard") or []:
+        if not any(r["target_id"] == page.get("id") for r in records):
+            continue
+        try:
+            review, _image = page_review(project, page, storage)
+        except ValueError:
+            continue
+        if matching_acceptance(review, records):
+            accepted_pages.append(page["id"])
+    project = {**project, "_quality_accepted_page_ids": accepted_pages}
     export_record = db.create_export(project_id, payload.format, None, "processing")
     storage_key = storage.export_key(project_id, export_record["id"], payload.format)
     try:

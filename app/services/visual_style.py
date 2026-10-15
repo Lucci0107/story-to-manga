@@ -1,6 +1,9 @@
 """画像・文字・ページが共有する漫画演出規則。本文は命令として扱わない。"""
 
+from __future__ import annotations
+
 from copy import deepcopy
+from .dialogue_balloon import BALLOONS, balloon_family, balloon_spec, panel_dialogue_detail
 from typing import Any, Mapping
 
 STYLE_VERSION = 2
@@ -12,7 +15,7 @@ STYLES = {
     "minimal": ("ミニマル", "線と余白を活かしたミニマルな演出", 0.15, "#333333"),
     "webtoon": ("縦読み", "縦読みを意識した明快なコマ構成", 0.7, "#36537b"),
 }
-DIALOGUE_TYPES = {"normal", "thought", "shout", "whisper", "weak", "comedic_reaction", "announcement"}
+DIALOGUE_TYPES = {"normal", "thought", "shout", "inner_scream", "trembling", "whisper", "weak", "comedic_reaction", "announcement"}
 
 
 def resolve_visual_style(settings: Mapping[str, Any]) -> dict:
@@ -33,7 +36,7 @@ def dialogue_type(text: str, explicit: str = "") -> str:
     """明示分類を優先する。句読点だけで叫びや心の声を捏造しない。"""
     if explicit in DIALOGUE_TYPES:
         return explicit
-    for prefix, kind in (("（心の声）", "thought"), ("心の声：", "thought"),
+    for prefix, kind in (("（心の叫び）", "inner_scream"), ("（震える声）", "trembling"), ("（心の声）", "thought"), ("心の声：", "thought"),
                          ("（叫び）", "shout"), ("（小声）", "whisper"),
                          ("（弱々しく）", "weak"), ("（アナウンス）", "announcement")):
         if text.startswith(prefix):
@@ -58,7 +61,7 @@ def sfx_type(text: str, explicit: str = "") -> str:
     return next((kind for kind, words in groups.items() if any(word.lower() in text.lower() for word in words)), "other")
 
 
-def text_direction(item: Mapping[str, Any], profile: Mapping[str, Any], explicit: str = "") -> dict:
+def text_direction(item: Mapping[str, Any], profile: Mapping[str, Any], explicit: str = "", detail: dict | None = None) -> dict:
     """配置領域内で完結する字形と枠のトークンを返す。"""
     kind = str(item.get("type", "bubble"))
     energy = float(profile["composition_energy"])
@@ -78,13 +81,19 @@ def text_direction(item: Mapping[str, Any], profile: Mapping[str, Any], explicit
         result.update(family="narration", shape="box", tail="none",
                       stroke_width=1 if energy < 0.7 else 2, background=profile["narration_fill"])
     else:
-        family = dialogue_type(text, explicit)
+        family = balloon_family(detail or {}, dialogue_type(text, explicit))
         result["family"] = family
         if family == "thought":
-            result.update(tail="thought", stroke_width=1)
+            result.update(shape="thought_cloud", tail="thought", stroke_width=1)
         elif family in {"whisper", "weak"}:
             result.update(stroke_width=1, size_scale=0.9, tail="none" if family == "weak" else "spoken")
-        elif family in {"shout", "comedic_reaction"}:
+        elif family == "inner_scream":
+            result.update(shape="uni_flash", tail="none", size_scale=1.15)
+        elif family == "trembling":
+            result.update(shape="wavy", stroke_width=1)
+        elif family == "shout":
+            result.update(shape="burst", size_scale=1.15)
+        elif family == "comedic_reaction":
             result.update(shape="burst" if energy >= 0.7 else "round", stroke_width=3, size_scale=1.15)
         elif family == "announcement":
             result.update(shape="box", tail="none", stroke_width=2)
@@ -100,5 +109,14 @@ def apply_text_direction(panel: dict, settings: Mapping[str, Any]) -> None:
         values = panel.get(key) or []
         index = int(item.get("order", 1)) - 1
         explicit = str(values[index]) if isinstance(values, list) and 0 <= index < len(values) else ""
-        item["direction"] = text_direction(item, profile, explicit)
+        detail = panel_dialogue_detail(panel, index) if item.get("type") == "bubble" else {}
+        item["direction"] = text_direction(item, profile, explicit, detail)
+        if item.get("type") == "bubble" and item["direction"]["family"] in BALLOONS:
+            item.update(balloon_spec(detail, item["direction"]["family"], panel.get("id", ""), index))
+            item["balloon"]["placement"] = {"coordinate_system": "panel_normalized_0_1",
+                **{k: item.get(k) for k in ("x", "y", "width", "height", "side")},
+                "owner": item["balloon"]["owner_character_id"]}
+        else:
+            for key in ("dialogue_id", "voice_scope", "delivery", "balloon"):
+                item.pop(key, None)
     layout["style_profile"] = deepcopy(profile)

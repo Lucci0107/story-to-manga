@@ -95,6 +95,8 @@ def prepare_page_for_render(page: Mapping[str, Any], settings: Mapping[str, Any]
 
 def validate_export_readability(project: Mapping[str, Any]) -> None:
     for raw_page in project.get("storyboard", []) or []:
+        if raw_page.get("id") in project.get("_quality_accepted_page_ids", []):
+            continue
         if not is_content_page(raw_page):
             # 表紙の文字は本文の吹き出し配置とは独立した専用領域へ収める。
             continue

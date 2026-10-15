@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
+from hashlib import sha256
 from html import escape
 from pathlib import Path
 from .page_contract import A4_EXPORT_SIZE
 
-LAYOUT_VERSION = "1.0.0"
+LAYOUT_VERSION = "1.0.2"
 RATIOS = ("70:99", "3:4", "4:3", "3:2")
 CANVASES = {"70:99": A4_EXPORT_SIZE, "3:4": (1200, 1600), "4:3": (1600, 1200), "3:2": (1800, 1200)}
 # x, y, 幅, 高さ。本体グリッド内の百分率であり、キャンバス全体ではない。
@@ -18,11 +21,11 @@ RECTANGLES = {
 }
 ANGLES = ("正面", "斜め45度", "側面90度", "背面180度")
 SECTIONS = (
-    ("A", "主視覚・概要", ("主視覚",), "同じ人物の大型図。名前・外見の要約は2行以内。追加のプロフィール表を入れない。"),
+    ("A", "主視覚・概要", ("主視覚",), "同じ人物の大型図。名前・身長（値と単位、または未設定）・外見の要約は2行以内。追加のプロフィール表を入れない。"),
     ("B", "全身4方向", ANGLES, "頭頂・接地線・体格・衣装の寸法を統一。左側面を基準にし、左右の特徴を反転させない。"),
     ("C", "顔・同一性", ANGLES[:3], "平常の顔を同じ縮尺で表示。顔のない対象には実在する識別部位を使う。"),
     ("D", "表情8種", ("平常", "喜び", "怒り", "悲しみ", "驚き", "不安", "自信", "決意"), "同じ顔・髪・装備・カメラを保持。表情を表せるか不明なら未設定の枠を残す。"),
-    ("E", "ポーズ6種", ("立つ", "歩く", "座る", "脱力", "緊張", "アクション"), "動物・非人間は元の身体構造に適応。全身を切らず、縮尺変更時は明示する。"),
+    ("E", "ポーズ5種", ("立つ", "歩く", "座る", "脱力", "アクション"), "動物・非人間は元の身体構造に適応。全身を切らず、縮尺変更時は明示する。"),
     ("F", "造形細部10点", ("主要表面の前側", "主要表面の後側", "頭部の特徴・装備", "固有の識別要素", "肩・背・支持構造", "開口・接続・境界", "首・胸周辺の特徴", "手・前肢等の先端", "腰・下半身等の構造", "足・尾等の端部"), "採用済みの特徴だけを拡大。枠数を満たすために衣装・装備を創作しない。"),
     ("G", "基準色・素材", ("主色", "補助色", "明部色", "暗部色", "特徴色", "アクセント色") + tuple(f"素材{i}" for i in range(1, 9)), "上40%に基準色6枠、下60%に素材8枠。既知の部位と色だけを対応付け、未確認のHEXは未確定。推定色はApprox.と明記。素材は同じ画風で描く。"),
     ("H", "体格・シルエット", ANGLES, "同縮尺・同じ接地線の黒いシルエット。頭・肩・腰の補助線。未確認の身長を数値化しない。"),
@@ -61,7 +64,7 @@ def fixed_sheet_layout(ratio: str) -> dict:
         inner = _rect(rect["x"] + padding, rect["y"] + padding + title_height,
                       rect["width"] - 2 * padding, rect["height"] - 2 * padding - title_height)
         grids = {"A": (1, 1), "B": (4, 1), "C": (3, 1), "D": (2, 4) if ratio == "3:2" else (4, 2),
-                 "E": (6, 1) if ratio == "3:2" else (3, 2), "F": (5, 2), "H": (4, 1), "I": (1, 1)}
+                 "E": (5, 1), "F": (5, 2), "H": (4, 1), "I": (1, 1)}
         if key == "G":
             colors = (6, 1) if ratio == "4:3" else (3, 2)
             materials = (8, 1) if ratio == "4:3" else (4, 2)
@@ -113,6 +116,22 @@ def render_sheet_svg(design: dict) -> str:
                           f'<g clip-path="url(#{key})"><title>{escape(slot["label"])}</title>',
                           label(key, cx, cell["y"] + cell["height"] * .45, font, 'text-anchor="middle"'),
                           label(short, cx, bottom - font * 1.5, min(font, cell["width"] / (len(short) + 1)), 'text-anchor="middle"'),
-                          label("未設定", cx, bottom - font * .35, font * .8, 'text-anchor="middle"'), '</g>']
+                          label(design.get("height", {}).get("display_text", "身長：未設定") if key == "A01" else "未設定", cx, bottom - font * .35, min(font * .8, cell["width"] / 25), 'text-anchor="middle"'), '</g>']
     parts.append('</svg>')
     return "".join(parts)
+
+
+def height_contract(character: dict, language: str = "ja") -> dict:
+    """単位付きの設定値だけを使い、画像や単位のない数値から推定しない。"""
+    raw = str(character.get("height") or "").strip()
+    normalized = unicodedata.normalize("NFKC", raw)
+    match = re.fullmatch(r"(?:(身長|体高|全長|Height|Body height|Body length)\s*[:：]?\s*)?(\d+(?:\.\d+)?)\s*(cm|mm|m|センチ|センチメートル|メートル|ミリメートル)", normalized, re.IGNORECASE)
+    known = bool(match and float(match[2]) > 0)
+    label = (match[1] if match and match[1] else ("Height" if language == "en" else "身長"))
+    value, unit = (float(match[2]), match[3]) if known else (None, "")
+    display = f"{value:g} {unit}" if known else ("Not set" if language == "en" else "未設定")
+    return {"label": label, "value": value, "unit": unit, "status": "user_setting" if known else "unknown",
+            "display_text": f"{label}：{display}", "placement": "A_profile",
+            "source": "current_character_setting" if known else "unknown", "source_text": raw,
+            "scope": {"character_id": character["id"], "age_range": character.get("age_range") or "未設定"},
+            "revision": sha256(json.dumps([character["id"], character.get("age_range"), raw], ensure_ascii=False).encode()).hexdigest()}

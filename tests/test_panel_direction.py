@@ -124,9 +124,9 @@ def test_no_punctuation_based_fake_shout():
     assert dialogue_type("こんにちは！") == "normal"
 
 
-def test_restrained_style_does_not_force_burst():
+def test_explicit_shout_keeps_jagged_outline_in_every_style():
     item = {"type": "bubble", "text": "叫び"}
-    assert text_direction(item, resolve_visual_style({"visual_style": "minimal"}), "shout")["shape"] == "round"
+    assert text_direction(item, resolve_visual_style({"visual_style": "minimal"}), "shout")["shape"] == "burst"
     assert text_direction(item, resolve_visual_style({"visual_style": "comedy"}), "shout")["shape"] == "burst"
 
 

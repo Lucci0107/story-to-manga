@@ -29,7 +29,7 @@ def inside(inner, outer):
 
 @pytest.mark.parametrize("ratio", ["3:4", "4:3", "3:2"])
 def test_layout_matches_reference_tables_and_every_cell_fits(ratio):
-    source = (ROOT / "docs/knowledge/character-sheet/1.0.0/knowledge.md").read_text()
+    source = (ROOT / "docs/knowledge/character-sheet/1.0.2/knowledge.md").read_text()
     layout = fixed_sheet_layout(ratio)
     chapter = source.split("### " + layout["id"])[1].split("###")[0]
     expected = re.findall(r"\| ([A-I]) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|", chapter)
@@ -57,7 +57,7 @@ def test_layout_matches_reference_tables_and_every_cell_fits(ratio):
                 inside(slot["rect"], section["rect"])
                 assert slot["rect"]["y"] >= section["rect"]["y"] + layout["title_height"]
                 all_slots.append(slot)
-    assert len({s["id"] for s in all_slots}) == 51
+    assert len({s["id"] for s in all_slots}) == 50
     for a, b in combinations(all_slots, 2):
         assert not intersects(a["rect"], b["rect"])
     colors, materials = layout["sections"][6]["groups"]
@@ -80,7 +80,7 @@ def test_character_style_unknown_fields_and_long_text_never_move_slots(ratio):
     for design in (initial, updated):
         svg = ElementTree.fromstring(render_sheet_svg(design))
         rects = [node for node in svg.iter() if "data-slot" in node.attrib]
-        assert len(rects) == 51
+        assert len(rects) == 50
         by_id = {r.attrib["data-slot"]: r.attrib for r in rects}
         for section in design["sections"]:
             for group in section["groups"]:
@@ -96,7 +96,7 @@ def test_reference_versions_hashes_svg_escape_and_invalid_ratio():
     refs = source_metadata()
     assert len(refs) == 2
     for ref in refs:
-        assert ref["version"] == "1.0.0"
+        assert ref["version"] == "1.0.2"
         assert hashlib.sha256((ROOT / ref["path"]).read_bytes()).hexdigest() == ref["sha256"]
     with pytest.raises(ValueError, match="比率"):
         fixed_sheet_layout("16:9")

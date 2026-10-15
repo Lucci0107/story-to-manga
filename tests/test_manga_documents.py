@@ -64,7 +64,7 @@ def test_whole_name_download_confirmation_and_dedup(workspace):
     assert "非公開の生成指示" not in markdown
     assert "言語・読順：日本語 / 右 → 左" in markdown
     assert "枠：長方形" in markdown
-    assert "指示 6.45.0 / 設計資料 2.28.0" in markdown
+    assert "指示 6.47.0 / 設計資料 2.30.0" in markdown
     status = client.get(base + "/name-script").json()["name_script"]
     assert status["state"] == "confirmed" and status["version_number"] == 1
     assert "markdown" not in status["versions"][0] and "snapshot" not in status["versions"][0]
@@ -300,7 +300,7 @@ def test_sheet_all_characters_unknown_fields_ratios_and_history(workspace):
     sheet = client.get(base + "/characters/灯/style-sheet").json()["sheet"]
     assert sheet["sequence_index"] == sheet["total_characters"] == 3
     assert len(sheet["profile_fields"]) == 8
-    assert [s["count"] for s in sheet["sections"]] == [1, 4, 3, 8, 6, 10, 14, 4, 1]
+    assert [s["count"] for s in sheet["sections"]] == [1, 4, 3, 8, 5, 10, 14, 4, 1]
     assert next(f for f in sheet["profile_fields"] if f["label"] == "身長・サイズ") == {"label": "身長・サイズ", "value": "未設定", "source": "unknown"}
     first = client.get(base + "/characters/灯/style-sheet.md")
     assert first.status_code == 200 and "人物画像の生成・実画像監査は未実施" in first.text
@@ -375,7 +375,7 @@ def test_contract_reaches_image_and_storyboard_prompts(workspace):
     assert "source_quote" in storyboard_contract_prompt()
     assert "位置だけで自動変形しない" in storyboard_contract_prompt()
     sheet = character_sheet_design(project, project["characters"][0])
-    assert sheet["architect_source"]["knowledge_version"] == "2.28.0"
+    assert sheet["architect_source"]["knowledge_version"] == "2.30.0"
 
 
 def test_sheet_ratio_roundtrip_svg_and_reject_unknown_ratio(workspace):
@@ -391,7 +391,7 @@ def test_sheet_ratio_roundtrip_svg_and_reject_unknown_ratio(workspace):
         assert sheet["ratio"] == ratio == sheet["fixed_layout"]["ratio"]
         svg = client.get(base + "/characters/葵/style-sheet.svg")
         assert svg.status_code == 200 and "image/svg+xml" in svg.headers["content-type"]
-        assert svg.text.count('data-slot=') == 51
+        assert svg.text.count('data-slot=') == 50
         assert 'no-store' in svg.headers["cache-control"]
         assert "attachment" in client.get(base + "/characters/葵/style-sheet.svg?download=true").headers["content-disposition"]
         assert client.get(base + "/characters/missing/style-sheet.svg").status_code == 404

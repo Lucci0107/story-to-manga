@@ -21,13 +21,17 @@ def draw_directed_text(draw, item, left, top, width, height):
     right = left + width
     tail_center = 0.28 if item.get("side") == "right" else 0.72
     tail_direction = -1 if item.get("side") == "right" else 1
-    if shape == "burst":
+    if shape in {"burst", "uni_flash", "thought_cloud", "wavy"}:
         # 尖端も文字の予約領域に収め、隣の顔や文字へ侵入させない。
         cx, cy = (left + right) / 2, (top + body_bottom) / 2
         points = []
-        for index in range(40):
-            angle = math.pi * 2 * index / 40
-            radius = 1 if index % 2 == 0 else 0.88
+        count = 80 if shape == "uni_flash" else 40 if shape == "burst" else 160
+        for index in range(count):
+            angle = math.pi * 2 * index / count
+            if shape in {"burst", "uni_flash"}:
+                radius = 1 if index % 2 == 0 else .73 if shape == "uni_flash" else .88
+            else:
+                radius = .95 + .05 * math.cos(angle * (10 if shape == "thought_cloud" else 16))
             points.append((cx + math.cos(angle) * width / 2 * radius,
                            cy + math.sin(angle) * (body_bottom - top) / 2 * radius))
         draw.polygon(points, fill=background)
@@ -42,11 +46,13 @@ def draw_directed_text(draw, item, left, top, width, height):
             cx, cy = left + width * tail_center + dx * tail_direction, body_bottom + 2 + dy
             draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=background, outline=fill)
     elif tail == "spoken":
-        points = [(left + width * (tail_center - 0.07), body_bottom - 2), (left + width * (tail_center + tail_direction * 0.03), bottom - 1),
-                  (left + width * (tail_center + 0.07), body_bottom - 2)]
+        # 曲線・ギザギザの底辺にも接続し、しっぽだけが浮かないようにする。
+        tail_base = body_bottom - (max(2, (body_bottom - top) * .16) if shape in {"burst", "wavy"} else 2)
+        points = [(left + width * (tail_center - 0.07), tail_base), (left + width * (tail_center + tail_direction * 0.03), bottom - 1),
+                  (left + width * (tail_center + 0.07), tail_base)]
         draw.polygon(points, fill=background)
         draw.line(points, fill=fill, width=stroke)
-    padding = 12 if shape not in {"none", "burst"} else 0 if shape == "none" else max(12, width * 0.17)
+    padding = 12 if shape not in {"none", "burst", "uni_flash", "thought_cloud", "wavy"} else 0 if shape == "none" else max(12, width * 0.17)
     available_width = max(1, width - 2 * padding)
     available_height = max(1, body_bottom - top - (12 if shape != "none" else 0))
     base_size = float(item.get("font_size") or 17)

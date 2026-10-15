@@ -311,6 +311,7 @@ def _child_panel(
             "narration": narration,
             "sfx": sfx,
             "dialogue_types": list(panel.get("dialogue_types") or []) if dialogue else [],
+            "dialogue_details": deepcopy(panel.get("dialogue_details") or []) if dialogue else [],
             "sfx_types": list(panel.get("sfx_types") or []) if sfx else [],
             "hands_required": hands_required,
             "props_required": props_required,

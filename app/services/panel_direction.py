@@ -8,6 +8,7 @@ from .composition import PAGE_SAFE_MARGIN
 from .page_contract import geometry_page_size
 from .text_composition import body_font, wrap_text
 from .visual_style import resolve_visual_style, text_direction
+from .dialogue_balloon import BALLOONS, balloon_spec, balloon_signature, panel_dialogue_detail
 from .in_world_text import resolve_in_world_text
 from .framing import resolve_head_framing
 from .framing_feasibility import resolve_feasibility
@@ -22,6 +23,9 @@ def direction_fingerprint(panel, settings):
         "dialogue", "narration", "sfx", "dialogue_types", "sfx_types", "characters",
         "character_position", "subject_position", "shot_type", "action", "background",
         "expression", "protected_zones", "text_safe_zones")}
+    balloons = balloon_signature(panel)
+    if any(balloons):
+        values["balloons"] = balloons
     # 未指定の旧コマの署名を変えず、明示された背景文字の変更だけを検出する。
     if panel.get("in_world_text_policy") not in {None, "abstract_only"} or panel.get("in_world_exact_text"):
         values["in_world_text"] = resolve_in_world_text(panel)
@@ -80,16 +84,19 @@ def plan_panel_direction(panel, settings):
                 continue
             item = {"id": f"{kind}-{index + 1}", "type": kind, "order": index + 1, "text": str(text)}
             types = panel.get("dialogue_types" if kind == "bubble" else "sfx_types") or []
-            token = text_direction(item, profile, str(types[index]) if index < len(types) else "")
+            detail = panel_dialogue_detail(panel, index) if kind == "bubble" else {}
+            token = text_direction(item, profile, str(types[index]) if index < len(types) else "", detail)
+            if kind == "bubble" and token["family"] in BALLOONS:
+                item.update(balloon_spec(detail, token["family"], panel.get("id", ""), index))
             size = max(14, round(17 * token["size_scale"]))
             # 中央の人物に通常の半幅文字列を重ねず、左右の余白へ予約する。
             # 一方の列が埋まったら読順に沿ってもう一方へ送る。文字は縮めない。
             box_width = min(0.41, character_zone["x"] - 0.06) if centered else 0.41
-            padding = 0.18 * box_width * width if token["shape"] == "burst" else 12
+            padding = 0.18 * box_width * width if token["shape"] in {"burst", "uni_flash", "thought_cloud", "wavy"} else 12
             lines = wrap_text(str(text), max(1, box_width * width - 2 * padding), size)
             # 短いセリフを横長の空疎な帯へ引き伸ばさず、生成前に実幅を確定する。
             glyph_width = max(body_font(size).getlength(line) for line in lines)
-            desired_width = glyph_width / 0.64 if token["shape"] == "burst" else glyph_width + 2 * padding
+            desired_width = glyph_width / 0.64 if token["shape"] in {"burst", "uni_flash", "thought_cloud", "wavy"} else glyph_width + 2 * padding
             box_width = min(box_width, max(0.12, desired_width / width))
             box_height = (len(lines) * (size + 5) + 24 + (8 if kind == "bubble" else 0)) / height
             if kind == "bubble":
@@ -101,10 +108,12 @@ def plan_panel_direction(panel, settings):
             rect = {"x": actual_x, "y": cursor, "width": box_width, "height": box_height}
             overlap = any(rect["x"] < zone["x"] + zone["width"] and rect["x"] + rect["width"] > zone["x"]
                           and rect["y"] < zone["y"] + zone["height"] and rect["y"] + rect["height"] > zone["y"] for zone in protected)
-            effective_padding = box_width * width * 0.18 if token["shape"] == "burst" else padding
+            effective_padding = box_width * width * 0.18 if token["shape"] in {"burst", "uni_flash", "thought_cloud", "wavy"} else padding
             overflow = cursor + box_height > 0.96 or overlap or any(body_font(size).getlength(line) > box_width * width - 2 * effective_padding + 0.01 for line in lines)
             item.update(rect, font_size=size, lines=lines, line_count=len(lines), direction=token,
                         overflow=overflow, font_scale=1, side=text_side)
+            if "balloon" in item:
+                item["balloon"]["placement"] = {"coordinate_system": "panel_normalized_0_1", **rect, "side": text_side, "owner": item["balloon"]["owner_character_id"]}
             items.append(item)
             zones.append({**rect, "type": kind, "item_id": item["id"]})
             cursor += box_height + 0.025

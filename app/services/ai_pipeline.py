@@ -198,12 +198,19 @@ PANEL_SCHEMA: Dict[str, Any] = {
                     "source": {"type": "string", "enum": ["source_quote", "adaptation", "unspecified"]},
                     "reaction": {"type": "string"},
                     "source_excerpt": {"type": "string"},
-                }, "required": ["speaker", "addressee", "source", "reaction", "source_excerpt"], "additionalProperties": False,
+                    "voice_scope": {"type": "string", "enum": ["spoken", "inner"]},
+                    "delivery": {"type": "string", "enum": ["normal", "shout", "strong_scream", "trembling"]},
+                    "balloon": {"type": "object", "properties": {
+                        "type": {"type": "string", "enum": ["oval", "thought_cloud", "jagged", "uni_flash", "wavy"]},
+                        "tail_type": {"type": "string", "enum": ["pointed", "round_dots", "none"]},
+                        "owner_character_id": {"type": "string"}, "placement": {"type": "string"}, "reason": {"type": "string"},
+                    }, "required": ["type", "tail_type", "owner_character_id", "placement", "reason"], "additionalProperties": False},
+                }, "required": ["speaker", "addressee", "source", "reaction", "source_excerpt", "voice_scope", "delivery", "balloon"], "additionalProperties": False,
             },
         },
         "narration": {"type": "array", "items": {"type": "string"}},
         "sfx": {"type": "array", "items": {"type": "string"}},
-        "dialogue_types": {"type": "array", "items": {"type": "string", "enum": ["normal", "thought", "shout", "whisper", "weak", "comedic_reaction", "announcement"]}},
+        "dialogue_types": {"type": "array", "items": {"type": "string", "enum": ["normal", "thought", "shout", "inner_scream", "trembling"]}},
         "sfx_types": {"type": "array", "items": {"type": "string", "enum": ["footstep", "impact", "stop", "ambient", "mechanical", "heartbeat", "door", "rustle", "comedic_reaction", "other"]}},
         "in_world_text_policy": {"type": "string", "enum": ["none", "abstract_only", "intentional_exact_text"]},
         "in_world_exact_text": {"type": "string"},
@@ -1672,7 +1679,7 @@ class OpenAIProvider(DemoAIProvider):
             "languageとreading_directionは入力されたProjectルールをそのまま返し、AIの判断で変更しないでください。"
             "各PageとPanelへ役割・scene_type・importanceを設定してください。"
             "感情、衝撃、決着、reveal、climaxの重要Panelを大きく扱えるlayoutを選んでください。"
-            "dialogue_typesとsfx_typesは対応する本文配列と同じ順序・同じ件数で意味を分類してください。通常発話はnormal、心の声はthoughtとし、感嘆符だけを理由にshoutへしないでください。"
+            "dialogue_typesとsfx_typesは対応する本文配列と同じ順序・同じ件数で意味を分類してください。通常発話はnormal、心の声はthoughtとし、感嘆符だけを理由にshoutへしないでください。心の強い叫びはinner_scream、震える声はtremblingです。dialogue_detailsには各セリフのvoice_scope(spoken/inner)、delivery(normal/shout/strong_scream/trembling)、balloonを記録してください。通常会話はoval/pointed、通常思考はthought_cloud/round_dots、叫びはjagged/pointed、強い内心はuni_flash/none、震える声はwavy/pointedです。balloonにはowner_character_id、コマ内の配置としっぽの向きのplacement、採用理由reasonも含め、元の話者・文言・順序を保ってください。形のための発言を追加しないでください。"
             "背景文字はin_world_text_policy=abstract_onlyを標準とし、物語上必要な正確な文言がある場合だけintentional_exact_textとin_world_exact_textを指定してください。文言は画像生成ではなく後工程の合成用データです。"
             "character_positionは人物と文字の共存を考えて指定します。セリフは読みやすい量にし、長い説明を小コマへ詰め込まないでください。"
             + storyboard_contract_prompt()

@@ -1,16 +1,16 @@
 [
   {
-    "title": "キャラクターシート_ナレッジ_v1.0.0.md",
-    "version": "1.0.0",
-    "sha256": "a75cef78d0df829930df9f77bbf4163c598e32eae21db9de6211c56e3edec651",
-    "path": "docs/knowledge/character-sheet/1.0.0/knowledge.md",
+    "title": "キャラクターシート_ナレッジ_v1.0.0.md",
+    "version": "1.0.2",
+    "sha256": "4f7b5cf17228407d9ef3d5048b0e4dda29564d57e351b170a5f0405170f1e672",
+    "path": "docs/knowledge/character-sheet/1.0.2/knowledge.md",
     "role": "reference_data"
   },
   {
     "title": "キャラクターシート_指示文_v1.0.0.md",
-    "version": "1.0.0",
-    "sha256": "0a818ebc4afc32f003832709178317c2c6343ffd30bee0e8ac616ffa75903f09",
-    "path": "docs/knowledge/character-sheet/1.0.0/instructions.md",
+    "version": "1.0.2",
+    "sha256": "79b8268e21f1f2f02f5e699b0176e6df0a8f4855cf62e8b5142f3a4af5939136",
+    "path": "docs/knowledge/character-sheet/1.0.2/instructions.md",
     "role": "reference_data"
   }
 ]

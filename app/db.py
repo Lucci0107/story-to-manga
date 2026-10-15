@@ -267,6 +267,18 @@ def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
                 error_message TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS quality_acceptances (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                target_id TEXT NOT NULL,
+                design_hash TEXT NOT NULL,
+                image_sha256 TEXT NOT NULL,
+                record_json TEXT NOT NULL,
+                accepted_by TEXT NOT NULL,
+                accepted_at TEXT NOT NULL,
+                UNIQUE(project_id, target_id, design_hash, image_sha256)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_projects_user_updated
                 ON projects(user_id, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_project_status
@@ -3075,3 +3087,24 @@ def invalidate_generation_approvals(project_id: str, user_id: str) -> None:
             "UPDATE generation_approvals SET job_id='invalidated' WHERE project_id=? AND approved_by=? AND job_id IS NULL",
             (project_id, user_id),
         )
+
+
+def list_quality_acceptances(project_id: str, user_id: str) -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute("SELECT q.record_json FROM quality_acceptances q JOIN projects p ON p.id=q.project_id WHERE p.id=? AND p.user_id=? ORDER BY q.accepted_at DESC", (project_id, user_id)).fetchall()
+    return [_loads(row["record_json"], {}) for row in rows]
+
+
+def save_quality_acceptance(project: dict, user_id: str, review: dict) -> dict:
+    """読取後に作品が変わった場合は採用せず、旧採用記録は履歴に残す。"""
+    with connection() as conn:
+        cursor = conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=? AND updated_at=?", (project["id"], user_id, project["updated_at"]))
+        if cursor.rowcount != 1:
+            raise ValueError("作品が更新されました。現在の画像をもう一度表示してください。")
+        old = conn.execute("SELECT record_json FROM quality_acceptances WHERE project_id=? AND target_id=? AND design_hash=? AND image_sha256=?", (project["id"], review["target_id"], review["design_hash"], review["image_sha256"])).fetchone()
+        if old:
+            return _loads(old["record_json"], {})
+        record = {**review, "id": str(uuid.uuid4()), "project_id": project["id"], "version": 1,
+                  "status": "USER_ACCEPTED", "decision": "表示したこの画像を採用して次へ", "accepted_at": utc_now()}
+        conn.execute("INSERT INTO quality_acceptances (id,project_id,target_id,design_hash,image_sha256,record_json,accepted_by,accepted_at) VALUES (?,?,?,?,?,?,?,?)", (record["id"], project["id"], review["target_id"], review["design_hash"], review["image_sha256"], _json(record), user_id, record["accepted_at"]))
+    return record

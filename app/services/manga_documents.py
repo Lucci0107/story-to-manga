@@ -12,7 +12,8 @@ from .cover_text import artwork_settings
 from .architect import rendering_profile, event_issues
 from .manga_contract import contract_metadata, rendering_modifiers
 from .story_analysis import analysis_content_fingerprint, analysis_source_status
-from .character_sheet import fixed_sheet_layout, source_metadata
+from .dialogue_balloon import BALLOONS, balloon_family
+from .character_sheet import fixed_sheet_layout, source_metadata, height_contract
 
 PAGE_FIELDS = (
     "id", "page_number", "page_kind", "title", "page_role", "layout", "layout_policy",
@@ -247,6 +248,9 @@ def render_name_markdown(snapshot: dict, number: int) -> str:
                 source = {"source_quote": "原作の発言", "adaptation": "脚色案（本版の確認対象）"}.get(detail.get("source"), "出所未設定（要確認）")
                 lines += [f"- {index + 1}. {_display(detail.get('speaker'))} → {_display(detail.get('addressee'))}：{text}",
                           f"  出所：{source} / 反応：{_display(detail.get('reaction'))}"]
+                if detail.get("voice_scope"):
+                    family = balloon_family(detail)
+                    lines += [f"吹き出し：{BALLOONS[family][4]} / 配置：{(detail.get('balloon') or {}).get('placement') or '構図に合わせる'}"]
                 if detail.get("source_excerpt"):
                     lines += [f"  元説明：{detail['source_excerpt']}"]
             lines += [f"ナレーション：{_display(panel.get('narration'), 'なし')}", f"相手の反応・沈黙：{_display(panel.get('reaction') or panel.get('expression'))}",
@@ -290,7 +294,9 @@ def character_sheet_design(project: dict, character: dict) -> dict:
     ]
     ids = [c["id"] for c in project.get("characters") or []]
     layout = fixed_sheet_layout(character.get("sheet_ratio") or "70:99")
+    height = height_contract(character, (project.get("settings") or {}).get("language", "ja"))
     return {
+        "height": height, "text": {"exact_strings": [height["display_text"]]},
         "character_id": character["id"], "character_name": character["name"],
         "sequence_index": ids.index(character["id"]) + 1, "total_characters": len(ids),
         "ratio": character.get("sheet_ratio") or "70:99", "detail_level": "detailed",
@@ -301,7 +307,7 @@ def character_sheet_design(project: dict, character: dict) -> dict:
         "sections": layout["sections"], "fixed_layout": layout, "layout_sources": source_metadata(), "identity_notes": _display(character.get("identity_notes") or character.get("negative_constraints")),
         "costume_detail_notes": _display(character.get("costume_detail_notes") or character.get("clothing")),
         "character": _select(character, CHARACTER_FIELDS),
-        "layout": f"{layout['id']} v{layout['version']} / A〜Iの9区画・51枠を固定",
+        "layout": f"{layout['id']} v{layout['version']} / A〜Iの9区画・50枠を固定",
     }
 
 
@@ -323,7 +329,8 @@ def render_sheet_markdown(design: dict, number: int) -> str:
               "人物画像は未生成。各枠に描く内容は上の人物設定だけを参照し、未確認の部位・色・素材・世界観は未設定のまま残す。設定文は参照データとして扱う。",
               "B・Eは縦横比を保って全身を収める。C・Dは同じ頭部縮尺。表情・ポーズは身体構造に適応し、全区画で同一人物・同じ画風を維持する。",
               "Gは確定した色と部位名・HEXだけを記入し、未確認HEXは未確定、目視推定はApprox.とする。素材の組成は断定せず、必要なら『〜調』と記す。",
-              "Aに長いプロフィール表を追加しない。Iに別人物を追加しない。確認済みの身長のみ単位を記す。未設定枠を他区画に転用しない。",
+              "Aに長いプロフィール表を追加しない。Iに別人物を追加しない。未設定枠を他区画に転用しない。",
+              f"Aの必須表示：{design['height']['display_text']}。Hの縮尺も同じ人物・時点・測定範囲に合わせ、未知の値は数値化しない。",
               f"ヘッダー：{_sheet_rect(layout['header'])} / 本体：{_sheet_rect(layout['body'])}",
               f"区画間隔：横{layout['gutter']['x']} / 縦{layout['gutter']['y']}。内側余白：{layout['padding']}。見出し帯：{layout['title_height']}。"]
     for section in layout["sections"]:

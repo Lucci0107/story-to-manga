@@ -434,6 +434,10 @@ def _page_signature(page: Mapping[str, Any], settings: Mapping[str, Any]) -> str
             if isinstance(panel, Mapping)
         ],
     }
+    from .dialogue_balloon import balloon_signature
+    balloons = [balloon_signature(panel) for panel in page.get("panels", [])]
+    if any(any(items) for items in balloons):
+        payload["balloons"] = balloons
     if any(panel.get("dialogue_types") or panel.get("sfx_types") for panel in page.get("panels", [])):
         payload["text_semantics"] = [{"dialogue_types": panel.get("dialogue_types"), "sfx_types": panel.get("sfx_types")} for panel in page.get("panels", [])]
     if _requested_composition_version(page, settings) >= DYNAMIC_COMPOSITION_VERSION:

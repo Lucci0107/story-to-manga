@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-CONTRACT_VERSION = "2.28.0"
+CONTRACT_VERSION = "2.30.0"
 SOURCE = {
     "name": "Manga Prompt Architect",
-    "instructions_version": "6.45.0",
+    "instructions_version": "6.47.0",
     "knowledge_version": CONTRACT_VERSION,
-    "sections": ["0G", "0N", "0.3", "0R"],
+    "sections": ["0G", "0N", "0.3", "0R", "G4A", "13A"],
 }
 
 PANEL_LAYOUT_REFERENCE = {"name": "漫画コマ割りスタイルシート", "version": "1.0.0",
