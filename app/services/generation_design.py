@@ -37,6 +37,9 @@ def design_data(
                 k: stable(v)
                 for k, v in value.items()
                 if k not in VOLATILE
+                # 実画像の保存時に付く出力情報。先行コマの完了で一括承認を無効にしない。
+                # 品質採用では保存済みcropも対象なので、共有VOLATILEには含めない。
+                and k != "generation_canvas"
                 and (k != "generation_prompt" or value.get("prompt_source") == "user")
             }
         if isinstance(value, list):

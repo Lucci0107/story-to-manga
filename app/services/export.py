@@ -618,12 +618,14 @@ def _draw_text_item(
     top: int,
     width: int,
     height: int,
+    *,
+    scale: float = 1.0,
 ) -> None:
     """Panel内外どちらの文字要素にも同じ描画スタイルを適用する。"""
 
     from .direction_render import draw_directed_text
 
-    if draw_directed_text(draw, item, left, top, width, height):
+    if draw_directed_text(draw, item, left, top, width, height, scale=scale):
         return
 
     item_type = str(item.get("type", "bubble"))
@@ -790,6 +792,7 @@ def _render_composition_png(
                 top,
                 max(12, round(float(item.get("width", 0.3)) * box_width)),
                 max(10, round(float(item.get("height", 0.15)) * box_height)),
+                scale=width / PAGE_SIZE[0],
             )
 
     for overlay in composition.get("overlays", []):

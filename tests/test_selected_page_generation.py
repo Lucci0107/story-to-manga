@@ -1,10 +1,13 @@
 """少数ページの確認・一括生成が選択外のコマを変更しないことを検証する。"""
 
+import base64
 from copy import deepcopy
+from io import BytesIO
 import json
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app import db
 from app.main import app
@@ -96,6 +99,39 @@ def test_one_changed_design_stops_entire_selected_batch_before_generation(worksp
     assert result.status_code == 409
     assert db.list_generation_jobs(project["id"]) == []
     assert db.get_project(project["id"], project["user_id"])["storyboard"] == before
+
+
+def test_openai_canvas_saved_by_first_panel_keeps_batch_approval_valid(workspace, monkeypatch):
+    """実画像の保存で追加されるキャンバス情報は、次コマの設計変更ではない。"""
+    client, project = workspace
+    repaired = client.post(f"/api/projects/{project['id']}/pages/body-2/layout/repair?composition_version=5")
+    assert repaired.status_code == 200, repaired.text
+    project = repaired.json()["project"]
+    confirm_name(client, project)
+    monkeypatch.setenv("IMAGE_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-image-key")
+    image = BytesIO()
+    Image.new("RGB", (96, 128), "white").save(image, format="PNG")
+    requests = []
+
+    def image_response(*args, **kwargs):
+        requests.append(kwargs["payload"])
+        return {"data": [{"b64_json": base64.b64encode(image.getvalue()).decode()}]}
+
+    monkeypatch.setattr("app.services.artwork.request_json", image_response)
+    panel_ids = ["panel-2-1", "panel-2-2"]
+    approve_selected(client, project, panel_ids)
+    result = client.post(f"/api/projects/{project['id']}/generate", json={
+        "panel_ids": panel_ids, "retry_failed": True,
+    })
+    assert result.status_code == 200, result.text
+    saved = db.get_project(project["id"], project["user_id"])
+    panels = [p for page in saved["storyboard"] for p in page["panels"] if p["id"] in panel_ids]
+    assert [p["generation_status"] for p in panels] == ["completed", "completed"]
+    assert len(requests) == 2
+    for panel in panels:
+        assert panel["generation_metadata"]["provider"] == "openai"
+        assert panel["panel_direction"]["generation_canvas"]["source_asset"].endswith(f"{panel['id']}-r1.png")
 
 
 @pytest.mark.parametrize("name,anonymous", [("患者", True), ("弟", True), ("未登録の固有人物", False)])

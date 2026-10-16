@@ -42,6 +42,23 @@ def test_balloon_meaning_survives_design_render_and_name(family, shape, tail):
     assert BALLOONS[family][4] in render_name_markdown(name_snapshot(project),1)
 
 
+@pytest.mark.parametrize("side,center,direction", [("right", .28, -1), ("left", .72, 1)])
+def test_thought_dots_remain_visible_at_print_resolution(side, center, direction):
+    """A4拡大時も丸い点を文字と同じ倍率で描き、予約領域内に収める。"""
+    scale = 3
+    image = Image.new("RGB", (840, 480), "#eeeeee")
+    token = text_direction({"type": "bubble", "text": ""}, resolve_visual_style({}), "thought")
+    item = {"type": "bubble", "text": "", "direction": token, "side": side}
+    draw_directed_text(ImageDraw.Draw(image), item, 60, 60, 720, 360, scale=scale)
+    for dx, dy, radius in ((0, 0, 3), (5, 4, 1)):
+        cx = round((20 + 240 * center + dx * direction) * scale)
+        cy = (20 + 120 - 8 + 2 + dy) * scale
+        # 中心だけでなく、拡大後の半径でも点が見えることを検証する。
+        assert image.getpixel((cx, cy)) != (238, 238, 238)
+        assert image.getpixel((cx + radius * scale - 1, cy)) != (238, 238, 238)
+    assert image.crop((0, 420, 840, 480)).getextrema() == ((238, 238),) * 3
+
+
 def test_strong_inner_voice_priority_and_no_punctuation_inference():
     detail=balloon_spec({'voice_scope':'inner','delivery':'strong_scream'},'thought')
     assert detail['balloon']['tail_type']=='none'
