@@ -69,6 +69,7 @@ from .services.character_proposal import (
     proposal_is_stale, proposal_view, protected_character_ids, validate_selection,
 )
 from .services.quality_acceptance import page_review, matching_acceptance
+from .services.page_artwork import artwork_is_current, current_artwork
 from .services.artwork import ArtworkGenerationError, asset_url, save_panel_artwork
 from .services.extraction import StoryExtractionError, extract_uploaded_file
 from .services.export import CompositionReadabilityError, export_pdf, export_zip, render_page_png
@@ -287,8 +288,12 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
 
     pages = project.get("storyboard", []) or []
     panels = [panel for page in pages for panel in page.get("panels", [])]
-    generated = sum(1 for panel in panels if panel.get("generation_status") == "completed")
-    failed = sum(1 for panel in panels if panel.get("generation_status") == "failed")
+    generated = sum(len(page.get("panels") or []) if artwork_is_current(project, page)
+                    else 0 if current_artwork(project, page)
+                    else sum(p.get("generation_status") == "completed" for p in page.get("panels") or [])
+                    for page in pages)
+    failed = sum(1 for page in pages if not current_artwork(project, page)
+                 for panel in page.get("panels") or [] if panel.get("generation_status") == "failed")
     recommendation = project.get("manga_settings_recommendation")
     if isinstance(recommendation, dict):
         recommendation = dict(recommendation)
@@ -297,6 +302,8 @@ def project_view(project: Dict[str, Any]) -> Dict[str, Any]:
         )
     return {
         **project,
+        "page_artworks": {page["id"]: {**art, "stale": not artwork_is_current(project, page)}
+                          for page in pages if (art := current_artwork(project, page))},
         "character_proposal": proposal_view(project),
         "active_characters": active_characters(project),
         "protected_character_ids": sorted(protected_character_ids(project)),
@@ -565,6 +572,11 @@ def queue_panels(
     skipped: List[str] = []
     for _page, panel in all_panels(project):
         if selected and panel.get("id") not in selected:
+            continue
+        if current_artwork(project, _page):
+            if selected:
+                raise HTTPException(409, "このページは絵・文字・吹き出しを一緒に生成しています。ページ全体の再生成を選んでください。")
+            skipped.append(str(panel.get("id")))
             continue
         status = panel.get("generation_status", "not_started")
         if status in {"queued", "processing"}:
@@ -2908,7 +2920,7 @@ async def api_export(project_id: str, payload: ExportRequest, user=Depends(curre
     ungenerated = [
         panel.get("id")
         for _page, panel in all_panels(project)
-        if panel.get("generation_status") != "completed"
+        if not artwork_is_current(project, _page) and panel.get("generation_status") != "completed"
     ]
     return {
         "export": {"id": completed["id"], "format": completed["format"], "status": completed["status"]},
@@ -2939,3 +2951,8 @@ async def api_download_export(project_id: str, export_id: str, user=Depends(curr
             "Content-Disposition": f"attachment; filename=story-to-manga.{export_record['format']}"
         },
     )
+
+
+from .page_generation import create_page_generation_router  # noqa: E402
+
+app.include_router(create_page_generation_router(current_user, require_project, project_ai_model_settings))

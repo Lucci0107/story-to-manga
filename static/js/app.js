@@ -499,6 +499,11 @@
     let repairedLayoutPageId = null;
     let saveTimer = null;
     let polling = false;
+    let generationMode = "page";
+    let pageJobs = {};
+    let pagePollTimer = null;
+    let pageStatusLoading = false;
+    let pageReviewOpen = false;
     let panelPollingTimer = null;
     let panelPollingWaitResolve = null;
     let panelPollingAbortController = null;
@@ -542,7 +547,7 @@
     if (!content) return;
 
     const stepOrder = ["story", "knowledge", "analysis", "settings", "characters", "storyboard", "generate", "edit", "qa", "preview", "export"];
-    const stepLabels = { story: "物語", knowledge: "Knowledge", analysis: "解析", settings: "漫画化設定", characters: "キャラクター", storyboard: "ネーム", generate: "コマ生成", edit: "編集", qa: "QA", preview: "プレビュー", export: "書き出し" };
+    const stepLabels = { story: "物語", knowledge: "Knowledge", analysis: "解析", settings: "漫画化設定", characters: "キャラクター", storyboard: "ネーム", generate: "画像生成", edit: "編集", qa: "QA", preview: "プレビュー", export: "書き出し" };
     const panelStatusLabels = { not_started: "未生成", queued: "待機中", processing: "生成中", completed: "生成済み", failed: "要再試行" };
 
     document.querySelectorAll("[data-step-nav]").forEach(function (button) {
@@ -724,7 +729,10 @@
     }
 
     function generatedCount() {
-      return allPanels().filter(function (item) { return item.panel.generation_status === "completed"; }).length;
+      return allPanels().filter(function (item) {
+        const artwork = state.page_artworks?.[item.page.id];
+        return artwork ? !artwork.stale : item.panel.generation_status === "completed";
+      }).length;
     }
 
     function setSaveState(label, saving) {
@@ -882,6 +890,7 @@
 
     async function goToStep(step, options) {
       if (!stepOrder.includes(step)) return;
+      if (activeStep !== step && pageReviewOpen) { pageReviewOpen = false; generationReviewRun++; }
       activeStep = step;
       await saveProject({ current_step: step }, null, false).catch(function () {});
       render();
@@ -889,8 +898,11 @@
       if (step === "characters") restoreCharacterJobState();
       if (step === "storyboard") restoreStoryboardJobState();
       if (step === "generate") {
-        if (options?.waitForGenerationState) await restorePanelGenerationState();
-        else restorePanelGenerationState();
+        refreshPageJobs();
+        if (generationMode === 'panel') {
+          if (options?.waitForGenerationState) await restorePanelGenerationState();
+          else restorePanelGenerationState();
+        }
       }
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -2002,7 +2014,7 @@
         const resolvedTemplate = familyLabels[page.composition?.family] || page.layout_geometry?.template || "未計算";
         return '<article class="page-card" data-page-id="' + escapeAttr(page.id) + '"><header class="page-card-header"><div class="page-card-title"><span class="page-number-badge">' + (isCoverPage(page) ? pageLabel(page) : String(page.page_number).padStart(2, '0')) + '</span><div><h3>' + escapeHtml(page.title || "ページ") + '</h3><p>' + (page.panels || []).length + 'コマ / ' + escapeHtml(page.layout || "classic") + ' → ' + escapeHtml(resolvedTemplate) + '</p></div></div><div class="page-card-actions"><label class="page-layout-control">レイアウト<select data-page-layout data-page-id="' + escapeAttr(page.id) + '">' + layoutOptions + '</select></label><button type="button" class="text-button" data-repair-page-layout data-page-id="' + escapeAttr(page.id) + '">配置を再計算</button><button type="button" class="text-button" data-repair-page-layout data-composition-version="' + Math.max(4, Number(page.composition_version || 0)) + '" data-page-id="' + escapeAttr(page.id) + '">コマ間の余白を整える</button><button type="button" class="text-button" data-repair-page-layout data-composition-version="5" data-page-id="' + escapeAttr(page.id) + '">A4版面に更新</button><button type="button" class="text-button" data-page-move="up" data-page-id="' + escapeAttr(page.id) + '">↑ ページを前へ</button><button type="button" class="text-button" data-page-move="down" data-page-id="' + escapeAttr(page.id) + '">↓ ページを後ろへ</button><button type="button" class="text-button danger-button" data-page-delete data-page-id="' + escapeAttr(page.id) + '">ページを削除</button></div><p class="page-operation-help">配置を再計算：コマと文字の配置を整えます。コマ間の余白を整える：余白を共有する配置に更新します。A4版面に更新：このページをA4縦・外周3%の本文配置へ変更します。原稿・元画像は保持され、画像生成は始まりません。</p></header>' + layoutRecoveryMarkup(page) + fallbackNotice + pageBoundaryFields(page) + '<div class="panel-list">' + panels + '</div><div class="add-row"><button type="button" class="outline-button" data-add-panel data-page-id="' + escapeAttr(page.id) + '">＋ コマを追加</button></div></article>';
       }).join("");
-      const body = pages.length ? '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "コマ生成へ") : '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
+      const body = pages.length ? '<div class="storyboard-list">' + pageMarkup + '</div><div class="save-row"><button type="button" class="outline-button" data-add-page>＋ ページを追加</button><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></div>' + nextButton("generate", "画像生成へ") : '<section class="surface-panel empty-panel"><h3>ページとコマを設計する</h3><p>解析、設定、人物情報をもとに、読める流れを組み立てます。</p><button type="button" class="primary-button compact-button" data-generate-storyboard' + actionDisabled + '>' + actionLabel + '</button></section>';
       const orderNote = '<div class="reading-order-note"><strong>' + escapeHtml(languageLabel(state.settings)) + ' / ' + escapeHtml(readingDirectionLabel(state.settings)) + '</strong><span>Panel.orderは読者の論理読順です。Knowledgeの逆方向指定よりProject設定を優先します。</span></div>';
       content.innerHTML = heading("ネームを編集する", "ページをまたぐ展開と、コマごとの視線の流れを確認します。") + jobNotice + orderNote + (pages.length ? nameReviewMarkup() : '') + body;
       content.querySelector('.workspace-heading')?.insertAdjacentHTML('afterend', analysisSourceNotice());
@@ -2553,6 +2565,99 @@
     }
 
     function renderGenerate() {
+      if (generationMode === 'page' && pageReviewOpen) return;
+      if (generationMode === "panel") {
+        renderPanelGenerate();
+        content.insertAdjacentHTML('afterbegin', '<button type="button" class="secondary-button compact-button" data-page-mode>ページ全体を一緒に生成する方式へ</button>');
+        content.querySelector('[data-page-mode]').addEventListener('click', function() { generationMode = 'page'; renderGenerate(); refreshPageJobs(); });
+        return;
+      }
+      pageReviewOpen = false;
+      const pages = state.storyboard || [];
+      const namePending = state.name_script?.required && state.name_script?.state !== 'confirmed';
+      const cards = pages.map(function(page) {
+        const art = state.page_artworks?.[page.id];
+        const job = pageJobs[page.id];
+        const busy = ['queued', 'processing'].includes(job?.status);
+        const label = busy ? '生成中…' : job?.status === 'failed' ? 'このページを再試行' : art ? 'このページを再生成' : 'このページを生成';
+        return '<section class="surface-panel panel-padding integrated-page-card"><h3>' + escapeHtml(pageLabel(page)) + ' ・ ' + (page.panels || []).length + 'コマ</h3>' + (art ? pageStage(page) + '<p>保存済み：第' + escapeHtml(art.revision) + '版</p>' : '<p>' + escapeHtml((page.panels || []).map(function(p) { return p.description; }).filter(Boolean).join(' → ')) + '</p>') + (busy ? '<p role="status">絵・文字・吹き出しを一緒に描いています。画面を閉じても処理は続きます。</p>' : '') + (job?.status === 'failed' ? '<p class="form-error" role="alert">' + escapeHtml(job.error || '生成できませんでした。このページだけ再試行できます。') + '</p>' : '') + '<button type="button" class="primary-button compact-button" data-generate-page="' + escapeAttr(page.id) + '"' + (busy || namePending ? ' disabled' : '') + '>' + label + '</button>' + (art ? '<details data-page-versions="' + escapeAttr(page.id) + '"><summary>保存した画像の版を表示</summary><div data-version-list></div></details>' : '') + '</section>';
+      }).join('');
+      content.innerHTML = heading('ページを生成する', '人物・構図・文字・吹き出しを一緒に描きます。縦書き・横書き、吹き出しの形と大きさは場面に合わせます。') + (namePending ? '<div class="form-notice"><p>生成の前に現在の全編ネームを確認・確定してください。</p><button type="button" class="secondary-button compact-button" data-review-name>全編ネームを確認</button></div>' : '') + '<p class="field-help">1ページずつ生成します。セリフを変更した場合は、そのページを再生成すると画像に反映されます。以前の画像は版履歴に残ります。</p><div class="integrated-page-grid">' + (cards || '<p>先にネームを作成してください。</p>') + '</div><div class="save-row"><button type="button" class="secondary-button compact-button" data-refresh-pages>生成状況を確認</button><button type="button" class="secondary-button compact-button" data-panel-mode>従来のコマ別生成を開く</button></div><div data-page-status-error role="alert"></div>' + nextButton('edit', '編集・画像確認へ');
+      content.querySelectorAll('[data-generate-page]').forEach(function(button) { button.addEventListener('click', function() { reviewPageGeneration(button.dataset.generatePage); }); });
+      content.querySelector('[data-review-name]')?.addEventListener('click', function() { goToStep('storyboard'); });
+      content.querySelector('[data-panel-mode]').addEventListener('click', function() { generationMode = 'panel'; renderGenerate(); restorePanelGenerationState(); });
+      content.querySelector('[data-refresh-pages]').addEventListener('click', function() { refreshPageJobs(); });
+      content.querySelector('[data-next-step]')?.addEventListener('click', function() { goToStep('edit'); });
+      content.querySelectorAll('[data-page-versions]').forEach(function(details) {
+        details.addEventListener('toggle', async function() {
+          if (!details.open || details.dataset.loaded) return;
+          details.dataset.loaded = 'true';
+          const host = details.querySelector('[data-version-list]');
+          host.textContent = '版履歴を読み込んでいます…';
+          try {
+            const result = await api('/api/projects/' + encodeURIComponent(state.id) + '/pages/' + encodeURIComponent(details.dataset.pageVersions) + '/artwork-versions');
+            host.innerHTML = result.versions.map(function(version) { return '<p><a href="' + escapeAttr(version.image_url) + '" target="_blank" rel="noopener">第' + escapeHtml(version.revision) + '版の画像を開く</a></p>'; }).join('');
+          } catch(error) { host.textContent = error.message; delete details.dataset.loaded; }
+        });
+      });
+    }
+
+    async function reviewPageGeneration(pageId) {
+      generationMode = 'page';
+      await goToStep('generate');
+      pageReviewOpen = true;
+      const runId = ++generationReviewRun;
+      content.innerHTML = heading('ページの生成内容', '確定した台本とセリフを確認しています…');
+      const base = '/api/projects/' + encodeURIComponent(state.id) + '/pages/' + encodeURIComponent(pageId);
+      try {
+        const design = await api(base + '/design');
+        if (runId !== generationReviewRun || activeStep !== 'generate') return;
+        const panels = design.content.panels || [];
+        content.innerHTML = heading('この内容で1ページ生成します', '絵・文字・吹き出しをまとめて生成します。保存した旧画像は残ります。') + '<section class="surface-panel panel-padding"><p>モデル：' + escapeHtml(design.model) + ' ／ サイズ：' + escapeHtml(design.size) + ' ／ 品質：高</p><p>縦書き・横書きは場面と文字量に合わせます。通常会話・心の声・叫びなどの意味を保って吹き出しを描きます。</p>' + panels.map(function(panel) { return '<div class="integrated-script-panel"><h3>コマ' + escapeHtml(panel.order) + '</h3><p>' + escapeHtml(panel.description) + '</p><ul>' + (panel.dialogue || []).map(function(line, index) { const detail = panel.dialogue_details?.[index] || {}; return '<li>' + escapeHtml(detail.speaker || '') + '「' + escapeHtml(line) + '」' + (detail.voice_scope === 'inner' ? '（心の声）' : '') + '</li>'; }).join('') + '</ul>' + (panel.narration?.length ? '<p>ナレーション：' + escapeHtml(panel.narration.join(' / ')) + '</p>' : '') + (panel.sfx?.length ? '<p>効果音：' + escapeHtml(panel.sfx.join(' / ')) + '</p>' : '') + '</div>'; }).join('') + (design.errors.length ? '<ul class="form-error">' + design.errors.map(function(error) { return '<li>' + escapeHtml(error) + '</li>'; }).join('') + '</ul>' : '') + '<p class="field-help">この操作は画像APIを1回使用します。生成料金がかかります。生成後に文字の正確さ・吹き出し・話者を画像で確認してください。</p><div class="save-row"><button type="button" class="primary-button compact-button" data-confirm-page' + (design.errors.length ? ' disabled' : '') + '>この内容で1ページ生成</button><button type="button" class="secondary-button compact-button" data-cancel-page>戻る</button></div></section>';
+        content.querySelector('[data-cancel-page]').addEventListener('click', function() { generationReviewRun++; pageReviewOpen = false; renderGenerate(); });
+        content.querySelector('[data-confirm-page]').addEventListener('click', async function(event) {
+          const button = event.currentTarget;
+          button.disabled = true;
+          content.querySelector('[data-cancel-page]').disabled = true;
+          try {
+            const body = JSON.stringify({design_hash: design.design_hash});
+            await api(base + '/approval', {method: 'POST', body: body});
+            const result = await api(base + '/generate', {method: 'POST', body: body});
+            pageJobs[pageId] = result.job;
+            pageReviewOpen = false;
+            if (activeStep === 'generate') renderGenerate();
+            refreshPageJobs();
+          } catch(error) {
+            showToast(error.message, 'error');
+            // 応答が途切れても同じPOSTを自動再送しない。状態を確認してから再操作する。
+            pageReviewOpen = false;
+            if (activeStep === 'generate') renderGenerate();
+            refreshPageJobs();
+          }
+        });
+      } catch(error) { showToast(error.message, 'error'); pageReviewOpen = false; if (activeStep === 'generate') renderGenerate(); }
+    }
+
+    async function refreshPageJobs() {
+      if (pageStatusLoading) return;
+      pageStatusLoading = true;
+      clearTimeout(pagePollTimer);
+      try {
+        const result = await api('/api/projects/' + encodeURIComponent(state.id) + '/page-generation/status');
+        const errorHost = content.querySelector('[data-page-status-error]');
+        if (errorHost) errorHost.textContent = '';
+        const changed = JSON.stringify(pageJobs) !== JSON.stringify(result.pages);
+        pageJobs = result.pages;
+        if (changed) await fetchProject();
+        if (changed && activeStep === 'generate' && generationMode === 'page' && !pageReviewOpen) render();
+        if (result.active) pagePollTimer = setTimeout(refreshPageJobs, 4000);
+      } catch(error) {
+        const host = content.querySelector('[data-page-status-error]');
+        if (host) host.textContent = '生成状況を取得できません。「生成状況を確認」で再接続できます。';
+      } finally { pageStatusLoading = false; }
+    }
+
+    function renderPanelGenerate() {
       generationReviewRun += 1;
       const panels = allPanels();
       const generated = panels.filter(function (item) { return item.panel.generation_status === "completed"; }).length;
@@ -2977,11 +3082,12 @@
 
     function pageStage(page) {
       if (!page) return '<div class="preview-frame-wrap"><p>ページがありません</p></div>';
-      if (isCoverPage(page) || Number(page.composition?.composition_version || page.composition_version || 1) >= 2 || (page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
+      if (state.page_artworks?.[page.id] || isCoverPage(page) || Number(page.composition?.composition_version || page.composition_version || 1) >= 2 || (page.panels || []).some(function (panel) { return panel.text_layout?.placement_mode === "reserved_text_band"; })) {
         // Composition v2/v3をブラウザで再解釈せず、PDF・ZIPと同じ最終画像を表示する。
         const src = "/api/projects/" + encodeURIComponent(state.id) + "/pages/" + encodeURIComponent(page.id) + "/composition.png?v=" + encodeURIComponent(state.updated_at || "");
         const transcript = isCoverPage(page) ? [state.settings?.cover_title || state.title, state.settings?.cover_subtitle, state.settings?.cover_author, ...(page.page_kind === 'back_cover' ? [state.settings?.back_cover_blurb, state.settings?.back_cover_publication] : [])].filter(Boolean).join('。 ') : (page.panels || []).map(function (panel, index) { return "コマ" + (index + 1) + " " + [...(panel.dialogue || []), ...(panel.narration || [])].join(" "); }).join("。 ");
-        const warning = isCoverPage(page) ? '' : layoutRecoveryMarkup(page);
+        const native = state.page_artworks?.[page.id];
+        const warning = native ? (native.stale ? '<p class="form-notice">台本変更前の画像です。このページを再生成すると変更が反映されます。</p>' : '') : isCoverPage(page) ? '' : layoutRecoveryMarkup(page);
         return warning + '<div class="preview-frame-wrap"><img class="composition-final-image" src="' + escapeAttr(src) + '" alt="' + escapeAttr(pageLabel(page) + "。 " + transcript) + '"></div>';
       }
       const panels = page.panels || [];
@@ -3055,21 +3161,27 @@
       return '<div class="preview-frame-wrap" data-language="' + escapeAttr(canonicalLanguage(state.settings)) + '"><div class="manga-page layout-' + escapeAttr(template) + compositionClass + '" dir="' + direction + '" data-layout-version="' + escapeAttr(page.layout_version || 1) + '" data-composition-version="' + escapeAttr(compositionVersion) + '" data-semantic-family="' + escapeAttr(composition?.semantic_family || '') + '" data-reading-direction="' + escapeAttr(readingDirectionKey(state.settings)) + '">' + panelHtml + breakoutHtml + panelTextLayerHtml + overlayHtml + '<span class="manga-page-number" aria-label="ページ番号 ' + escapeAttr(page.page_number || "") + '">' + escapeHtml(page.page_number || "") + '</span></div></div>';
     }
 
+    function nativePanelForm(panel) {
+      return '<form class="edit-form" id="panel-edit-form"><h3>ページの台本を修正</h3><p class="field-help">保存した変更は「このページを再生成」で絵・文字・吹き出しへ反映します。</p><label class="editor-label">コマの内容<textarea class="editor-textarea" data-edit-field="description" rows="4">' + escapeHtml(panel.description || '') + '</textarea></label><label class="editor-label">セリフ<textarea class="editor-textarea" data-edit-field="dialogue" rows="4">' + escapeHtml(textAreaValue(panel.dialogue)) + '</textarea></label><label class="editor-label">ナレーション<textarea class="editor-textarea" data-edit-field="narration" rows="3">' + escapeHtml(textAreaValue(panel.narration)) + '</textarea></label><div class="save-row"><button type="submit" class="primary-button compact-button">変更を保存</button><button type="button" class="secondary-button compact-button" data-regenerate-selected>このページを再生成</button></div></form>';
+    }
+
     function renderEdit() {
       const entries = allPanels();
       if (!selectedPanelId || !entries.some(function (item) { return item.panel.id === selectedPanelId; })) selectedPanelId = entries[0]?.panel.id || null;
       const selected = entries.find(function (item) { return item.panel.id === selectedPanelId; });
       const panel = selected?.panel;
+      const native = state.page_artworks?.[selected?.page.id];
       const list = entries.map(function (item) {
         const active = item.panel.id === selectedPanelId;
-        const image = item.panel.image_url ? '<img src="' + escapeAttr(item.panel.image_url) + '" alt="">' : '<span class="edit-thumb-placeholder"></span>';
-        return '<button type="button" class="edit-panel-button' + (active ? " active" : "") + '" data-edit-panel="' + escapeAttr(item.panel.id) + '">' + image + '<span><strong>' + escapeHtml(pageLabel(item.page)) + ' / コマ' + escapeHtml(item.panel.order || (item.page.panels || []).indexOf(item.panel) + 1) + ' / ' + escapeHtml(item.panel.description || "コマ") + '</strong><small>' + escapeHtml(panelStatusLabels[item.panel.generation_status || "not_started"]) + '</small></span><span aria-hidden="true">→</span></button>';
+        const imageUrl = state.page_artworks?.[item.page.id]?.image_url || item.panel.image_url;
+        const image = imageUrl ? '<img src="' + escapeAttr(imageUrl) + '" alt="">' : '<span class="edit-thumb-placeholder"></span>';
+        return '<button type="button" class="edit-panel-button' + (active ? " active" : "") + '" data-edit-panel="' + escapeAttr(item.panel.id) + '">' + image + '<span><strong>' + escapeHtml(pageLabel(item.page)) + ' / コマ' + escapeHtml(item.panel.order || (item.page.panels || []).indexOf(item.panel) + 1) + ' / ' + escapeHtml(item.panel.description || "コマ") + '</strong><small>' + escapeHtml(state.page_artworks?.[item.page.id] ? (state.page_artworks[item.page.id].stale ? "ページの再生成が必要" : "ページ画像を保存済み") : panelStatusLabels[item.panel.generation_status || "not_started"]) + '</small></span><span aria-hidden="true">→</span></button>';
       }).join("");
-      const form = panel ? '<form class="edit-form" id="panel-edit-form"><h3>コマの仕上げ</h3><label class="editor-label">生成プロンプト<textarea class="editor-textarea" data-edit-field="generation_prompt" rows="7">' + escapeHtml(panel.generation_prompt || "") + '</textarea><small>画像に文字は描かず、アプリ側でセリフを載せます。</small></label><label class="editor-label">セリフ<textarea class="editor-textarea" data-edit-field="dialogue" rows="4">' + escapeHtml(textAreaValue(panel.dialogue)) + '</textarea></label><label class="editor-label">ナレーション<textarea class="editor-textarea" data-edit-field="narration" rows="3">' + escapeHtml(textAreaValue(panel.narration)) + '</textarea></label><label class="editor-label">表示方法<select data-edit-field="crop_mode"><option value="fit"' + (panel.crop_mode === "fit" ? " selected" : "") + '>全面表示（cover crop）</option><option value="fill"' + (panel.crop_mode === "fill" ? " selected" : "") + '>枠に合わせる（cover crop）</option></select></label><div class="save-row"><button type="submit" class="primary-button compact-button">変更を保存</button><button type="button" class="secondary-button compact-button" data-regenerate-selected>このコマを再生成</button></div></form>' : '<div class="empty-panel"><h3>編集するコマを選んでください</h3></div>';
+      const form = native && panel ? nativePanelForm(panel) : panel ? '<form class="edit-form" id="panel-edit-form"><h3>コマの仕上げ</h3><label class="editor-label">生成プロンプト<textarea class="editor-textarea" data-edit-field="generation_prompt" rows="7">' + escapeHtml(panel.generation_prompt || "") + '</textarea><small>画像に文字は描かず、アプリ側でセリフを載せます。</small></label><label class="editor-label">セリフ<textarea class="editor-textarea" data-edit-field="dialogue" rows="4">' + escapeHtml(textAreaValue(panel.dialogue)) + '</textarea></label><label class="editor-label">ナレーション<textarea class="editor-textarea" data-edit-field="narration" rows="3">' + escapeHtml(textAreaValue(panel.narration)) + '</textarea></label><label class="editor-label">表示方法<select data-edit-field="crop_mode"><option value="fit"' + (panel.crop_mode === "fit" ? " selected" : "") + '>全面表示（cover crop）</option><option value="fill"' + (panel.crop_mode === "fill" ? " selected" : "") + '>枠に合わせる（cover crop）</option></select></label><div class="save-row"><button type="submit" class="primary-button compact-button">変更を保存</button><button type="button" class="secondary-button compact-button" data-regenerate-selected>このコマを再生成</button></div></form>' : '<div class="empty-panel"><h3>編集するコマを選んでください</h3></div>';
       content.innerHTML = heading("ページを仕上げる", "画像、セリフ、ナレーションをコマごとに確認します。") + (entries.length ? '<div class="editor-workspace"><section class="surface-panel edit-panel-list">' + list + '</section><section class="surface-panel">' + pageStage(selected?.page) + form + '</section></div>' + nextButton("qa", "Knowledge-aware QAへ") : '<section class="surface-panel empty-panel"><h3>生成済みのコマがありません</h3><p>コマ生成画面から必要な画像を作成してください。</p><button type="button" class="primary-button compact-button" data-goto-generate>コマ生成へ</button></section>');
       content.querySelectorAll("[data-edit-panel]").forEach(function (button) { button.addEventListener("click", function () { selectedPanelId = button.dataset.editPanel; render(); }); });
       content.querySelector("#panel-edit-form")?.addEventListener("submit", function (event) { event.preventDefault(); savePanelEdit(panel.id); });
-      content.querySelector("[data-regenerate-selected]")?.addEventListener("click", function () { queueGeneration([panel.id], false, true); });
+      content.querySelector("[data-regenerate-selected]")?.addEventListener("click", function () { if (native) reviewPageGeneration(selected.page.id); else queueGeneration([panel.id], false, true); });
       content.querySelector("[data-goto-generate]")?.addEventListener("click", function () { goToStep("generate"); });
       content.querySelector("[data-next-step]")?.addEventListener("click", function () { goToStep("qa"); });
     }
@@ -3088,7 +3200,8 @@
     function qualityReviewMarkup() {
       const pages = state.storyboard || [];
       return '<section class="surface-panel panel-padding quality-adoption"><h3>画像を見て採用する</h3><p>指摘が残っていても、確認したページを採用して進められます。採用判断は制作状態チェックと別に保存します。</p><div class="quality-page-choices">' + pages.map(function(page) {
-        const ready = page.panels?.length && page.panels.every(function(panel) { return panel.generation_status === 'completed' && panel.image_url; });
+        const art = state.page_artworks?.[page.id];
+        const ready = art ? !art.stale : page.panels?.length && page.panels.every(function(panel) { return panel.generation_status === 'completed' && panel.image_url; });
         return '<button type="button" class="secondary-button compact-button" data-review-quality-page="' + escapeAttr(page.id) + '"' + (ready ? '' : ' disabled') + '>ページ ' + escapeHtml(page.page_number) + (ready ? 'の画像を確認' : '（生成待ち）') + '</button>';
       }).join('') + '</div><div data-quality-review role="status" aria-live="polite"></div></section>';
     }
@@ -3333,8 +3446,8 @@
 
     function renderExport() {
       const entries = allPanels();
-      const unfinished = entries.filter(function (item) { return item.panel.generation_status !== "completed"; }).length;
-      content.innerHTML = heading("作品を書き出す", "編集内容を確認して、読みやすい形で保存します。") + '<div class="export-layout"><section class="surface-panel panel-padding"><div class="source-meta"><span>' + (state.storyboard || []).length + 'ページ</span><span>' + entries.length + 'コマ</span><span>' + generatedCount() + 'コマ生成済み</span></div><h3>書き出し形式</h3><p class="panel-lead">PDFは画像とセリフを合成した作品ファイル、ZIPは生成画像と編集用データを含みます。</p><div class="export-options"><div class="export-option"><span class="export-icon">PDF</span><div><strong>PDF</strong><p>ページ送りで読める作品ファイル</p></div><button type="button" class="secondary-button compact-button" data-export-format="pdf">PDFを作る</button></div><div class="export-option"><span class="export-icon">ZIP</span><div><strong>ページ画像ZIP</strong><p>生成画像とProject JSONの一式</p></div><button type="button" class="secondary-button compact-button" data-export-format="zip">ZIPを作る</button></div></div><div id="export-result"></div></section><aside class="surface-panel panel-padding"><h3>最終チェック</h3><div class="stat-rail"><div class="stat-tile"><span>本文</span><strong>✓</strong></div><div class="stat-tile"><span>ネーム</span><strong>' + ((state.storyboard || []).length ? "✓" : "－") + '</strong></div><div class="stat-tile"><span>未生成コマ</span><strong>' + unfinished + '</strong></div></div>' + (unfinished ? '<div class="export-warning">未生成のコマが' + unfinished + '件あります。書き出しはできますが、先に生成すると完成度を確認できます。</div>' : '<div class="export-success">すべてのコマにアートがあります。書き出し準備ができています。</div>') + '</aside></div>';
+      const unfinished = entries.length - generatedCount();
+      content.innerHTML = heading("作品を書き出す", "編集内容を確認して、読みやすい形で保存します。") + '<div class="export-layout"><section class="surface-panel panel-padding"><div class="source-meta"><span>' + (state.storyboard || []).length + 'ページ</span><span>' + entries.length + 'コマ</span><span>' + generatedCount() + 'コマ生成済み</span></div><h3>書き出し形式</h3><p class="panel-lead">PDFは完成ページをまとめた作品ファイル、ZIPはページ画像・生成原本・編集用データを含みます。</p><div class="export-options"><div class="export-option"><span class="export-icon">PDF</span><div><strong>PDF</strong><p>ページ送りで読める作品ファイル</p></div><button type="button" class="secondary-button compact-button" data-export-format="pdf">PDFを作る</button></div><div class="export-option"><span class="export-icon">ZIP</span><div><strong>ページ画像ZIP</strong><p>生成画像とProject JSONの一式</p></div><button type="button" class="secondary-button compact-button" data-export-format="zip">ZIPを作る</button></div></div><div id="export-result"></div></section><aside class="surface-panel panel-padding"><h3>最終チェック</h3><div class="stat-rail"><div class="stat-tile"><span>本文</span><strong>✓</strong></div><div class="stat-tile"><span>ネーム</span><strong>' + ((state.storyboard || []).length ? "✓" : "－") + '</strong></div><div class="stat-tile"><span>未生成コマ</span><strong>' + unfinished + '</strong></div></div>' + (unfinished ? '<div class="export-warning">未生成のコマが' + unfinished + '件あります。書き出しはできますが、先に生成すると完成度を確認できます。</div>' : '<div class="export-success">すべてのコマにアートがあります。書き出し準備ができています。</div>') + '</aside></div>';
       content.querySelectorAll("[data-export-format]").forEach(function (button) { button.addEventListener("click", function () { doExport(button.dataset.exportFormat, button); }); });
     }
 
@@ -3381,6 +3494,6 @@
     if (activeStep === "analysis") restoreAnalysisJobState();
     if (activeStep === "characters") restoreCharacterJobState();
     if (activeStep === "storyboard") restoreStoryboardJobState();
-    if (activeStep === "generate") restorePanelGenerationState();
+    if (activeStep === "generate") refreshPageJobs();
   }
 })();

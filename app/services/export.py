@@ -94,7 +94,12 @@ def prepare_page_for_render(page: Mapping[str, Any], settings: Mapping[str, Any]
 
 
 def validate_export_readability(project: Mapping[str, Any]) -> None:
+    from .page_artwork import current_artwork, artwork_is_current
     for raw_page in project.get("storyboard", []) or []:
+        if current_artwork(project, raw_page):
+            if not artwork_is_current(project, raw_page):
+                raise CompositionReadabilityError(f"ページ{raw_page.get('page_number', '')}は台本変更前の画像です。このページを再生成してから書き出してください。")
+            continue
         if raw_page.get("id") in project.get("_quality_accepted_page_ids", []):
             continue
         if not is_content_page(raw_page):
@@ -414,12 +419,12 @@ def export_pdf(project: Dict[str, Any], storage: StorageService | None = None) -
         page = prepare_page_for_render(raw_page, settings)
         composition = composition_for_page(page)
         c.setPageSize(A4)
-        if not is_content_page(page) or int(composition.get("composition_version", 1) or 1) >= 2:
+        if (project.get("page_artworks") or {}).get(page["id"]) or not is_content_page(page) or int(composition.get("composition_version", 1) or 1) >= 2:
             # プレビューと同じラスターを使い、保存版に応じて旧3:4またはA4の紙面へ配置する。
             rendered = render_page_png(project, page, storage)
             output_height = height if uses_a4(page) else width * PAGE_SIZE[1] / PAGE_SIZE[0]
             c.setPageSize((width, output_height))
-            c.drawImage(ImageReader(BytesIO(rendered)), 0, 0, width, output_height, preserveAspectRatio=False, mask="auto")
+            c.drawImage(ImageReader(BytesIO(rendered)), 0, 0, width, output_height, preserveAspectRatio=bool((project.get("page_artworks") or {}).get(page["id"])), anchor="c", mask="auto")
             _draw_pdf_accessible_text(c, project, page)
             c.showPage()
             continue
@@ -953,7 +958,10 @@ def render_page_png(
     height: int | None = None,
 ) -> bytes:
     """Preview/PDFと同じ保存済みgeometryからページ画像を生成する。"""
-
+    from .page_artwork import current_artwork, render_native_page
+    artwork = current_artwork(project, page)
+    if artwork:
+        return render_native_page(artwork, storage, width, height)
     prepared = prepare_page_for_render(page, project.get("settings") or {}) if is_content_page(page) else page
     default_width, default_height = A4_EXPORT_SIZE if uses_a4(prepared) else page_size(prepared)
     width, height = width or default_width, height or default_height
@@ -996,6 +1004,8 @@ def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -
             "title": project.get("title"),
             "settings": project.get("settings"),
             "storyboard": storyboard,
+            "characters": project.get("characters") or [],
+            "page_artworks": project.get("page_artworks") or {},
         }
         archive.writestr("project.json", json.dumps(manifest, ensure_ascii=False, indent=2))
         for page in storyboard:
@@ -1004,6 +1014,9 @@ def export_zip(project: Dict[str, Any], storage: StorageService | None = None) -
                 f"pages/{page_name}.png",
                 render_page_png(project, page, storage),
             )
+            artwork = (project.get("page_artworks") or {}).get(page["id"])
+            if artwork:
+                archive.writestr(f"originals/{page_name}-r{artwork['revision']}.png", storage.get_bytes(artwork["storage_key"]))
             for panel in page.get("panels", []):
                 image_url = panel.get("image_url") or ""
                 filename = PurePosixPath(str(image_url)).name

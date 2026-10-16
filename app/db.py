@@ -156,6 +156,16 @@ def init_db(on_ready: Optional[Callable[[], None]] = None) -> None:
                 completed_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS page_artworks (
+                id TEXT PRIMARY KEY REFERENCES generation_jobs(id),
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                page_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                record_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(project_id, page_id, revision)
+            );
+
             CREATE TABLE IF NOT EXISTS exports (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -710,7 +720,18 @@ def get_project(project_id: str, user_id: str) -> Optional[Dict[str, Any]]:
             "SELECT * FROM projects WHERE id = ? AND user_id = ?",
             (project_id, user_id),
         ).fetchone()
-    return _project_from_row(row) if row else None
+        artworks = conn.execute(
+            "SELECT record_json FROM page_artworks WHERE project_id=? ORDER BY revision",
+            (project_id,),
+        ).fetchall() if row else []
+    if not row:
+        return None
+    project = _project_from_row(row)
+    project["page_artworks"] = {}
+    for artifact in artworks:
+        record = _loads(artifact["record_json"], {})
+        project["page_artworks"][record["page_id"]] = record
+    return project
 
 
 def list_projects(user_id: str) -> List[Dict[str, Any]]:
@@ -719,7 +740,13 @@ def list_projects(user_id: str) -> List[Dict[str, Any]]:
             "SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC",
             (user_id,),
         ).fetchall()
-    return [_project_from_row(row) for row in rows]
+        artworks = conn.execute("SELECT a.project_id,a.record_json FROM page_artworks a JOIN projects p ON p.id=a.project_id WHERE p.user_id=? ORDER BY a.revision", (user_id,)).fetchall()
+    projects = [_project_from_row(row) for row in rows]
+    by_id = {p["id"]: p for p in projects}
+    for row in artworks:
+        record = _loads(row["record_json"], {})
+        by_id[row["project_id"]].setdefault("page_artworks", {})[record["page_id"]] = record
+    return projects
 
 
 def _storage_safe_component(value: Any, fallback: str) -> str:
@@ -902,6 +929,11 @@ def collect_storage_references(storage_root: Optional[Path] = None) -> Dict[str,
         job_rows = conn.execute(
             "SELECT id, project_id, target_id, job_type, status, error_category, created_at, updated_at FROM generation_jobs"
         ).fetchall()
+        page_artwork_rows = conn.execute("SELECT project_id, page_id, record_json FROM page_artworks").fetchall()
+
+    for row in page_artwork_rows:
+        record = _loads(row["record_json"], {})
+        add("assets", record.get("storage_key"), entity_base(row["project_id"], "page_artwork", page_id=row["page_id"], revision=record.get("revision")))
 
     for row in project_rows:
         project_id = str(row["id"])
@@ -3040,10 +3072,12 @@ def current_generation_approval(
     return dict(row) if row else None
 
 
-def queue_approved_generation(approval: dict, batch_id: str) -> Optional[dict]:
+def queue_approved_generation(approval: dict, batch_id: str, *, job_type: str = "panel_artwork") -> Optional[dict]:
     """承認の消費とJob作成を同じトランザクションで確定する。"""
     job_id = str(uuid.uuid4())
     now = utc_now()
+    if job_type not in {"panel_artwork", "page_artwork"}:
+        raise ValueError("画像生成の種類を確認してください")
     with connection() as conn:
         conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=?", (approval["project_id"],))
         active = conn.execute(
@@ -3059,11 +3093,12 @@ def queue_approved_generation(approval: dict, batch_id: str) -> Optional[dict]:
         if result.rowcount != 1:
             return None
         conn.execute(
-            "INSERT INTO generation_jobs (id,project_id,target_id,job_type,status,idempotency_key,batch_id,created_at,updated_at) VALUES (?,?,?,'panel_artwork','queued',?,?,?,?)",
+            "INSERT INTO generation_jobs (id,project_id,target_id,job_type,status,idempotency_key,batch_id,created_at,updated_at) VALUES (?,?,?,?,'queued',?,?,?,?)",
             (
                 job_id,
                 approval["project_id"],
                 approval["target_id"],
+                job_type,
                 "approved:" + approval["target_id"] + ":" + approval["design_hash"],
                 batch_id,
                 now,
@@ -3079,6 +3114,54 @@ def generation_job_approval(job_id: str) -> Optional[dict]:
             "SELECT * FROM generation_approvals WHERE job_id=?", (job_id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+def complete_page_generation_job(job_id: str, project: dict, record: dict) -> bool:
+    """ページの版保存とJob完了を原子的に確定し、古いWorkerの上書きを防ぐ。"""
+    from .services.page_artwork import content_hash, artwork_is_current
+
+    now = utc_now()
+    with connection() as conn:
+        conn.execute("UPDATE projects SET updated_at=updated_at WHERE id=? AND user_id=?", (project["id"], project["user_id"]))
+        row = conn.execute("SELECT * FROM projects WHERE id=? AND user_id=?", (project["id"], project["user_id"])).fetchone()
+        job = conn.execute("SELECT * FROM generation_jobs WHERE id=? AND project_id=? AND target_id=? AND job_type='page_artwork' AND status='processing'", (job_id, project["id"], record["page_id"])).fetchone()
+        if not row or not job:
+            return False
+        current = _project_from_row(row)
+        page = next((p for p in current["storyboard"] if p["id"] == record["page_id"]), None)
+        if page is None or content_hash(current, page) != record["content_hash"]:
+            conn.execute("UPDATE generation_jobs SET status='failed',error=?,error_category='design_changed',completed_at=?,updated_at=? WHERE id=?", ("生成中に台本が変更されました。最新の台本を確認して再生成してください。", now, now, job_id))
+            return False
+        revision = int(conn.execute("SELECT COALESCE(MAX(revision),0) AS n FROM page_artworks WHERE project_id=? AND page_id=?", (project["id"], record["page_id"])).fetchone()["n"]) + 1
+        saved = {**record, "revision": revision, "created_at": now}
+        conn.execute("INSERT INTO page_artworks (id,project_id,page_id,revision,record_json,created_at) VALUES (?,?,?,?,?,?)", (job_id, project["id"], record["page_id"], revision, _json(saved), now))
+        conn.execute("UPDATE generation_jobs SET status='completed',completed_at=?,updated_at=? WHERE id=?", (now, now, job_id))
+        artifacts = conn.execute("SELECT record_json FROM page_artworks WHERE project_id=? ORDER BY revision", (project["id"],)).fetchall()
+        current["page_artworks"] = {}
+        for artifact in artifacts:
+            item = _loads(artifact["record_json"], {})
+            current["page_artworks"][item["page_id"]] = item
+        complete = all(artwork_is_current(current, p) if p["id"] in current["page_artworks"] else
+                       bool(p.get("panels")) and all(panel.get("generation_status") == "completed" for panel in p["panels"])
+                       for p in current["storyboard"])
+        status = "completed" if complete else current["status"]
+        conn.execute("UPDATE projects SET quality_check_json=NULL,status=?,updated_at=? WHERE id=?", (status, now, project["id"]))
+    return True
+
+
+def page_artwork_versions(project_id: str, page_id: str, user_id: str) -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute("SELECT a.record_json FROM page_artworks a JOIN projects p ON p.id=a.project_id WHERE p.id=? AND p.user_id=? AND a.page_id=? ORDER BY a.revision DESC", (project_id, user_id, page_id)).fetchall()
+    return [_loads(row["record_json"], {}) for row in rows]
+
+
+def recover_stale_page_jobs(project_id: str, user_id: str, stale_after_seconds: int) -> None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)).isoformat()
+    with connection() as conn:
+        conn.execute("""UPDATE generation_jobs SET status='failed',error=?,error_category='interrupted',completed_at=?,updated_at=?
+            WHERE project_id=? AND job_type='page_artwork' AND status IN ('queued','processing') AND updated_at<?
+            AND EXISTS (SELECT 1 FROM projects WHERE id=? AND user_id=?)""",
+            ("生成の応答が途切れました。このページだけ再試行できます。", utc_now(), utc_now(), project_id, cutoff, project_id, user_id))
 
 
 def invalidate_generation_approvals(project_id: str, user_id: str) -> None:

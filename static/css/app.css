@@ -934,3 +934,10 @@ input, textarea, select { accent-color: var(--accent); }
 .quality-page-choices { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .quality-review-image { display: block; width: min(100%, 680px); height: auto; margin: 16px auto; border: 1px solid var(--border-color, #ddd); }
 .quality-adoption details { margin-block: 16px; }
+
+/* ページ一体生成は完成紙面を中心に確認する。 */
+.integrated-page-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 24px; margin-block: 24px; }
+.integrated-page-card { min-width: 0; }
+.integrated-page-card .preview-frame-wrap { max-width: 560px; margin-inline: auto; }
+.integrated-page-card details { margin-top: 18px; }
+.integrated-script-panel { padding-block: 16px; border-top: 1px solid var(--border-color, #ddd); }

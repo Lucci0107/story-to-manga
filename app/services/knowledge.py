@@ -325,6 +325,9 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
     issues: List[Dict[str, str]] = []
     warnings: List[Dict[str, str]] = []
     checks: List[Dict[str, str]] = []
+    from .page_artwork import current_artwork, artwork_is_current
+    native_pages = [page for page in pages if current_artwork(project, page)]
+    overlay_pages = [page for page in pages if not current_artwork(project, page)]
 
     def add_check(key: str, label: str, status: str, detail: str) -> None:
         checks.append({"key": key, "label": label, "status": status, "detail": detail})
@@ -376,15 +379,15 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
         "bubble_order",
         "吹き出し・テキスト順",
         "error" if bubble_errors else "pass",
-        "セリフ、ナレーション、SFXの配置順を確認しました"
+        "台本上のセリフ、ナレーション、SFXの順序を確認しました。実画像内の順序は目視で確認してください。" if native_pages else "セリフ、ナレーション、SFXの配置順を確認しました"
         if not bubble_errors
         else bubble_errors[0]["detail"],
     )
 
-    layout_issues = storyboard_layout_issues(project)
+    layout_issues = storyboard_layout_issues({**project, "storyboard": overlay_pages})
     issues.extend(layout_issues)
     composition_scores = []
-    for page in pages:
+    for page in overlay_pages:
         if not isinstance(page, dict) or not isinstance(page.get("composition"), dict):
             continue
         try:
@@ -410,21 +413,26 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
     add_check(
         "page_geometry",
         "コマ面積と視覚的階層",
-        "error" if geometry_errors else "pass",
-        "通常ページのpolygon geometry、cover領域、重要コマの面積階層を確認しました"
+        "error" if geometry_errors else "warning" if native_pages else "pass",
+        "ページ一体生成の配置は実画像で確認してください。従来方式のページは保存座標を検証しています。" if native_pages else "通常ページのpolygon geometry、cover領域、重要コマの面積階層を確認しました"
         if not geometry_errors
         else geometry_errors[0]["detail"],
     )
     add_check(
         "text_collision",
         "吹き出し・ナレーション衝突",
-        "error" if collision_errors else "pass",
-        "文字要素の境界・セーフマージン・相互衝突を確認しました"
+        "error" if collision_errors else "warning" if native_pages else "pass",
+        "ページ一体生成の文字・吹き出しは実画像で確認してください。台本の座標では判定していません。" if native_pages else "文字要素の境界・セーフマージン・相互衝突を確認しました"
         if not collision_errors
         else collision_errors[0]["detail"],
     )
 
-    unfinished = [panel for panel in panels if panel.get("generation_status") != "completed"]
+    unfinished = [panel for page in overlay_pages for panel in page.get("panels") or [] if panel.get("generation_status") != "completed"]
+    for page in native_pages:
+        if not artwork_is_current(project, page):
+            issues.append({"key": "stale-page-" + page["id"], "label": "ページ画像", "detail": f"ページ{page.get('page_number')}は台本変更前の画像です。再生成してください。"})
+    if native_pages:
+        warnings.append({"key": "integrated-visual-review", "label": "ページ画像の確認", "detail": "絵と一緒に生成した文字・吹き出しは、誤字・抜け・話者・形・大きさを実画像で確認してください。"})
     if unfinished:
         warnings.append({"key": "artwork", "label": "コマ画像", "detail": f"未生成コマが{len(unfinished)}件あります。"})
         add_check("artwork", "コマ画像", "warning", f"未生成 {len(unfinished)}件")
@@ -452,7 +460,7 @@ def quality_check(project: Dict[str, Any], context: Dict[str, Any]) -> Dict[str,
             issues.append({"key":"event-boundary", "label":"出来事の順序", "detail":detail})
     add_check("event-boundary","出来事の境界","error" if any(i['key']=='event-boundary' for i in issues) else "pass","保存済みの許可・禁止イベントを確認しました。言い換えや画像内の先取りは目視でも確認してください。")
     add_check("page-number","ページ番号","error" if any(i['key']=='page-number' for i in issues) else "pass","本文の連番と表紙・裏表紙の扱いを確認しました。")
-    if any(p.get("image_url") for p in panels):
+    if native_pages or any(p.get("image_url") for p in panels):
         warnings.append({"key":"visual-review", "label":"画像の目視確認", "detail":"顔・人体・手・描画方式は画像を見て確認してください。この検査では外観を検証していません。"})
         for key,label,detail in [("face","顔・同一性","顔の二重化、頭の形、人物の識別特徴"),("body","人体・接触","余分・欠けた手足、不自然な関節・接触"),("hands","手・道具","確認できる手指の本数・融合・道具の持ち方"),("style-compliance","描画方式","素材・線・頭身・必須条件と禁止条件")]:
             add_check(key,label,"warning", "目視確認が必要です："+detail)

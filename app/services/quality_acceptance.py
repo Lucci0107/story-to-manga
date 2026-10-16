@@ -19,6 +19,24 @@ from .storage import StorageError
 
 def page_review(project: dict, page: dict, storage) -> tuple[dict, bytes]:
     """欠落画像を代替表示で採用しない。読んだ同じバイト列で組版する。"""
+    from .page_artwork import current_artwork, artwork_is_current
+    native = current_artwork(project, page)
+    if native:
+        if not artwork_is_current(project, page):
+            raise ValueError("台本が変更されています。このページを再生成してから確認してください。")
+        try:
+            png = storage.get_bytes(native["storage_key"])
+            with Image.open(BytesIO(png)) as image:
+                image.verify()
+        except (OSError, StorageError, ValueError) as exc:
+            raise ValueError("保存画像を確認できません。画像を復旧してから確認してください。") from exc
+        audit = deepcopy(project.get("quality_check"))
+        return {"target_id": page["id"], "page_number": page.get("page_number"),
+                "design_hash": native["content_hash"], "image_sha256": sha256(png).hexdigest(),
+                "image_refs": [{"page_id": page["id"], "image_url": native["image_url"], "revision": native["revision"], "mode": "integrated"}],
+                "audit_status": "UNVERIFIED", "automated_check": audit,
+                "remaining_findings": (audit or {}).get("issues", []) + (audit or {}).get("warnings", []),
+                "audit_note": "文字・吹き出しも絵と一緒に生成しています。誤字、抜け、話者、形と大きさを実画像で確認してください。実画像のAI監査は未実施です。"}, png
     images = {}
     panels = page.get("panels") or []
     if not panels:

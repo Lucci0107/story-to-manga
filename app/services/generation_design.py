@@ -119,9 +119,9 @@ def generation_layout_issues(page: dict, panel: dict, settings: dict) -> list[st
     return list(dict.fromkeys(errors))
 
 
-def audit_design(project: dict, page: dict, panel: dict) -> list[str]:
+def audit_design(project: dict, page: dict, panel: dict, *, check_overlay_layout: bool = True) -> list[str]:
     settings = project.get("settings") or {}
-    errors = event_issues(page) + generation_layout_issues(page, panel, settings)
+    errors = event_issues(page) + (generation_layout_issues(page, panel, settings) if check_overlay_layout else [])
     from .manga_documents import name_script_summary
     if project.get("id") and project.get("user_id"):
         name = name_script_summary(project)
